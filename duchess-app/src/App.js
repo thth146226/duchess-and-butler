@@ -4,7 +4,8 @@ import Login from './pages/Login'
 import Sidebar from './components/Sidebar'
 import Dashboard from './pages/Dashboard'
 import Orders from './pages/Orders'
-import { Schedule, Inventory, Paperwork, Reports, Team } from './pages/Placeholders'
+import Schedule from './pages/Schedule'
+import { Inventory, Paperwork, Reports, Team } from './pages/Placeholders'
 
 const pageTitles = {
   dashboard: 'Dashboard',
