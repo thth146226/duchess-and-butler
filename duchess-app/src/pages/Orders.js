@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
+import EvidencePhotos from '../components/EvidencePhotos'
 
 const STATUS_OPTIONS = ['pending', 'confirmed', 'amended', 'cancelled', 'collected']
 const CATEGORY_OPTIONS = ['crockery', 'cutlery', 'glassware', 'linens', 'furniture', 'other']
@@ -253,6 +254,13 @@ export default function Orders() {
                 <label style={styles.label}>Notes / Special Instructions</label>
                 <textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} placeholder="e.g. Access via rear entrance. All chairs set up by 14:00." style={{ ...styles.input, minHeight: '80px', resize: 'vertical' }} />
               </div>
+
+              {editOrder && (
+                <>
+                  <hr style={styles.divider} />
+                  <EvidencePhotos orderId={editOrder.id} orderName={editOrder.event_name || editOrder.client_name} />
+                </>
+              )}
             </div>
             <div style={styles.modalFooter}>
               <button style={styles.btnOutline} onClick={() => setModalOpen(false)}>Cancel</button>
