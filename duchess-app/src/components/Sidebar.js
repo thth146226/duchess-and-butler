@@ -16,54 +16,88 @@ const navItems = [
   ]},
 ]
 
-export default function Sidebar({ active, onNavigate, pendingCount = 0 }) {
+export default function Sidebar({ active, onNavigate, isOpen, onClose, pendingCount = 0 }) {
   const { profile, signOut } = useAuth()
   const role = profile?.role || 'driver'
   const initials = profile?.name?.split(' ').map(n => n[0]).join('').slice(0,2).toUpperCase() || 'DB'
 
+  function handleNav(id) {
+    onNavigate(id)
+    onClose()
+  }
+
   return (
-    <aside style={styles.sidebar}>
-      <div style={styles.logo}>
-        <div style={styles.logoMark}>Duchess & Butler</div>
-        <div style={styles.logoSub}>Event Supply Management</div>
-      </div>
+    <>
+      {/* Overlay for mobile */}
+      {isOpen && (
+        <div
+          onClick={onClose}
+          style={{
+            position: 'fixed', inset: 0,
+            background: 'rgba(0,0,0,0.5)',
+            zIndex: 99,
+            display: 'none',
+          }}
+          className="mobile-overlay"
+        />
+      )}
 
-      <nav style={styles.nav}>
-        {navItems.map(group => {
-          const visibleItems = group.items.filter(item => item.roles.includes(role))
-          if (!visibleItems.length) return null
-          return (
-            <div key={group.section}>
-              <div style={styles.sectionLabel}>{group.section}</div>
-              {visibleItems.map(item => (
-                <div
-                  key={item.id}
-                  style={{ ...styles.navItem, ...(active === item.id ? styles.navItemActive : {}) }}
-                  onClick={() => onNavigate(item.id)}
-                >
-                  <span style={styles.navIcon}>{item.icon}</span>
-                  {item.label}
-                  {item.id === 'orders' && pendingCount > 0 && (
-                    <span style={styles.badge}>{pendingCount}</span>
-                  )}
-                </div>
-              ))}
-            </div>
-          )
-        })}
-      </nav>
+      <aside style={{
+        ...styles.sidebar,
+        transform: isOpen ? 'translateX(0)' : undefined,
+      }}>
+        {/* Close button — mobile only */}
+        <button onClick={onClose} style={styles.closeBtn} className="mobile-close">✕</button>
 
-      <div style={styles.footer}>
-        <div style={styles.userPill}>
-          <div style={styles.avatar}>{initials}</div>
-          <div style={styles.userInfo}>
-            <div style={styles.userName}>{profile?.name || 'User'}</div>
-            <div style={styles.userRole}>{role}</div>
-          </div>
-          <button onClick={signOut} style={styles.signOut} title="Sign out">↩</button>
+        <div style={styles.logo}>
+          <div style={styles.logoMark}>Duchess & Butler</div>
+          <div style={styles.logoSub}>Event Supply Management</div>
         </div>
-      </div>
-    </aside>
+
+        <nav style={styles.nav}>
+          {navItems.map(group => {
+            const visibleItems = group.items.filter(item => item.roles.includes(role))
+            if (!visibleItems.length) return null
+            return (
+              <div key={group.section}>
+                <div style={styles.sectionLabel}>{group.section}</div>
+                {visibleItems.map(item => (
+                  <div
+                    key={item.id}
+                    style={{ ...styles.navItem, ...(active === item.id ? styles.navItemActive : {}) }}
+                    onClick={() => handleNav(item.id)}
+                  >
+                    <span style={styles.navIcon}>{item.icon}</span>
+                    {item.label}
+                    {item.id === 'orders' && pendingCount > 0 && (
+                      <span style={styles.badge}>{pendingCount}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )
+          })}
+        </nav>
+
+        <div style={styles.footer}>
+          <div style={styles.userPill}>
+            <div style={styles.avatar}>{initials}</div>
+            <div style={styles.userInfo}>
+              <div style={styles.userName}>{profile?.name || 'User'}</div>
+              <div style={styles.userRole}>{role}</div>
+            </div>
+            <button onClick={signOut} style={styles.signOut} title="Sign out">↩</button>
+          </div>
+        </div>
+      </aside>
+
+      <style>{`
+        @media (max-width: 768px) {
+          .mobile-overlay { display: block !important; }
+          .mobile-close { display: flex !important; }
+        }
+      `}</style>
+    </>
   )
 }
 
@@ -76,6 +110,16 @@ const styles = {
     zIndex: 100,
     borderRight: '1px solid rgba(184,150,90,0.2)',
     fontFamily: "'DM Sans', sans-serif",
+    transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+  },
+  closeBtn: {
+    display: 'none',
+    position: 'absolute', top: '16px', right: '16px',
+    background: 'rgba(255,255,255,0.1)', border: 'none',
+    color: 'white', width: '32px', height: '32px',
+    borderRadius: '50%', cursor: 'pointer',
+    alignItems: 'center', justifyContent: 'center',
+    fontSize: '14px', zIndex: 1,
   },
   logo: { padding: '32px 28px 24px', borderBottom: '1px solid rgba(255,255,255,0.08)' },
   logoMark: { fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', fontWeight: '600', color: '#D4AF7A', letterSpacing: '0.04em' },
