@@ -5,11 +5,18 @@ import Sidebar from './components/Sidebar'
 import Dashboard from './pages/Dashboard'
 import Orders from './pages/Orders'
 import Schedule from './pages/Schedule'
+import LiveJobs from './pages/LiveJobs'
 import { Inventory, Paperwork, Reports, Team } from './pages/Placeholders'
 
 const pageTitles = {
-  dashboard: 'Dashboard', orders: 'Orders', schedule: 'Schedule',
-  inventory: 'Inventory', paperwork: 'Paperwork', reports: 'Reports', team: 'Team Access',
+  dashboard: 'Dashboard',
+  livejobs: 'Live Jobs — Current RMS',
+  orders: 'Orders',
+  schedule: 'Schedule',
+  inventory: 'Inventory',
+  paperwork: 'Paperwork',
+  reports: 'Reports',
+  team: 'Team Access',
 }
 
 function AppInner() {
@@ -25,7 +32,7 @@ function AppInner() {
 
   if (!user) return <Login />
 
-  const pages = { dashboard: Dashboard, orders: Orders, schedule: Schedule, inventory: Inventory, paperwork: Paperwork, reports: Reports, team: Team }
+  const pages = { dashboard: Dashboard, livejobs: LiveJobs, orders: Orders, schedule: Schedule, inventory: Inventory, paperwork: Paperwork, reports: Reports, team: Team }
   const PageComponent = pages[page] || Dashboard
 
   return (
@@ -50,34 +57,29 @@ function AppInner() {
         </div>
 
         <main className="main-content" style={{ marginLeft: '260px', flex: 1, display: 'flex', flexDirection: 'column' }}>
-          {/* Topbar */}
           <header style={styles.topbar}>
-            {/* Hamburger — mobile only */}
-            <button
-              className="hamburger"
-              onClick={() => setSidebarOpen(true)}
-              style={styles.hamburger}
-            >
+            <button className="hamburger" onClick={() => setSidebarOpen(true)} style={styles.hamburger}>
               <span style={styles.hamburgerLine} />
               <span style={styles.hamburgerLine} />
               <span style={styles.hamburgerLine} />
             </button>
 
-            <div style={styles.pageTitle}>{pageTitles[page] || page}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1 }}>
+              <div style={styles.pageTitle}>{pageTitles[page] || page}</div>
+              {page === 'livejobs' && (
+                <span style={{ background: '#ECFDF5', color: '#065F46', fontSize: '11px', fontWeight: '600', padding: '3px 10px', borderRadius: '10px', border: '1px solid #BBF7D0' }}>
+                  ⚡ Live sync
+                </span>
+              )}
+            </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               {page === 'dashboard' && (
                 <button style={styles.btnGold} onClick={() => setPage('orders')}>＋ New Order</button>
               )}
-              {page === 'orders' && (
-                <span style={{ fontSize: '12px', color: '#6B6860' }}>
-                  {profile?.role === 'admin' ? 'Full access' : 'Standard access'}
-                </span>
-              )}
             </div>
           </header>
 
-          {/* Page content */}
           <div style={{ padding: '24px 28px', flex: 1 }}>
             <PageComponent onNavigate={setPage} />
           </div>
@@ -105,13 +107,12 @@ const styles = {
   },
   pageTitle: {
     fontFamily: "'Cormorant Garamond', serif",
-    fontSize: '26px', fontWeight: '600', color: '#1C1C1E', flex: 1,
+    fontSize: '26px', fontWeight: '600', color: '#1C1C1E',
   },
   hamburger: {
     display: 'none', flexDirection: 'column', justifyContent: 'center',
     gap: '5px', background: 'transparent', border: 'none',
-    cursor: 'pointer', padding: '8px', borderRadius: '6px',
-    flexShrink: 0,
+    cursor: 'pointer', padding: '8px', borderRadius: '6px', flexShrink: 0,
   },
   hamburgerLine: {
     display: 'block', width: '22px', height: '2px',
