@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../contexts/AuthContext'
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
-const today = new Date().toISOString().split('T')[0]
+const today    = new Date().toISOString().split('T')[0]
 const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0]
 
 function fmt(dateStr) {
@@ -10,166 +11,212 @@ function fmt(dateStr) {
   return new Date(dateStr + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
 }
 
-function getWeekRange() {
+function getWeekRange(offset = 0) {
   const now = new Date()
   const day = now.getDay()
   const mon = new Date(now)
-  mon.setDate(now.getDate() - (day === 0 ? 6 : day - 1))
+  mon.setDate(now.getDate() - (day === 0 ? 6 : day - 1) + offset * 7)
   const sun = new Date(mon)
   sun.setDate(mon.getDate() + 6)
   return { from: mon.toISOString().split('T')[0], to: sun.toISOString().split('T')[0] }
 }
 
+// ── Build runs from jobs (include driver fields) ───────────────────────────────
 function buildRuns(jobs) {
   const runs = []
   for (const job of jobs) {
-    if (job.status === 'cancelled') continue
-    if (job.delivery_date) {
-      runs.push({
-        id: `${job.crms_id}-DEL`,
-        job,
-        runType: 'DEL',
-        runDate: job.delivery_date,
-        runTime: job.delivery_time,
-        client: job.client_name,
-        event: job.event_name,
-        venue: job.venue,
-        ref: job.crms_ref,
-        status: job.status,
-        isAmended: job.is_amended,
-        isUrgent: job.is_urgent,
-        notes: job.notes,
-        missingTime: !job.delivery_time,
-      })
+    if (job.status === 'cancelled' || job.deleted) continue
+    const base = {
+      job,
+      client:             job.client_name,
+      event:              job.event_name,
+      venue:              job.venue,
+      ref:                job.crms_ref || job.ref,
+      jobId:              job.id,
+      crmsId:             job.crms_id,
+      status:             job.status,
+      isAmended:          job.is_amended,
+      isUrgent:           job.is_urgent,
+      notes:              job.notes,
+      driverName:         job.assigned_driver_name || null,
+      driverColour:       null,   // filled below from drivers list
+      assignedDriverId:   job.assigned_driver_id   || null,
     }
-    if (job.collection_date) {
-      runs.push({
-        id: `${job.crms_id}-COL`,
-        job,
-        runType: 'COL',
-        runDate: job.collection_date,
-        runTime: job.collection_time,
-        client: job.client_name,
-        event: job.event_name,
-        venue: job.venue,
-        ref: job.crms_ref,
-        status: job.status,
-        isAmended: job.is_amended,
-        isUrgent: job.is_urgent,
-        notes: job.notes,
-        missingTime: !job.collection_time,
-      })
-    }
+    if (job.delivery_date) runs.push({ ...base, id: `${job.id}-DEL`, runType: 'DEL', runDate: job.delivery_date, runTime: job.delivery_time, missingTime: !job.delivery_time })
+    if (job.collection_date) runs.push({ ...base, id: `${job.id}-COL`, runType: 'COL', runDate: job.collection_date, runTime: job.collection_time, missingTime: !job.collection_time })
   }
-  // Sort by date then time (earliest first)
   return runs.sort((a, b) => {
-    const dateComp = (a.runDate || '').localeCompare(b.runDate || '')
-    if (dateComp !== 0) return dateComp
-    return (a.runTime || '99:99').localeCompare(b.runTime || '99:99')
+    const d = (a.runDate || '').localeCompare(b.runDate || '')
+    return d !== 0 ? d : (a.runTime || '99:99').localeCompare(b.runTime || '99:99')
   })
 }
 
-function applyFilter(runs, filter) {
-  const { week } = getWeekRange()
+function applyFilter(runs, filter, weekOffset = 0, driverFilter = 'all') {
+  let r = runs
   switch (filter) {
-    case 'today':      return runs.filter(r => r.runDate === today)
-    case 'tomorrow':   return runs.filter(r => r.runDate === tomorrow)
-    case 'week':       return runs.filter(r => { const { from, to } = getWeekRange(); return r.runDate >= from && r.runDate <= to })
-    case 'deliveries': return runs.filter(r => r.runType === 'DEL')
-    case 'collections':return runs.filter(r => r.runType === 'COL')
-    case 'amended':    return runs.filter(r => r.isAmended)
-    case 'urgent':     return runs.filter(r => r.isUrgent)
-    case 'missing':    return runs.filter(r => r.missingTime)
-    default:           return runs
+    case 'today':       r = r.filter(x => x.runDate === today); break
+    case 'tomorrow':    r = r.filter(x => x.runDate === tomorrow); break
+    case 'week':        r = r.filter(x => { const { from, to } = getWeekRange(weekOffset); return x.runDate >= from && x.runDate <= to }); break
+    case 'deliveries':  r = r.filter(x => x.runType === 'DEL'); break
+    case 'collections': r = r.filter(x => x.runType === 'COL'); break
+    case 'amended':     r = r.filter(x => x.isAmended); break
+    case 'urgent':      r = r.filter(x => x.isUrgent); break
+    case 'missing':     r = r.filter(x => x.missingTime); break
+    case 'unassigned':  r = r.filter(x => !x.assignedDriverId); break
+    default: break
   }
+  if (driverFilter !== 'all') r = r.filter(x => x.assignedDriverId === driverFilter)
+  return r
 }
 
+// ── Main component ────────────────────────────────────────────────────────────
 export default function Schedule() {
-  const [jobs, setJobs] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [view, setView] = useState('list') // list | week | month | year
-  const [filter, setFilter] = useState('today')
-  const [search, setSearch] = useState('')
+  const { profile } = useAuth()
+  const [jobs, setJobs]             = useState([])
+  const [drivers, setDrivers]       = useState([])
+  const [loading, setLoading]       = useState(true)
+  const [view, setView]             = useState('list')
+  const [filter, setFilter]         = useState('today')
+  const [driverFilter, setDrvFilter]= useState('all')
+  const [search, setSearch]         = useState('')
   const [selectedRun, setSelectedRun] = useState(null)
-  const [syncInfo, setSyncInfo] = useState(null)
-  const [monthDate, setMonthDate] = useState(new Date())
-  const [yearDate, setYearDate] = useState(new Date())
+  const [syncInfo, setSyncInfo]     = useState(null)
+  const [monthDate, setMonthDate]   = useState(new Date())
+  const [yearDate, setYearDate]     = useState(new Date())
   const [weekOffset, setWeekOffset] = useState(0)
+  const [groupByDriver, setGroup]   = useState(false)
 
   useEffect(() => {
     fetchJobs()
+    fetchDrivers()
     fetchLastSync()
     const channel = supabase.channel('schedule-crms')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'crms_jobs' }, fetchJobs)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' },    fetchJobs)
       .subscribe()
     return () => supabase.removeChannel(channel)
   }, [])
 
   async function fetchJobs() {
-    const { data } = await supabase
-      .from('crms_jobs')
-      .select('*')
-      .order('delivery_date', { ascending: true, nullsLast: true })
-    if (data) setJobs(data)
+    // Fetch both CRMS jobs and manual orders
+    const [crmsRes, ordersRes] = await Promise.all([
+      supabase.from('crms_jobs').select('*').order('delivery_date', { ascending: true, nullsLast: true }),
+      supabase.from('orders').select('*').eq('deleted', false).order('delivery_date', { ascending: true, nullsLast: true }),
+    ])
+    // Normalise manual orders to same shape as crms_jobs
+    const crmsJobs = (crmsRes.data || [])
+    const manualJobs = (ordersRes.data || []).map(o => ({
+      ...o,
+      crms_id:  null,
+      crms_ref: o.ref,
+      is_manual: true,
+    }))
+    setJobs([...crmsJobs, ...manualJobs])
     setLoading(false)
   }
 
+  async function fetchDrivers() {
+    const { data } = await supabase.from('drivers').select('id, name, colour').eq('active', true).order('name')
+    if (data) setDrivers(data)
+  }
+
   async function fetchLastSync() {
-    const { data } = await supabase
-      .from('sync_runs')
-      .select('completed_at, status, jobs_fetched')
-      .order('started_at', { ascending: false })
-      .limit(1)
-      .single()
+    const { data } = await supabase.from('sync_runs').select('completed_at, status, jobs_fetched').order('started_at', { ascending: false }).limit(1).single()
     if (data) setSyncInfo(data)
   }
 
-  const allRuns = buildRuns(jobs)
-  const filteredRuns = applyFilter(
+  // ── Assign driver ──────────────────────────────────────────────────────────
+  async function assignDriver(run, driverId) {
+    const driver = drivers.find(d => d.id === driverId) || null
+    const update = {
+      assigned_driver_id:   driverId   || null,
+      assigned_driver_name: driver?.name || null,
+      assigned_by:          profile?.id  || null,
+      assigned_at:          driverId ? new Date().toISOString() : null,
+    }
+    const table = run.crmsId ? 'crms_jobs' : 'orders'
+    const col   = run.crmsId ? 'crms_id'   : 'id'
+    const val   = run.crmsId ? run.crmsId   : run.jobId
+
+    await supabase.from(table).update(update).eq(col, val)
+    await fetchJobs()
+    // Update selectedRun in-place so panel stays open
+    if (selectedRun?.id === run.id) {
+      setSelectedRun(prev => ({ ...prev, assignedDriverId: driverId, driverName: driver?.name || null, driverColour: driver?.colour || null }))
+    }
+  }
+
+  // ── Build run list enriched with driver colour ─────────────────────────────
+  const driverMap = drivers.reduce((m, d) => ({ ...m, [d.id]: d }), {})
+  const allRuns = buildRuns(jobs).map(r => ({
+    ...r,
+    driverColour: r.assignedDriverId ? (driverMap[r.assignedDriverId]?.colour || '#3D5A73') : null,
+  }))
+
+  const filtered = applyFilter(
     allRuns.filter(r =>
       !search || [r.client, r.event, r.venue, r.ref].some(f => f?.toLowerCase().includes(search.toLowerCase()))
     ),
-    filter
+    filter,
+    weekOffset,
+    driverFilter,
   )
 
-  const todayCount     = allRuns.filter(r => r.runDate === today).length
-  const tomorrowCount  = allRuns.filter(r => r.runDate === tomorrow).length
-  const urgentCount    = allRuns.filter(r => r.isUrgent).length
-  const amendedCount   = allRuns.filter(r => r.isAmended).length
-  const missingCount   = allRuns.filter(r => r.missingTime).length
+  const todayCount      = allRuns.filter(r => r.runDate === today).length
+  const tomorrowCount   = allRuns.filter(r => r.runDate === tomorrow).length
+  const urgentCount     = allRuns.filter(r => r.isUrgent).length
+  const amendedCount    = allRuns.filter(r => r.isAmended).length
+  const missingCount    = allRuns.filter(r => r.missingTime).length
+  const unassignedCount = allRuns.filter(r => !r.assignedDriverId).length
 
   if (loading) return (
     <div style={{ padding: '48px', textAlign: 'center', color: '#6B6860', fontFamily: "'DM Sans', sans-serif" }}>
-      Loading live schedule…
+      Loading schedule…
     </div>
   )
 
   return (
     <div style={{ fontFamily: "'DM Sans', sans-serif" }}>
 
-      {/* Sync status */}
-      <div style={styles.syncBar}>
+      {/* Sync bar */}
+      <div style={S.syncBar}>
         <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: '#6B6860' }}>
           <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#22C55E', display: 'inline-block' }} />
-          Schedule auto-generated from Live Jobs — syncs every 5 minutes
+          Schedule auto-populated from Current RMS — syncs every 5 minutes
         </span>
         {syncInfo && (
           <span style={{ fontSize: '11px', color: '#9CA3AF' }}>
-            Last sync: {new Date(syncInfo.completed_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })} · {syncInfo.jobs_fetched} jobs from Current RMS
+            Last sync: {new Date(syncInfo.completed_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })} · {syncInfo.jobs_fetched} jobs
           </span>
         )}
       </div>
 
-      {/* Stats row */}
-      <div style={styles.statsRow}>
+      {/* Legend */}
+      <div style={{ display: 'flex', gap: '16px', marginBottom: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
+        {[['DEL','#EF4444','Delivery'],['COL','#22C55E','Collection']].map(([type, color, label]) => (
+          <span key={type} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
+            <span style={{ background: color, color: 'white', padding: '2px 8px', borderRadius: '3px', fontSize: '11px', fontWeight: '700' }}>{type}</span> {label}
+          </span>
+        ))}
+        {drivers.map(d => (
+          <span key={d.id} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px' }}>
+            <span style={{ background: d.colour, color: 'white', padding: '2px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: '600' }}>{d.name}</span>
+          </span>
+        ))}
+        <span style={{ fontSize: '11px', color: '#9CA3AF', marginLeft: 'auto' }}>⚡ Auto-populated from Current RMS · Read-only source</span>
+      </div>
+
+      {/* Stats */}
+      <div style={S.statsRow}>
         {[
-          { label: "Today", value: todayCount, filter: 'today', color: '#B8965A' },
-          { label: "Tomorrow", value: tomorrowCount, filter: 'tomorrow', color: '#3D5A73' },
-          { label: "Urgent", value: urgentCount, filter: 'urgent', color: '#EF4444' },
-          { label: "Amended", value: amendedCount, filter: 'amended', color: '#F59E0B' },
-          { label: "Missing Time", value: missingCount, filter: 'missing', color: '#9CA3AF' },
+          { label: 'Today',      value: todayCount,      filter: 'today',      color: '#B8965A' },
+          { label: 'Tomorrow',   value: tomorrowCount,   filter: 'tomorrow',   color: '#3D5A73' },
+          { label: 'Urgent',     value: urgentCount,     filter: 'urgent',     color: '#EF4444' },
+          { label: 'Amended',    value: amendedCount,    filter: 'amended',    color: '#F59E0B' },
+          { label: 'Unassigned', value: unassignedCount, filter: 'unassigned', color: '#9CA3AF' },
         ].map(s => (
-          <div key={s.label} style={{ ...styles.statCard, borderTop: `3px solid ${s.color}`, cursor: 'pointer' }} onClick={() => { setFilter(s.filter); setView('list') }}>
+          <div key={s.label} style={{ ...S.statCard, borderTop: `3px solid ${s.color}`, cursor: 'pointer' }}
+            onClick={() => { setFilter(s.filter); setView('list') }}>
             <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '28px', fontWeight: '600', color: s.color }}>{s.value}</div>
             <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '2px' }}>{s.label}</div>
           </div>
@@ -178,119 +225,58 @@ export default function Schedule() {
 
       {/* View + filter controls */}
       <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
-        {[['list','☰ List'],['week','📅 Week'],['month','🗓 Month'],['year','📆 Year']].map(([v, label]) => (
-          <button key={v} style={{ ...styles.btnOutline, ...(view === v ? styles.btnActive : {}) }} onClick={() => setView(v)}>{label}</button>
+        {[['list','☰ List'],['week','📅 Week'],['month','🗓 Month'],['year','📆 Year'],['dispatch','🚚 Dispatch']].map(([v, label]) => (
+          <button key={v} style={{ ...S.btnOutline, ...(view === v ? S.btnActive : {}) }} onClick={() => setView(v)}>{label}</button>
         ))}
         <div style={{ width: '1px', height: '24px', background: '#DDD8CF', margin: '0 4px' }} />
         {[
           ['today','Today'],['tomorrow','Tomorrow'],['week','This Week'],
           ['all','All'],['deliveries','Deliveries'],['collections','Collections'],
-          ['amended','Amended'],['urgent','Urgent'],['missing','Missing Data'],
+          ['unassigned','Unassigned'],['amended','Amended'],['urgent','Urgent'],
         ].map(([f, label]) => (
-          <button key={f} style={{ ...styles.filterBtn, ...(filter === f && view === 'list' ? styles.filterBtnActive : {}) }}
-            onClick={() => { setFilter(f); setView('list') }}>{label}</button>
+          <button key={f}
+            style={{ ...S.filterBtn, ...(filter === f && view !== 'dispatch' ? S.filterBtnActive : {}) }}
+            onClick={() => { setFilter(f); if (view === 'dispatch') setView('list') }}>
+            {label}
+          </button>
         ))}
+        {/* Driver filter */}
+        <select value={driverFilter} onChange={e => setDrvFilter(e.target.value)}
+          style={{ ...S.select, width: 'auto', fontSize: '12px', padding: '7px 12px' }}>
+          <option value="all">All Drivers</option>
+          <option value="">Unassigned</option>
+          {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
       </div>
 
       {/* Search */}
       <input
         placeholder="🔍 Search by client, event, venue, reference…"
         value={search} onChange={e => setSearch(e.target.value)}
-        style={{ ...styles.searchInput, marginBottom: '16px' }}
+        style={{ ...S.searchInput, marginBottom: '16px' }}
       />
-
-      {/* Legend */}
-      <div style={{ display: 'flex', gap: '16px', marginBottom: '16px' }}>
-        {[['DEL','#EF4444','Delivery'],['COL','#22C55E','Collection']].map(([type, color, label]) => (
-          <span key={type} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
-            <span style={{ background: color, color: 'white', padding: '2px 8px', borderRadius: '3px', fontSize: '11px', fontWeight: '700' }}>{type}</span> {label}
-          </span>
-        ))}
-        <span style={{ fontSize: '11px', color: '#9CA3AF', marginLeft: 'auto' }}>⚡ Auto-populated from Current RMS · Read-only source</span>
-      </div>
 
       {/* ── LIST VIEW ── */}
       {view === 'list' && (
-        <div>
-          {filteredRuns.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '48px', color: '#9CA3AF', fontSize: '14px' }}>
-              No schedule entries for this filter
-            </div>
-          ) : (
-            // Group by date
-            Object.entries(
-              filteredRuns.reduce((acc, r) => {
-                const k = r.runDate || 'No Date'
-                if (!acc[k]) acc[k] = []
-                acc[k].push(r)
-                return acc
-              }, {})
-            ).map(([date, runs]) => (
-              <div key={date} style={{ marginBottom: '20px' }}>
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: '12px',
-                  padding: '10px 16px',
-                  background: date === today ? '#1C1C1E' : '#F7F3EE',
-                  color: date === today ? 'white' : '#1C1C1E',
-                  borderRadius: '6px', marginBottom: '8px',
-                  border: date === today ? '2px solid #B8965A' : '1px solid #DDD8CF',
-                }}>
-                  <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '18px', fontWeight: '600' }}>
-                    {date === today ? '📌 TODAY — ' : date === tomorrow ? '📅 TOMORROW — ' : ''}{fmt(date)}
-                  </span>
-                  <span style={{ fontSize: '11px', opacity: 0.6 }}>{runs.length} run{runs.length !== 1 ? 's' : ''}</span>
-                  {runs.some(r => r.isUrgent) && <span style={{ background: '#EF4444', color: 'white', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '3px' }}>⚠ URGENT</span>}
-                </div>
+        <ListView
+          filteredRuns={filtered}
+          allRuns={allRuns}
+          groupByDriver={groupByDriver}
+          setGroup={setGroup}
+          drivers={drivers}
+          onSelect={setSelectedRun}
+          today={today}
+          tomorrow={tomorrow}
+        />
+      )}
 
-                <div style={styles.card}>
-                  <table style={styles.table}>
-                    <thead>
-                      <tr>{['D/C','Time','Event / Client','Venue','Ref','Status','Flags',''].map(h => <th key={h} style={styles.th}>{h}</th>)}</tr>
-                    </thead>
-                    <tbody>
-                      {runs.map((run, i) => {
-                        const colors = run.runType === 'DEL'
-                          ? { bg: '#FEF2F2', badge: '#EF4444', text: '#991B1B' }
-                          : { bg: '#F0FDF4', badge: '#22C55E', text: '#166534' }
-                        return (
-                          <tr key={run.id} style={{ background: run.isUrgent ? '#FFF5F5' : run.missingTime ? '#FFFBEB' : 'white', cursor: 'pointer' }}
-                            onClick={() => setSelectedRun(run)}>
-                            <td style={styles.td}>
-                              <span style={{ background: colors.badge, color: 'white', fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '3px' }}>{run.runType}</span>
-                            </td>
-                            <td style={{ ...styles.td, fontWeight: '600', color: run.missingTime ? '#9CA3AF' : '#1C1C1E', fontFamily: "'Cormorant Garamond', serif", fontSize: '16px' }}>
-                              {run.runTime || <span style={{ fontSize: '11px', color: '#F59E0B' }}>⚠ No time</span>}
-                            </td>
-                            <td style={styles.td}>
-                              <div style={{ fontWeight: 500 }}>{run.event || run.client}</div>
-                              <div style={{ fontSize: '11.5px', color: '#6B6860' }}>{run.client}</div>
-                            </td>
-                            <td style={{ ...styles.td, fontSize: '12px', color: '#6B6860', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{run.venue || '—'}</td>
-                            <td style={{ ...styles.td, fontFamily: "'Cormorant Garamond', serif", fontSize: '14px', color: '#B8965A' }}>{run.ref}</td>
-                            <td style={styles.td}>
-                              <span style={{ background: run.status === 'confirmed' ? '#ECFDF5' : '#FFFBEB', color: run.status === 'confirmed' ? '#065F46' : '#92400E', padding: '3px 8px', borderRadius: '10px', fontSize: '11px', textTransform: 'capitalize' }}>
-                                {run.status}
-                              </span>
-                            </td>
-                            <td style={styles.td}>
-                              {run.isUrgent && <span style={{ background: '#EF4444', color: 'white', fontSize: '9px', fontWeight: '700', padding: '2px 5px', borderRadius: '3px', marginRight: '4px' }}>URGENT</span>}
-                              {run.isAmended && <span style={{ background: '#FEF3C7', color: '#92400E', fontSize: '9px', fontWeight: '600', padding: '2px 5px', borderRadius: '3px' }}>AMENDED</span>}
-                            </td>
-                            <td style={styles.td}><button style={styles.btnGhost}>View →</button></td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
+      {/* ── DISPATCH VIEW ── */}
+      {view === 'dispatch' && (
+        <DispatchView allRuns={allRuns} drivers={drivers} today={today} tomorrow={tomorrow} onSelect={setSelectedRun} onAssign={assignDriver} />
       )}
 
       {/* ── WEEK VIEW ── */}
-      {view === 'week' && <WeekView jobs={jobs} allRuns={allRuns} weekOffset={weekOffset} setWeekOffset={setWeekOffset} onSelect={setSelectedRun} />}
+      {view === 'week' && <WeekView allRuns={allRuns} weekOffset={weekOffset} setWeekOffset={setWeekOffset} onSelect={setSelectedRun} />}
 
       {/* ── MONTH VIEW ── */}
       {view === 'month' && <MonthView allRuns={allRuns} monthDate={monthDate} setMonthDate={setMonthDate} onSelect={setSelectedRun} />}
@@ -299,12 +285,412 @@ export default function Schedule() {
       {view === 'year' && <YearView allRuns={allRuns} yearDate={yearDate} setYearDate={setYearDate} setMonthDate={setMonthDate} setView={setView} />}
 
       {/* Run detail panel */}
-      {selectedRun && <RunDetailPanel run={selectedRun} onClose={() => setSelectedRun(null)} />}
+      {selectedRun && (
+        <RunDetailPanel
+          run={selectedRun}
+          drivers={drivers}
+          onClose={() => setSelectedRun(null)}
+          onAssign={assignDriver}
+        />
+      )}
     </div>
   )
 }
 
-// ── WEEK VIEW ──────────────────────────────────────────────────────────────────
+// ── LIST VIEW ─────────────────────────────────────────────────────────────────
+function ListView({ filteredRuns, allRuns, groupByDriver, setGroup, drivers, onSelect, today, tomorrow }) {
+  if (filteredRuns.length === 0) return (
+    <div style={{ textAlign: 'center', padding: '48px', color: '#9CA3AF', fontSize: '14px' }}>
+      No schedule entries for this filter
+    </div>
+  )
+
+  const grouped = filteredRuns.reduce((acc, r) => {
+    const k = r.runDate || 'No Date'
+    if (!acc[k]) acc[k] = []
+    acc[k].push(r)
+    return acc
+  }, {})
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '10px' }}>
+        <button style={{ ...S.filterBtn, ...(groupByDriver ? S.filterBtnActive : {}) }} onClick={() => setGroup(g => !g)}>
+          👤 Group by Driver
+        </button>
+      </div>
+      {groupByDriver
+        ? <GroupedByDriverView runs={filteredRuns} drivers={drivers} onSelect={onSelect} />
+        : Object.entries(grouped).map(([date, runs]) => (
+          <DateGroup key={date} date={date} runs={runs} onSelect={onSelect} today={today} tomorrow={tomorrow} />
+        ))
+      }
+    </div>
+  )
+}
+
+function DateGroup({ date, runs, onSelect, today, tomorrow }) {
+  const isToday = date === today
+  const isTomorrow = date === tomorrow
+  return (
+    <div style={{ marginBottom: '20px' }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: '12px',
+        padding: '10px 16px',
+        background: isToday ? '#1C1C1E' : '#F7F3EE',
+        color: isToday ? 'white' : '#1C1C1E',
+        borderRadius: '6px', marginBottom: '8px',
+        border: isToday ? '2px solid #B8965A' : '1px solid #DDD8CF',
+      }}>
+        <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '18px', fontWeight: '600' }}>
+          {isToday ? '📌 TODAY — ' : isTomorrow ? '📅 TOMORROW — ' : ''}{fmt(date)}
+        </span>
+        <span style={{ fontSize: '11px', opacity: 0.6 }}>{runs.length} run{runs.length !== 1 ? 's' : ''}</span>
+        {runs.some(r => r.isUrgent) && <span style={{ background: '#EF4444', color: 'white', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '3px' }}>⚠ URGENT</span>}
+      </div>
+      <div style={S.card}>
+        <table style={S.table}>
+          <thead>
+            <tr>{['D/C','Time','Event / Client','Venue','Driver','Ref','Status',''].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
+          </thead>
+          <tbody>
+            {runs.map((run, i) => <RunRow key={i} run={run} onSelect={onSelect} />)}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function RunRow({ run, onSelect }) {
+  const colors = run.runType === 'DEL'
+    ? { badge: '#EF4444' }
+    : { badge: '#22C55E' }
+  return (
+    <tr style={{ background: run.isUrgent ? '#FFF5F5' : run.missingTime ? '#FFFBEB' : 'white', cursor: 'pointer' }}
+      onClick={() => onSelect(run)}>
+      <td style={S.td}>
+        <span style={{ background: colors.badge, color: 'white', fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '3px' }}>{run.runType}</span>
+      </td>
+      <td style={{ ...S.td, fontWeight: '600', fontFamily: "'Cormorant Garamond', serif", fontSize: '16px', color: run.missingTime ? '#9CA3AF' : '#1C1C1E' }}>
+        {run.runTime || <span style={{ fontSize: '11px', color: '#F59E0B' }}>⚠ No time</span>}
+      </td>
+      <td style={S.td}>
+        <div style={{ fontWeight: 500 }}>{run.event || run.client}</div>
+        <div style={{ fontSize: '11.5px', color: '#6B6860' }}>{run.client}</div>
+      </td>
+      <td style={{ ...S.td, fontSize: '12px', color: '#6B6860', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{run.venue || '—'}</td>
+      <td style={S.td}>
+        {run.driverName
+          ? <span style={{ background: run.driverColour || '#3D5A73', color: 'white', padding: '3px 10px', borderRadius: '12px', fontSize: '11.5px', fontWeight: '600' }}>{run.driverName}</span>
+          : <span style={{ color: '#D1D5DB', fontSize: '12px' }}>—</span>}
+      </td>
+      <td style={{ ...S.td, fontFamily: "'Cormorant Garamond', serif", fontSize: '14px', color: '#B8965A' }}>{run.ref}</td>
+      <td style={S.td}>
+        <span style={{ background: run.status === 'confirmed' ? '#ECFDF5' : '#FFFBEB', color: run.status === 'confirmed' ? '#065F46' : '#92400E', padding: '3px 8px', borderRadius: '10px', fontSize: '11px', textTransform: 'capitalize' }}>
+          {run.status}
+        </span>
+      </td>
+      <td style={S.td}><button style={S.btnGhost}>View →</button></td>
+    </tr>
+  )
+}
+
+// ── GROUPED BY DRIVER VIEW ────────────────────────────────────────────────────
+function GroupedByDriverView({ runs, drivers, onSelect }) {
+  const groups = {}
+  runs.forEach(r => {
+    const key = r.assignedDriverId || '__unassigned'
+    if (!groups[key]) groups[key] = []
+    groups[key].push(r)
+  })
+
+  const driverMap = drivers.reduce((m, d) => ({ ...m, [d.id]: d }), {})
+
+  return (
+    <div>
+      {Object.entries(groups).map(([driverId, driverRuns]) => {
+        const driver = driverId === '__unassigned' ? null : driverMap[driverId]
+        return (
+          <div key={driverId} style={{ marginBottom: '24px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px', padding: '10px 16px', background: driver ? driver.colour : '#F7F3EE', borderRadius: '6px' }}>
+              <span style={{ color: driver ? 'white' : '#9CA3AF', fontWeight: '700', fontSize: '14px', letterSpacing: '0.05em' }}>
+                {driver ? `🚚 ${driver.name.toUpperCase()}` : '⬜ UNASSIGNED'}
+              </span>
+              <span style={{ fontSize: '12px', color: driver ? 'rgba(255,255,255,0.7)' : '#9CA3AF' }}>
+                {driverRuns.length} run{driverRuns.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+            <div style={S.card}>
+              <table style={S.table}>
+                <thead>
+                  <tr>{['D/C','Date','Time','Event / Client','Venue','Ref','Status',''].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {driverRuns.map((run, i) => {
+                    const colors = run.runType === 'DEL' ? { badge: '#EF4444' } : { badge: '#22C55E' }
+                    return (
+                      <tr key={i} style={{ cursor: 'pointer' }} onClick={() => onSelect(run)}>
+                        <td style={S.td}><span style={{ background: colors.badge, color: 'white', fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '3px' }}>{run.runType}</span></td>
+                        <td style={S.td}>{fmt(run.runDate)}</td>
+                        <td style={{ ...S.td, fontFamily: "'Cormorant Garamond', serif", fontSize: '15px' }}>{run.runTime || <span style={{ fontSize: '11px', color: '#F59E0B' }}>⚠ No time</span>}</td>
+                        <td style={S.td}><div style={{ fontWeight: 500 }}>{run.event || run.client}</div><div style={{ fontSize: '11px', color: '#6B6860' }}>{run.client}</div></td>
+                        <td style={{ ...S.td, fontSize: '12px', color: '#6B6860' }}>{run.venue || '—'}</td>
+                        <td style={{ ...S.td, fontFamily: "'Cormorant Garamond', serif", fontSize: '14px', color: '#B8965A' }}>{run.ref}</td>
+                        <td style={S.td}><span style={{ background: '#ECFDF5', color: '#065F46', padding: '3px 8px', borderRadius: '10px', fontSize: '11px', textTransform: 'capitalize' }}>{run.status}</span></td>
+                        <td style={S.td}><button style={S.btnGhost}>View →</button></td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ── DISPATCH VIEW ─────────────────────────────────────────────────────────────
+function DispatchView({ allRuns, drivers, today, tomorrow, onSelect, onAssign }) {
+  const [dayOffset, setDayOffset] = useState(0)
+  const targetDate = (() => {
+    const d = new Date(); d.setDate(d.getDate() + dayOffset)
+    return d.toISOString().split('T')[0]
+  })()
+
+  const dayRuns = allRuns.filter(r => r.runDate === targetDate)
+
+  // Group by driver for this day
+  const groups = { __unassigned: [] }
+  drivers.forEach(d => { groups[d.id] = [] })
+  dayRuns.forEach(r => {
+    const key = r.assignedDriverId || '__unassigned'
+    if (!groups[key]) groups[key] = []
+    groups[key].push(r)
+  })
+
+  const isToday = targetDate === today
+  const isTomorrow = targetDate === tomorrow
+  const label = isToday ? 'TODAY' : isTomorrow ? 'TOMORROW' : fmt(targetDate)
+
+  return (
+    <div>
+      {/* Day selector */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
+        <button style={S.btnOutline} onClick={() => setDayOffset(d => d - 1)}>← Previous</button>
+        <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', fontWeight: '600', padding: '0 8px' }}>
+          🚚 Dispatch — {label}
+        </span>
+        <button style={{ ...S.btnOutline, ...(isToday ? S.btnActive : {}) }} onClick={() => setDayOffset(0)}>Today</button>
+        <button style={S.btnOutline} onClick={() => setDayOffset(d => d + 1)}>Next →</button>
+      </div>
+
+      {dayRuns.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '48px', color: '#9CA3AF', fontSize: '14px', background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px' }}>
+          No runs scheduled for {fmt(targetDate)}
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '16px' }}>
+
+          {/* Unassigned column */}
+          {groups.__unassigned.length > 0 && (
+            <DispatchColumn
+              title="Unassigned"
+              colour="#9CA3AF"
+              runs={groups.__unassigned}
+              drivers={drivers}
+              onSelect={onSelect}
+              onAssign={onAssign}
+            />
+          )}
+
+          {/* Driver columns */}
+          {drivers.map(driver => (
+            groups[driver.id]?.length > 0 && (
+              <DispatchColumn
+                key={driver.id}
+                title={driver.name}
+                colour={driver.colour}
+                runs={groups[driver.id]}
+                drivers={drivers}
+                onSelect={onSelect}
+                onAssign={onAssign}
+                driverId={driver.id}
+              />
+            )
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DispatchColumn({ title, colour, runs, drivers, onSelect, onAssign, driverId }) {
+  return (
+    <div style={{ background: '#fff', border: `2px solid ${colour}`, borderRadius: '8px', overflow: 'hidden' }}>
+      <div style={{ background: colour, color: 'white', padding: '12px 16px', fontWeight: '700', fontSize: '13px', letterSpacing: '0.05em' }}>
+        🚚 {title.toUpperCase()} · {runs.length} run{runs.length !== 1 ? 's' : ''}
+      </div>
+      <div style={{ padding: '10px' }}>
+        {runs.map((run, i) => (
+          <DispatchCard key={i} run={run} drivers={drivers} onSelect={onSelect} onAssign={onAssign} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function DispatchCard({ run, drivers, onSelect, onAssign }) {
+  const [assigning, setAssigning] = useState(false)
+  const colors = run.runType === 'DEL'
+    ? { bg: '#FEF2F2', border: '#EF4444', badge: '#EF4444', text: '#991B1B' }
+    : { bg: '#F0FDF4', border: '#22C55E', badge: '#22C55E', text: '#166534' }
+
+  return (
+    <div style={{ background: colors.bg, border: `1.5px solid ${colors.border}`, borderRadius: '6px', padding: '12px', marginBottom: '8px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+        <span style={{ background: colors.badge, color: 'white', fontSize: '10px', fontWeight: '700', padding: '2px 6px', borderRadius: '3px' }}>{run.runType}</span>
+        {run.runTime && <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '16px', fontWeight: '600', color: colors.text }}>{run.runTime}</span>}
+        {run.isUrgent && <span style={{ background: '#EF4444', color: 'white', fontSize: '9px', fontWeight: '700', padding: '1px 5px', borderRadius: '2px' }}>URGENT</span>}
+      </div>
+      <div style={{ fontWeight: '600', fontSize: '13px', marginBottom: '2px', cursor: 'pointer' }} onClick={() => onSelect(run)}>
+        {run.event || run.client}
+      </div>
+      <div style={{ fontSize: '11.5px', color: '#6B6860', marginBottom: '8px' }}>{run.venue || run.client}</div>
+
+      {/* Driver assignment buttons */}
+      <div>
+        <div style={{ fontSize: '10px', color: '#9CA3AF', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: '5px' }}>Assign Driver</div>
+        <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+          <button
+            style={{ ...S.assignBtn, ...((!run.assignedDriverId) ? { background: '#F7F3EE', borderColor: '#B8965A', color: '#B8965A' } : {}) }}
+            onClick={() => onAssign(run, null)}>
+            —
+          </button>
+          {drivers.map(d => (
+            <button key={d.id}
+              style={{
+                ...S.assignBtn,
+                ...(run.assignedDriverId === d.id ? { background: d.colour, color: 'white', borderColor: d.colour } : {}),
+              }}
+              onClick={() => onAssign(run, d.id)}>
+              {d.name}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── RUN DETAIL PANEL ──────────────────────────────────────────────────────────
+function RunDetailPanel({ run, drivers, onClose, onAssign }) {
+  const colors = run.runType === 'DEL'
+    ? { border: '#EF4444', badge: '#EF4444', bg: '#FEF2F2' }
+    : { border: '#22C55E', badge: '#22C55E', bg: '#F0FDF4' }
+
+  const [saving, setSaving] = useState(false)
+
+  async function handleAssign(driverId) {
+    setSaving(true)
+    await onAssign(run, driverId || null)
+    setSaving(false)
+  }
+
+  return (
+    <div style={S.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={S.panel}>
+        <div style={{ ...S.panelHeader, borderBottom: `3px solid ${colors.border}` }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px', flexWrap: 'wrap' }}>
+              <span style={{ background: colors.badge, color: 'white', fontSize: '12px', fontWeight: '700', padding: '4px 10px', borderRadius: '4px' }}>{run.runType}</span>
+              <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '20px', fontWeight: '600' }}>{run.event || run.client}</span>
+              {run.isUrgent && <span style={{ background: '#EF4444', color: 'white', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '3px' }}>⚠ URGENT</span>}
+            </div>
+            <div style={{ fontSize: '12px', color: '#6B6860' }}>{run.ref} · {run.client}</div>
+          </div>
+          <button style={S.closeBtn} onClick={onClose}>✕</button>
+        </div>
+
+        <div style={{ padding: '24px 28px', overflowY: 'auto' }}>
+
+          {/* Details grid */}
+          <div style={S.sectionLabel}>{run.runType === 'DEL' ? 'Delivery' : 'Collection'} Details</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
+            {[
+              ['Date',      fmt(run.runDate)],
+              ['Time',      run.runTime || '⚠ Not set'],
+              ['Client',    run.client],
+              ['Venue',     run.venue || '—'],
+              ['Status',    run.status],
+              ['Reference', run.ref],
+            ].map(([label, value]) => (
+              <div key={label} style={{ background: '#F7F3EE', borderRadius: '6px', padding: '12px' }}>
+                <div style={{ fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6B6860', marginBottom: '4px' }}>{label}</div>
+                <div style={{ fontSize: '13.5px', fontWeight: '500', color: '#1C1C1E', textTransform: 'capitalize' }}>{value}</div>
+              </div>
+            ))}
+          </div>
+
+          <hr style={S.divider} />
+
+          {/* Driver Assignment */}
+          <div style={S.sectionLabel}>Driver Assignment</div>
+
+          {/* Current assignment */}
+          <div style={{ marginBottom: '14px' }}>
+            {run.driverName
+              ? <span style={{ background: run.driverColour || '#3D5A73', color: 'white', padding: '6px 16px', borderRadius: '20px', fontSize: '13px', fontWeight: '600' }}>
+                  🚚 {run.driverName}
+                </span>
+              : <span style={{ color: '#9CA3AF', fontSize: '13px' }}>No driver assigned</span>
+            }
+          </div>
+
+          {/* Assignment buttons */}
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              style={{ ...S.driverBtn, ...((!run.assignedDriverId) ? { background: '#F7F3EE', borderColor: '#B8965A', color: '#B8965A' } : {}) }}
+              disabled={saving}
+              onClick={() => handleAssign(null)}>
+              Remove Driver
+            </button>
+            {drivers.map(d => (
+              <button key={d.id}
+                style={{
+                  ...S.driverBtn,
+                  ...(run.assignedDriverId === d.id ? { background: d.colour, color: 'white', borderColor: d.colour } : {}),
+                }}
+                disabled={saving}
+                onClick={() => handleAssign(d.id)}>
+                {d.name}
+              </button>
+            ))}
+          </div>
+
+          {run.notes && (
+            <>
+              <hr style={S.divider} />
+              <div style={S.sectionLabel}>Notes</div>
+              <div style={{ background: '#F7F3EE', borderRadius: '6px', padding: '14px', fontSize: '13px', lineHeight: '1.6' }}>{run.notes}</div>
+            </>
+          )}
+
+          <hr style={S.divider} />
+          <div style={{ fontSize: '11px', color: '#9CA3AF' }}>
+            {run.crmsId
+              ? 'This entry is auto-generated from Current RMS. Driver assignments are stored in this platform only and do not affect Current RMS.'
+              : 'Manual order created in this platform.'}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── WEEK VIEW ─────────────────────────────────────────────────────────────────
 function WeekView({ allRuns, weekOffset, setWeekOffset, onSelect }) {
   const now = new Date()
   const day = now.getDay()
@@ -318,10 +704,10 @@ function WeekView({ allRuns, weekOffset, setWeekOffset, onSelect }) {
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-        <button style={styles.btnOutline} onClick={() => setWeekOffset(w => w - 1)}>← Prev</button>
-        <span style={styles.weekLabel}>{weekLabel}</span>
-        <button style={styles.btnOutline} onClick={() => setWeekOffset(0)}>Today</button>
-        <button style={styles.btnOutline} onClick={() => setWeekOffset(w => w + 1)}>Next →</button>
+        <button style={S.btnOutline} onClick={() => setWeekOffset(w => w - 1)}>← Prev</button>
+        <span style={S.weekLabel}>{weekLabel}</span>
+        <button style={S.btnOutline} onClick={() => setWeekOffset(0)}>Today</button>
+        <button style={S.btnOutline} onClick={() => setWeekOffset(w => w + 1)}>Next →</button>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '8px' }}>
         {weekDates.map((date, i) => {
@@ -346,7 +732,7 @@ function WeekView({ allRuns, weekOffset, setWeekOffset, onSelect }) {
   )
 }
 
-// ── MONTH VIEW ─────────────────────────────────────────────────────────────────
+// ── MONTH VIEW ────────────────────────────────────────────────────────────────
 function MonthView({ allRuns, monthDate, setMonthDate, onSelect }) {
   const year = monthDate.getFullYear()
   const month = monthDate.getMonth()
@@ -365,10 +751,10 @@ function MonthView({ allRuns, monthDate, setMonthDate, onSelect }) {
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-        <button style={styles.btnOutline} onClick={() => setMonthDate(d => new Date(d.getFullYear(), d.getMonth() - 1))}>← Prev</button>
-        <span style={styles.weekLabel}>{MONTHS[month]} {year}</span>
-        <button style={styles.btnOutline} onClick={() => setMonthDate(new Date())}>Today</button>
-        <button style={styles.btnOutline} onClick={() => setMonthDate(d => new Date(d.getFullYear(), d.getMonth() + 1))}>Next →</button>
+        <button style={S.btnOutline} onClick={() => setMonthDate(d => new Date(d.getFullYear(), d.getMonth() - 1))}>← Prev</button>
+        <span style={S.weekLabel}>{MONTHS[month]} {year}</span>
+        <button style={S.btnOutline} onClick={() => setMonthDate(new Date())}>Today</button>
+        <button style={S.btnOutline} onClick={() => setMonthDate(d => new Date(d.getFullYear(), d.getMonth() + 1))}>Next →</button>
       </div>
       <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', overflow: 'hidden', marginBottom: '24px' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', background: '#3D5A73' }}>
@@ -391,25 +777,30 @@ function MonthView({ allRuns, monthDate, setMonthDate, onSelect }) {
           })}
         </div>
       </div>
-      <div style={styles.sectionLabel}>All runs — {MONTHS[month]} {year}</div>
+      <div style={S.sectionLabel}>All runs — {MONTHS[month]} {year}</div>
       {monthRuns.length === 0
         ? <div style={{ color: '#9CA3AF', fontSize: '13px', padding: '16px' }}>No runs scheduled this month</div>
         : (
-          <div style={styles.card}>
-            <table style={styles.table}>
-              <thead><tr>{['D/C','Date','Time','Event / Client','Venue','Status',''].map(h => <th key={h} style={styles.th}>{h}</th>)}</tr></thead>
+          <div style={S.card}>
+            <table style={S.table}>
+              <thead><tr>{['D/C','Date','Time','Event / Client','Venue','Driver','Status',''].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
               <tbody>
                 {monthRuns.map((run, i) => {
                   const colors = run.runType === 'DEL' ? { badge: '#EF4444' } : { badge: '#22C55E' }
                   return (
                     <tr key={i} style={{ cursor: 'pointer' }} onClick={() => onSelect(run)}>
-                      <td style={styles.td}><span style={{ background: colors.badge, color: 'white', fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '3px' }}>{run.runType}</span></td>
-                      <td style={styles.td}>{fmt(run.runDate)}</td>
-                      <td style={{ ...styles.td, fontFamily: "'Cormorant Garamond', serif", fontSize: '15px' }}>{run.runTime || <span style={{ fontSize: '11px', color: '#F59E0B' }}>⚠ No time</span>}</td>
-                      <td style={styles.td}><div style={{ fontWeight: 500 }}>{run.event || run.client}</div><div style={{ fontSize: '11px', color: '#6B6860' }}>{run.client}</div></td>
-                      <td style={{ ...styles.td, fontSize: '12px', color: '#6B6860' }}>{run.venue || '—'}</td>
-                      <td style={styles.td}><span style={{ background: '#ECFDF5', color: '#065F46', padding: '3px 8px', borderRadius: '10px', fontSize: '11px', textTransform: 'capitalize' }}>{run.status}</span></td>
-                      <td style={styles.td}><button style={styles.btnGhost}>View →</button></td>
+                      <td style={S.td}><span style={{ background: colors.badge, color: 'white', fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '3px' }}>{run.runType}</span></td>
+                      <td style={S.td}>{fmt(run.runDate)}</td>
+                      <td style={{ ...S.td, fontFamily: "'Cormorant Garamond', serif", fontSize: '15px' }}>{run.runTime || <span style={{ fontSize: '11px', color: '#F59E0B' }}>⚠ No time</span>}</td>
+                      <td style={S.td}><div style={{ fontWeight: 500 }}>{run.event || run.client}</div><div style={{ fontSize: '11px', color: '#6B6860' }}>{run.client}</div></td>
+                      <td style={{ ...S.td, fontSize: '12px', color: '#6B6860' }}>{run.venue || '—'}</td>
+                      <td style={S.td}>
+                        {run.driverName
+                          ? <span style={{ background: run.driverColour || '#3D5A73', color: 'white', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: '600' }}>{run.driverName}</span>
+                          : <span style={{ color: '#D1D5DB', fontSize: '11px' }}>—</span>}
+                      </td>
+                      <td style={S.td}><span style={{ background: '#ECFDF5', color: '#065F46', padding: '3px 8px', borderRadius: '10px', fontSize: '11px', textTransform: 'capitalize' }}>{run.status}</span></td>
+                      <td style={S.td}><button style={S.btnGhost}>View →</button></td>
                     </tr>
                   )
                 })}
@@ -422,33 +813,28 @@ function MonthView({ allRuns, monthDate, setMonthDate, onSelect }) {
   )
 }
 
-// ── YEAR VIEW ──────────────────────────────────────────────────────────────────
+// ── YEAR VIEW ─────────────────────────────────────────────────────────────────
 function YearView({ allRuns, yearDate, setYearDate, setMonthDate, setView }) {
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px' }}>
-        <button style={styles.btnOutline} onClick={() => setYearDate(d => new Date(d.getFullYear() - 1, 0))}>← {yearDate.getFullYear() - 1}</button>
-        <span style={styles.weekLabel}>{yearDate.getFullYear()}</span>
-        <button style={styles.btnOutline} onClick={() => setYearDate(new Date())}>This Year</button>
-        <button style={styles.btnOutline} onClick={() => setYearDate(d => new Date(d.getFullYear() + 1, 0))}>{yearDate.getFullYear() + 1} →</button>
+        <button style={S.btnOutline} onClick={() => setYearDate(d => new Date(d.getFullYear() - 1, 0))}>← {yearDate.getFullYear() - 1}</button>
+        <span style={S.weekLabel}>{yearDate.getFullYear()}</span>
+        <button style={S.btnOutline} onClick={() => setYearDate(new Date())}>This Year</button>
+        <button style={S.btnOutline} onClick={() => setYearDate(d => new Date(d.getFullYear() + 1, 0))}>{yearDate.getFullYear() + 1} →</button>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
         {MONTHS.map((monthName, monthIdx) => {
-          const monthRuns = allRuns.filter(r => {
-            const d = new Date(r.runDate)
-            return d.getFullYear() === yearDate.getFullYear() && d.getMonth() === monthIdx
-          })
+          const monthRuns = allRuns.filter(r => { const d = new Date(r.runDate); return d.getFullYear() === yearDate.getFullYear() && d.getMonth() === monthIdx })
           const delCount = monthRuns.filter(r => r.runType === 'DEL').length
           const colCount = monthRuns.filter(r => r.runType === 'COL').length
           const isCurrentMonth = new Date().getFullYear() === yearDate.getFullYear() && new Date().getMonth() === monthIdx
-
           const first = new Date(yearDate.getFullYear(), monthIdx, 1)
           const last = new Date(yearDate.getFullYear(), monthIdx + 1, 0)
           const startDay = first.getDay() === 0 ? 6 : first.getDay() - 1
           const calDates = []
           for (let i = 0; i < startDay; i++) calDates.push(null)
           for (let d = 1; d <= last.getDate(); d++) calDates.push(new Date(yearDate.getFullYear(), monthIdx, d))
-
           return (
             <div key={monthIdx} style={{ background: '#fff', border: `1.5px solid ${isCurrentMonth ? '#B8965A' : '#DDD8CF'}`, borderRadius: '8px', overflow: 'hidden' }}>
               <div style={{ background: isCurrentMonth ? '#1C1C1E' : '#3D5A73', color: 'white', padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
@@ -486,16 +872,13 @@ function YearView({ allRuns, yearDate, setYearDate, setMonthDate, setView }) {
               </div>
               {monthRuns.length > 0 && (
                 <div style={{ borderTop: '1px solid #EDE8E0', padding: '8px' }}>
-                  {monthRuns.slice(0, 3).map((run, j) => {
-                    const color = run.runType === 'DEL' ? '#EF4444' : '#22C55E'
-                    return (
-                      <div key={j} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '3px 0', fontSize: '11px' }}>
-                        <span style={{ background: color, color: 'white', fontSize: '9px', fontWeight: '700', padding: '1px 5px', borderRadius: '2px' }}>{run.runType}</span>
-                        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{run.event || run.client}</span>
-                        <span style={{ color: '#9CA3AF', flexShrink: 0 }}>{new Date(run.runDate + 'T12:00:00').getDate()}</span>
-                      </div>
-                    )
-                  })}
+                  {monthRuns.slice(0, 3).map((run, j) => (
+                    <div key={j} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '3px 0', fontSize: '11px' }}>
+                      <span style={{ background: run.runType === 'DEL' ? '#EF4444' : '#22C55E', color: 'white', fontSize: '9px', fontWeight: '700', padding: '1px 5px', borderRadius: '2px' }}>{run.runType}</span>
+                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{run.event || run.client}</span>
+                      <span style={{ color: '#9CA3AF', flexShrink: 0 }}>{new Date(run.runDate + 'T12:00:00').getDate()}</span>
+                    </div>
+                  ))}
                   {monthRuns.length > 3 && <div style={{ fontSize: '10px', color: '#9CA3AF', textAlign: 'center', paddingTop: '4px', cursor: 'pointer' }} onClick={() => { setMonthDate(new Date(yearDate.getFullYear(), monthIdx)); setView('month') }}>+{monthRuns.length - 3} more →</div>}
                 </div>
               )}
@@ -516,6 +899,7 @@ function MiniRunCard({ run, onClick, compact = false }) {
     <div onClick={onClick} style={{ background: colors.bg, border: `1.5px solid ${colors.border}`, borderRadius: '3px', padding: '2px 5px', marginBottom: '2px', cursor: 'pointer', fontSize: '10px' }}>
       <span style={{ background: colors.badge, color: 'white', fontSize: '8px', fontWeight: '700', padding: '1px 3px', borderRadius: '2px', marginRight: '3px' }}>{run.runType}</span>
       <span style={{ color: colors.text, fontWeight: '600' }}>{run.event || run.client}</span>
+      {run.driverName && <span style={{ background: run.driverColour || '#3D5A73', color: 'white', fontSize: '8px', fontWeight: '600', padding: '0px 4px', borderRadius: '6px', marginLeft: '3px' }}>{run.driverName[0]}</span>}
     </div>
   )
   return (
@@ -525,81 +909,39 @@ function MiniRunCard({ run, onClick, compact = false }) {
         <span style={{ fontSize: '11.5px', fontWeight: '600', color: colors.text, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{run.event || run.client}</span>
       </div>
       {run.runTime && <div style={{ fontSize: '10px', color: '#6B6860' }}>🕐 {run.runTime}</div>}
+      {run.driverName && (
+        <div style={{ marginTop: '4px' }}>
+          <span style={{ background: run.driverColour || '#3D5A73', color: 'white', fontSize: '9px', fontWeight: '600', padding: '1px 6px', borderRadius: '8px' }}>{run.driverName}</span>
+        </div>
+      )}
       {run.isUrgent && <div style={{ fontSize: '9px', background: '#EF4444', color: 'white', padding: '1px 4px', borderRadius: '2px', display: 'inline-block', marginTop: '3px' }}>URGENT</div>}
     </div>
   )
 }
 
-// ── RUN DETAIL PANEL ──────────────────────────────────────────────────────────
-function RunDetailPanel({ run, onClose }) {
-  const colors = run.runType === 'DEL'
-    ? { border: '#EF4444', badge: '#EF4444', bg: '#FEF2F2' }
-    : { border: '#22C55E', badge: '#22C55E', bg: '#F0FDF4' }
-  return (
-    <div style={styles.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div style={styles.panel}>
-        <div style={{ ...styles.panelHeader, borderBottom: `3px solid ${colors.border}` }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
-              <span style={{ background: colors.badge, color: 'white', fontSize: '12px', fontWeight: '700', padding: '4px 10px', borderRadius: '4px' }}>{run.runType}</span>
-              <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '20px', fontWeight: '600' }}>{run.event || run.client}</span>
-              {run.isUrgent && <span style={{ background: '#EF4444', color: 'white', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '3px' }}>⚠ URGENT</span>}
-              {run.isAmended && <span style={{ background: '#FEF3C7', color: '#92400E', fontSize: '10px', fontWeight: '600', padding: '2px 8px', borderRadius: '3px' }}>AMENDED</span>}
-            </div>
-            <div style={{ fontSize: '12px', color: '#6B6860' }}>{run.ref} · Auto-generated from Current RMS · Read-only</div>
-          </div>
-          <button style={styles.closeBtn} onClick={onClose}>✕</button>
-        </div>
-        <div style={{ padding: '24px 28px', overflowY: 'auto' }}>
-          <div style={styles.sectionLabel}>{run.runType === 'DEL' ? 'Delivery' : 'Collection'} Details</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
-            {[
-              ['Date', fmt(run.runDate)],
-              ['Time', run.runTime || '⚠ Not set'],
-              ['Client', run.client],
-              ['Venue', run.venue || '—'],
-              ['Status', run.status],
-              ['Reference', run.ref],
-            ].map(([label, value]) => (
-              <div key={label} style={{ background: '#F7F3EE', borderRadius: '6px', padding: '12px' }}>
-                <div style={{ fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6B6860', marginBottom: '4px' }}>{label}</div>
-                <div style={{ fontSize: '13.5px', fontWeight: '500', color: '#1C1C1E', textTransform: 'capitalize' }}>{value}</div>
-              </div>
-            ))}
-          </div>
-          {run.notes && (
-            <>
-              <div style={styles.sectionLabel}>Notes</div>
-              <div style={{ background: '#F7F3EE', borderRadius: '6px', padding: '14px', fontSize: '13px', lineHeight: '1.6', marginBottom: '20px' }}>{run.notes}</div>
-            </>
-          )}
-          <div style={{ fontSize: '11px', color: '#9CA3AF', borderTop: '1px solid #DDD8CF', paddingTop: '16px' }}>
-            This schedule entry is automatically generated and maintained from the corresponding job in Current RMS. Changes made in Current RMS will be reflected here within 5 minutes.
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-const styles = {
-  syncBar: { background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '6px', padding: '10px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' },
-  statsRow: { display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '10px', marginBottom: '20px' },
-  statCard: { background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '14px 16px', boxShadow: '0 2px 8px rgba(28,28,30,0.04)' },
-  sectionLabel: { fontSize: '11px', letterSpacing: '0.12em', textTransform: 'uppercase', color: '#B8965A', fontWeight: '600', marginBottom: '12px' },
-  btnOutline: { background: 'transparent', color: '#1C1C1E', border: '1.5px solid #DDD8CF', borderRadius: '4px', padding: '8px 16px', fontSize: '13px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
-  btnActive: { background: '#1C1C1E', color: 'white', borderColor: '#1C1C1E' },
-  btnGhost: { background: 'transparent', color: '#B8965A', border: 'none', borderRadius: '4px', padding: '6px 12px', fontSize: '12px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", fontWeight: '500' },
-  filterBtn: { padding: '6px 12px', borderRadius: '20px', border: '1.5px solid #DDD8CF', background: 'transparent', color: '#6B6860', fontSize: '11px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
-  filterBtnActive: { background: '#1C1C1E', color: 'white', borderColor: '#1C1C1E' },
-  searchInput: { width: '100%', padding: '10px 14px', border: '1.5px solid #DDD8CF', borderRadius: '4px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", outline: 'none', boxSizing: 'border-box' },
-  weekLabel: { fontFamily: "'Cormorant Garamond', serif", fontSize: '20px', fontWeight: '600', padding: '0 12px' },
-  card: { background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 4px 24px rgba(28,28,30,0.08)' },
-  table: { width: '100%', borderCollapse: 'collapse' },
-  th: { fontSize: '11px', letterSpacing: '0.08em', textTransform: 'uppercase', color: '#6B6860', padding: '10px 16px', textAlign: 'left', background: '#F7F3EE', borderBottom: '1px solid #DDD8CF', fontWeight: '500', whiteSpace: 'nowrap' },
-  td: { padding: '12px 16px', fontSize: '13px', borderBottom: '1px solid #EDE8E0', verticalAlign: 'middle' },
-  overlay: { position: 'fixed', inset: 0, background: 'rgba(28,28,30,0.6)', backdropFilter: 'blur(4px)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' },
-  panel: { background: '#fff', width: '100%', maxWidth: '600px', height: '100vh', display: 'flex', flexDirection: 'column', boxShadow: '-12px 0 48px rgba(28,28,30,0.14)' },
-  panelHeader: { padding: '24px 28px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', background: '#F7F3EE', flexShrink: 0 },
-  closeBtn: { background: '#DDD8CF', border: 'none', width: '32px', height: '32px', borderRadius: '50%', cursor: 'pointer', fontSize: '14px', color: '#1C1C1E', flexShrink: 0 },
+// ── STYLES ────────────────────────────────────────────────────────────────────
+const S = {
+  syncBar:       { background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '6px', padding: '10px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' },
+  statsRow:      { display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '10px', marginBottom: '20px' },
+  statCard:      { background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '14px 16px', boxShadow: '0 2px 8px rgba(28,28,30,0.04)' },
+  sectionLabel:  { fontSize: '11px', letterSpacing: '0.12em', textTransform: 'uppercase', color: '#B8965A', fontWeight: '600', marginBottom: '12px' },
+  btnOutline:    { background: 'transparent', color: '#1C1C1E', border: '1.5px solid #DDD8CF', borderRadius: '4px', padding: '8px 16px', fontSize: '13px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
+  btnActive:     { background: '#1C1C1E', color: 'white', borderColor: '#1C1C1E' },
+  btnGhost:      { background: 'transparent', color: '#B8965A', border: 'none', borderRadius: '4px', padding: '6px 12px', fontSize: '12px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", fontWeight: '500' },
+  filterBtn:     { padding: '6px 12px', borderRadius: '20px', border: '1.5px solid #DDD8CF', background: 'transparent', color: '#6B6860', fontSize: '11px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
+  filterBtnActive:{ background: '#1C1C1E', color: 'white', borderColor: '#1C1C1E' },
+  select:        { fontFamily: "'DM Sans', sans-serif", fontSize: '13px', padding: '10px 14px', border: '1.5px solid #DDD8CF', borderRadius: '4px', background: '#fff', color: '#1C1C1E', outline: 'none', boxSizing: 'border-box', width: '100%' },
+  searchInput:   { width: '100%', padding: '10px 14px', border: '1.5px solid #DDD8CF', borderRadius: '4px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", outline: 'none', boxSizing: 'border-box' },
+  weekLabel:     { fontFamily: "'Cormorant Garamond', serif", fontSize: '20px', fontWeight: '600', padding: '0 12px' },
+  card:          { background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 4px 24px rgba(28,28,30,0.08)' },
+  table:         { width: '100%', borderCollapse: 'collapse' },
+  th:            { fontSize: '11px', letterSpacing: '0.08em', textTransform: 'uppercase', color: '#6B6860', padding: '10px 16px', textAlign: 'left', background: '#F7F3EE', borderBottom: '1px solid #DDD8CF', fontWeight: '500', whiteSpace: 'nowrap' },
+  td:            { padding: '12px 16px', fontSize: '13px', borderBottom: '1px solid #EDE8E0', verticalAlign: 'middle' },
+  overlay:       { position: 'fixed', inset: 0, background: 'rgba(28,28,30,0.6)', backdropFilter: 'blur(4px)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' },
+  panel:         { background: '#fff', width: '100%', maxWidth: '600px', height: '100vh', display: 'flex', flexDirection: 'column', boxShadow: '-12px 0 48px rgba(28,28,30,0.14)' },
+  panelHeader:   { padding: '24px 28px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', background: '#F7F3EE', flexShrink: 0 },
+  closeBtn:      { background: '#DDD8CF', border: 'none', width: '32px', height: '32px', borderRadius: '50%', cursor: 'pointer', fontSize: '14px', color: '#1C1C1E', flexShrink: 0 },
+  divider:       { border: 'none', borderTop: '1px solid #DDD8CF', margin: '20px 0' },
+  driverBtn:     { padding: '8px 16px', border: '1.5px solid #DDD8CF', borderRadius: '20px', background: 'transparent', color: '#1C1C1E', fontSize: '13px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", fontWeight: '500' },
+  assignBtn:     { padding: '5px 10px', border: '1.5px solid #DDD8CF', borderRadius: '12px', background: 'transparent', color: '#6B6860', fontSize: '11px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
 }
