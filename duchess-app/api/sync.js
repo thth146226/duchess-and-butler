@@ -1,5 +1,5 @@
-// Duchess & Butler — Current RMS Sync Engine v5
-// Uses correct field names: deliver_starts_at, collect_starts_at
+// Duchess & Butler — Current RMS Sync Engine v6
+// Uses deliver_starts_at/collect_starts_at with fallback to starts_at/ends_at
 
 const CRMS_SUBDOMAIN = process.env.CRMS_SUBDOMAIN
 const CRMS_API_KEY = process.env.CRMS_API_KEY
@@ -7,11 +7,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY
 
 function crmsHeaders() {
-  return {
-    'X-AUTH-TOKEN': CRMS_API_KEY,
-    'X-SUBDOMAIN': CRMS_SUBDOMAIN,
-    'Content-Type': 'application/json',
-  }
+  return { 'X-AUTH-TOKEN': CRMS_API_KEY, 'X-SUBDOMAIN': CRMS_SUBDOMAIN }
 }
 
 async function supabaseUpsert(table, data) {
@@ -28,18 +24,8 @@ async function supabaseUpsert(table, data) {
   return res.ok
 }
 
-function extractDate(dateStr) {
-  if (!dateStr) return null
-  return dateStr.split('T')[0]
-}
-
-function extractTime(dateStr) {
-  if (!dateStr) return null
-  const t = dateStr.split('T')[1]
-  if (!t) return null
-  return t.slice(0, 5)
-}
-
+function d(str) { return str ? str.split('T')[0] : null }
+function t(str) { return str ? str.split('T')[1]?.slice(0,5) || null : null }
 function mapStatus(s = '') {
   s = s.toLowerCase()
   if (s.includes('cancel')) return 'cancelled'
@@ -50,12 +36,10 @@ function mapStatus(s = '') {
 }
 
 module.exports = async function handler(req, res) {
-  if (!SUPABASE_URL || !SUPABASE_KEY) {
-    return res.status(500).json({ error: 'Missing env vars' })
-  }
+  if (!SUPABASE_URL || !SUPABASE_KEY) return res.status(500).json({ error: 'Missing env vars' })
 
   const startedAt = new Date().toISOString()
-  const stats = { fetched: 0, processed: 0, errors: [] }
+  const stats = { fetched: 0, processed: 0, withDates: 0, errors: [] }
 
   try {
     const since = new Date(); since.setDate(since.getDate() - 30)
@@ -66,12 +50,11 @@ module.exports = async function handler(req, res) {
       { headers: crmsHeaders() }
     )
     const listData = await listRes.json()
-    const opportunities = listData.opportunities || []
-    stats.fetched = opportunities.length
+    const opps = listData.opportunities || []
+    stats.fetched = opps.length
 
-    for (const opp of opportunities) {
+    for (const opp of opps) {
       try {
-        // Fetch full opportunity to get deliver_starts_at and collect_starts_at
         const detailRes = await fetch(
           `https://api.current-rms.com/api/v1/opportunities/${opp.id}`,
           { headers: crmsHeaders() }
@@ -79,23 +62,32 @@ module.exports = async function handler(req, res) {
         const detailData = await detailRes.json()
         const o = detailData.opportunity || opp
 
+        // Delivery: prefer deliver_starts_at, fallback to starts_at
+        const deliveryRaw = o.deliver_starts_at || o.starts_at
+        // Collection: prefer collect_starts_at, fallback to ends_at  
+        const collectionRaw = o.collect_starts_at || o.ends_at
+
+        const deliveryDate = d(deliveryRaw)
+        const collectionDate = d(collectionRaw)
+
+        if (deliveryDate || collectionDate) stats.withDates++
+
         const job = {
-          crms_id:          String(o.id),
-          crms_ref:         o.number || String(o.id),
-          event_name:       o.name || o.subject || '',
-          client_name:      o.member?.name || '',
-          venue:            o.venue?.name || o.venue_name || '',
-          event_date:       extractDate(o.starts_at),
-          // ✅ Correct field names from Current RMS API
-          delivery_date:    extractDate(o.deliver_starts_at),
-          delivery_time:    extractTime(o.deliver_starts_at),
-          collection_date:  extractDate(o.collect_starts_at),
-          collection_time:  extractTime(o.collect_starts_at),
-          status:           mapStatus(o.status_name || o.state_name || ''),
-          crms_status:      o.status_name || o.state_name || '',
-          notes:            o.description || '',
+          crms_id:         String(o.id),
+          crms_ref:        o.number || String(o.id),
+          event_name:      o.name || o.subject || '',
+          client_name:     o.member?.name || '',
+          venue:           o.venue?.name || o.venue_name || '',
+          event_date:      d(o.starts_at),
+          delivery_date:   deliveryDate,
+          delivery_time:   t(o.deliver_starts_at), // only set time if explicit
+          collection_date: collectionDate,
+          collection_time: t(o.collect_starts_at), // only set time if explicit
+          status:          mapStatus(o.status_name || o.state_name || ''),
+          crms_status:     o.status_name || o.state_name || '',
+          notes:           o.description || '',
           special_instructions: o.delivery_instructions || o.collection_instructions || '',
-          last_synced_at:   new Date().toISOString(),
+          last_synced_at:  new Date().toISOString(),
         }
 
         await supabaseUpsert('crms_jobs', job)
@@ -106,19 +98,15 @@ module.exports = async function handler(req, res) {
       }
     }
 
-    // Log sync run
     await supabaseUpsert('sync_runs', {
-      started_at:    startedAt,
-      completed_at:  new Date().toISOString(),
-      jobs_fetched:  stats.fetched,
-      jobs_created:  stats.processed,
-      status:        stats.errors.length > 0 ? 'partial' : 'success',
+      started_at: startedAt, completed_at: new Date().toISOString(),
+      jobs_fetched: stats.fetched, jobs_created: stats.processed,
+      status: stats.errors.length > 0 ? 'partial' : 'success',
     })
 
     return res.status(200).json({ success: true, stats })
 
   } catch (err) {
-    console.error('Sync error:', err.message)
     return res.status(500).json({ error: err.message })
   }
 }
