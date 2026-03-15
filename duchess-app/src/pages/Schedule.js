@@ -85,6 +85,13 @@ export default function Schedule() {
   const [yearDate, setYearDate]     = useState(new Date())
   const [weekOffset, setWeekOffset] = useState(0)
   const [groupByDriver, setGroup]   = useState(false)
+  const [toast, setToast]           = useState(null)   // { msg, type }
+  const [assigningId, setAssigning] = useState(null)   // run.id being saved
+
+  function showToast(msg, type = 'success') {
+    setToast({ msg, type })
+    setTimeout(() => setToast(null), 3000)
+  }
 
   useEffect(() => {
     fetchJobs()
@@ -125,25 +132,49 @@ export default function Schedule() {
     if (data) setSyncInfo(data)
   }
 
-  // ── Assign driver ──────────────────────────────────────────────────────────
+  // ── Assign driver ─────────────────────────────────────────────────────────
   async function assignDriver(run, driverId) {
+    setAssigning(run.id)
     const driver = drivers.find(d => d.id === driverId) || null
     const update = {
-      assigned_driver_id:   driverId   || null,
+      assigned_driver_id:   driverId    || null,
       assigned_driver_name: driver?.name || null,
       assigned_by:          profile?.id  || null,
       assigned_at:          driverId ? new Date().toISOString() : null,
     }
-    const table = run.crmsId ? 'crms_jobs' : 'orders'
-    const col   = run.crmsId ? 'crms_id'   : 'id'
-    const val   = run.crmsId ? run.crmsId   : run.jobId
+    const isCrms = Boolean(run.crmsId)
+    const table  = isCrms ? 'crms_jobs' : 'orders'
+    const col    = isCrms ? 'crms_id'   : 'id'
+    const val    = isCrms ? run.crmsId   : run.jobId
 
-    await supabase.from(table).update(update).eq(col, val)
-    await fetchJobs()
-    // Update selectedRun in-place so panel stays open
-    if (selectedRun?.id === run.id) {
-      setSelectedRun(prev => ({ ...prev, assignedDriverId: driverId, driverName: driver?.name || null, driverColour: driver?.colour || null }))
+    const { error } = await supabase.from(table).update(update).eq(col, val)
+
+    if (error) {
+      showToast('Failed to save — please try again', 'error')
+      setAssigning(null)
+      return
     }
+
+    // Optimistic patch — update local state instantly without re-fetching
+    setJobs(prev => prev.map(j => {
+      const match = isCrms ? j.crms_id === run.crmsId : j.id === run.jobId
+      if (!match) return j
+      return { ...j, assigned_driver_id: driverId || null, assigned_driver_name: driver?.name || null }
+    }))
+
+    // Keep the detail panel open with updated state
+    if (selectedRun?.id === run.id) {
+      setSelectedRun(prev => ({
+        ...prev,
+        assignedDriverId: driverId      || null,
+        driverName:       driver?.name   || null,
+        driverColour:     driver?.colour || null,
+      }))
+    }
+
+    showToast(driverId ? `${driver.name} assigned` : 'Driver removed')
+    setAssigning(null)
+    setTimeout(fetchJobs, 2000)
   }
 
   // ── Build run list enriched with driver colour ─────────────────────────────
@@ -272,7 +303,7 @@ export default function Schedule() {
 
       {/* ── DISPATCH VIEW ── */}
       {view === 'dispatch' && (
-        <DispatchView allRuns={allRuns} drivers={drivers} today={today} tomorrow={tomorrow} onSelect={setSelectedRun} onAssign={assignDriver} />
+        <DispatchView allRuns={allRuns} drivers={drivers} today={today} tomorrow={tomorrow} onSelect={setSelectedRun} onAssign={assignDriver} assigningId={assigningId} />
       )}
 
       {/* ── WEEK VIEW ── */}
@@ -289,9 +320,26 @@ export default function Schedule() {
         <RunDetailPanel
           run={selectedRun}
           drivers={drivers}
+          assigningId={assigningId}
           onClose={() => setSelectedRun(null)}
           onAssign={assignDriver}
         />
+      )}
+
+      {/* Toast notification */}
+      {toast && (
+        <div style={{
+          position: 'fixed', bottom: '24px', right: '24px',
+          background: toast.type === 'error' ? '#EF4444' : '#1C1C1E',
+          color: 'white', padding: '14px 20px', borderRadius: '8px',
+          fontSize: '13.5px', fontFamily: "'DM Sans', sans-serif",
+          borderLeft: `3px solid ${toast.type === 'error' ? '#991B1B' : '#22C55E'}`,
+          boxShadow: '0 12px 48px rgba(28,28,30,0.18)', zIndex: 999,
+          display: 'flex', alignItems: 'center', gap: '8px',
+        }}>
+          <span>{toast.type === 'error' ? '⚠' : '✓'}</span>
+          <span>{toast.msg}</span>
+        </div>
       )}
     </div>
   )
@@ -452,8 +500,9 @@ function GroupedByDriverView({ runs, drivers, onSelect }) {
   )
 }
 
+
 // ── DISPATCH VIEW ─────────────────────────────────────────────────────────────
-function DispatchView({ allRuns, drivers, today, tomorrow, onSelect, onAssign }) {
+function DispatchView({ allRuns, drivers, today, tomorrow, onSelect, onAssign, assigningId }) {
   const [dayOffset, setDayOffset] = useState(0)
   const targetDate = (() => {
     const d = new Date(); d.setDate(d.getDate() + dayOffset)
@@ -462,7 +511,6 @@ function DispatchView({ allRuns, drivers, today, tomorrow, onSelect, onAssign })
 
   const dayRuns = allRuns.filter(r => r.runDate === targetDate)
 
-  // Group by driver for this day
   const groups = { __unassigned: [] }
   drivers.forEach(d => { groups[d.id] = [] })
   dayRuns.forEach(r => {
@@ -471,13 +519,12 @@ function DispatchView({ allRuns, drivers, today, tomorrow, onSelect, onAssign })
     groups[key].push(r)
   })
 
-  const isToday = targetDate === today
+  const isToday    = targetDate === today
   const isTomorrow = targetDate === tomorrow
-  const label = isToday ? 'TODAY' : isTomorrow ? 'TOMORROW' : fmt(targetDate)
+  const label      = isToday ? 'TODAY' : isTomorrow ? 'TOMORROW' : fmt(targetDate)
 
   return (
     <div>
-      {/* Day selector */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
         <button style={S.btnOutline} onClick={() => setDayOffset(d => d - 1)}>← Previous</button>
         <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', fontWeight: '600', padding: '0 8px' }}>
@@ -492,32 +539,24 @@ function DispatchView({ allRuns, drivers, today, tomorrow, onSelect, onAssign })
           No runs scheduled for {fmt(targetDate)}
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '16px' }}>
-
-          {/* Unassigned column */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: '16px' }}>
+          {/* Unassigned column — always show if any unassigned */}
           {groups.__unassigned.length > 0 && (
             <DispatchColumn
-              title="Unassigned"
-              colour="#9CA3AF"
-              runs={groups.__unassigned}
-              drivers={drivers}
-              onSelect={onSelect}
-              onAssign={onAssign}
+              title="Unassigned" colour="#9CA3AF"
+              runs={groups.__unassigned} drivers={drivers}
+              onSelect={onSelect} onAssign={onAssign} assigningId={assigningId}
             />
           )}
-
           {/* Driver columns */}
           {drivers.map(driver => (
             groups[driver.id]?.length > 0 && (
               <DispatchColumn
                 key={driver.id}
-                title={driver.name}
-                colour={driver.colour}
-                runs={groups[driver.id]}
-                drivers={drivers}
-                onSelect={onSelect}
-                onAssign={onAssign}
-                driverId={driver.id}
+                title={driver.name} colour={driver.colour}
+                runs={groups[driver.id]} drivers={drivers}
+                onSelect={onSelect} onAssign={onAssign}
+                driverId={driver.id} assigningId={assigningId}
               />
             )
           ))}
@@ -527,7 +566,7 @@ function DispatchView({ allRuns, drivers, today, tomorrow, onSelect, onAssign })
   )
 }
 
-function DispatchColumn({ title, colour, runs, drivers, onSelect, onAssign, driverId }) {
+function DispatchColumn({ title, colour, runs, drivers, onSelect, onAssign, driverId, assigningId }) {
   return (
     <div style={{ background: '#fff', border: `2px solid ${colour}`, borderRadius: '8px', overflow: 'hidden' }}>
       <div style={{ background: colour, color: 'white', padding: '12px 16px', fontWeight: '700', fontSize: '13px', letterSpacing: '0.05em' }}>
@@ -535,45 +574,73 @@ function DispatchColumn({ title, colour, runs, drivers, onSelect, onAssign, driv
       </div>
       <div style={{ padding: '10px' }}>
         {runs.map((run, i) => (
-          <DispatchCard key={i} run={run} drivers={drivers} onSelect={onSelect} onAssign={onAssign} />
+          <DispatchCard
+            key={run.id || i}
+            run={run} drivers={drivers}
+            onSelect={onSelect} onAssign={onAssign}
+            isSaving={assigningId === run.id}
+          />
         ))}
       </div>
     </div>
   )
 }
 
-function DispatchCard({ run, drivers, onSelect, onAssign }) {
-  const [assigning, setAssigning] = useState(false)
+function DispatchCard({ run, drivers, onSelect, onAssign, isSaving }) {
   const colors = run.runType === 'DEL'
     ? { bg: '#FEF2F2', border: '#EF4444', badge: '#EF4444', text: '#991B1B' }
     : { bg: '#F0FDF4', border: '#22C55E', badge: '#22C55E', text: '#166534' }
 
   return (
-    <div style={{ background: colors.bg, border: `1.5px solid ${colors.border}`, borderRadius: '6px', padding: '12px', marginBottom: '8px' }}>
+    <div style={{
+      background: colors.bg,
+      border: `1.5px solid ${isSaving ? '#B8965A' : colors.border}`,
+      borderRadius: '6px', padding: '12px', marginBottom: '8px',
+      opacity: isSaving ? 0.75 : 1,
+      transition: 'all 0.15s',
+    }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
         <span style={{ background: colors.badge, color: 'white', fontSize: '10px', fontWeight: '700', padding: '2px 6px', borderRadius: '3px' }}>{run.runType}</span>
         {run.runTime && <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '16px', fontWeight: '600', color: colors.text }}>{run.runTime}</span>}
         {run.isUrgent && <span style={{ background: '#EF4444', color: 'white', fontSize: '9px', fontWeight: '700', padding: '1px 5px', borderRadius: '2px' }}>URGENT</span>}
+        {isSaving && <span style={{ fontSize: '10px', color: '#B8965A', marginLeft: 'auto' }}>Saving…</span>}
       </div>
+
       <div style={{ fontWeight: '600', fontSize: '13px', marginBottom: '2px', cursor: 'pointer' }} onClick={() => onSelect(run)}>
         {run.event || run.client}
       </div>
-      <div style={{ fontSize: '11.5px', color: '#6B6860', marginBottom: '8px' }}>{run.venue || run.client}</div>
+      <div style={{ fontSize: '11.5px', color: '#6B6860', marginBottom: '10px' }}>{run.venue || run.client}</div>
 
-      {/* Driver assignment buttons */}
+      {/* Current driver badge */}
+      {run.driverName && (
+        <div style={{ marginBottom: '8px' }}>
+          <span style={{ background: run.driverColour || '#3D5A73', color: 'white', padding: '3px 10px', borderRadius: '10px', fontSize: '11px', fontWeight: '600' }}>
+            🚚 {run.driverName}
+          </span>
+        </div>
+      )}
+
+      {/* Assign Driver */}
       <div>
-        <div style={{ fontSize: '10px', color: '#9CA3AF', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: '5px' }}>Assign Driver</div>
+        <div style={{ fontSize: '10px', color: '#9CA3AF', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: '5px' }}>
+          {run.driverName ? 'Change Driver' : 'Assign Driver'}
+        </div>
         <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
           <button
+            disabled={isSaving}
             style={{ ...S.assignBtn, ...((!run.assignedDriverId) ? { background: '#F7F3EE', borderColor: '#B8965A', color: '#B8965A' } : {}) }}
             onClick={() => onAssign(run, null)}>
             —
           </button>
           {drivers.map(d => (
-            <button key={d.id}
+            <button
+              key={d.id}
+              disabled={isSaving}
               style={{
                 ...S.assignBtn,
-                ...(run.assignedDriverId === d.id ? { background: d.colour, color: 'white', borderColor: d.colour } : {}),
+                ...(run.assignedDriverId === d.id
+                  ? { background: d.colour, color: 'white', borderColor: d.colour }
+                  : {}),
               }}
               onClick={() => onAssign(run, d.id)}>
               {d.name}
@@ -586,18 +653,11 @@ function DispatchCard({ run, drivers, onSelect, onAssign }) {
 }
 
 // ── RUN DETAIL PANEL ──────────────────────────────────────────────────────────
-function RunDetailPanel({ run, drivers, onClose, onAssign }) {
+function RunDetailPanel({ run, drivers, onClose, onAssign, assigningId }) {
+  const isSaving = assigningId === run.id
   const colors = run.runType === 'DEL'
     ? { border: '#EF4444', badge: '#EF4444', bg: '#FEF2F2' }
     : { border: '#22C55E', badge: '#22C55E', bg: '#F0FDF4' }
-
-  const [saving, setSaving] = useState(false)
-
-  async function handleAssign(driverId) {
-    setSaving(true)
-    await onAssign(run, driverId || null)
-    setSaving(false)
-  }
 
   return (
     <div style={S.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
@@ -639,32 +699,42 @@ function RunDetailPanel({ run, drivers, onClose, onAssign }) {
           {/* Driver Assignment */}
           <div style={S.sectionLabel}>Driver Assignment</div>
 
-          {/* Current assignment */}
-          <div style={{ marginBottom: '14px' }}>
-            {run.driverName
-              ? <span style={{ background: run.driverColour || '#3D5A73', color: 'white', padding: '6px 16px', borderRadius: '20px', fontSize: '13px', fontWeight: '600' }}>
-                  🚚 {run.driverName}
-                </span>
-              : <span style={{ color: '#9CA3AF', fontSize: '13px' }}>No driver assigned</span>
-            }
+          {/* Current driver */}
+          <div style={{ marginBottom: '16px', minHeight: '36px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+            {run.driverName ? (
+              <span style={{ background: run.driverColour || '#3D5A73', color: 'white', padding: '7px 18px', borderRadius: '20px', fontSize: '14px', fontWeight: '600' }}>
+                🚚 {run.driverName}
+              </span>
+            ) : (
+              <span style={{ color: '#9CA3AF', fontSize: '13px' }}>No driver assigned</span>
+            )}
+            {isSaving && <span style={{ fontSize: '12px', color: '#B8965A' }}>Saving…</span>}
           </div>
 
-          {/* Assignment buttons */}
+          {/* Driver buttons */}
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <button
-              style={{ ...S.driverBtn, ...((!run.assignedDriverId) ? { background: '#F7F3EE', borderColor: '#B8965A', color: '#B8965A' } : {}) }}
-              disabled={saving}
-              onClick={() => handleAssign(null)}>
+              disabled={isSaving}
+              style={{
+                ...S.driverBtn,
+                ...(!run.assignedDriverId ? { background: '#F7F3EE', borderColor: '#B8965A', color: '#B8965A' } : {}),
+                opacity: isSaving ? 0.6 : 1,
+              }}
+              onClick={() => onAssign(run, null)}>
               Remove Driver
             </button>
             {drivers.map(d => (
-              <button key={d.id}
+              <button
+                key={d.id}
+                disabled={isSaving}
                 style={{
                   ...S.driverBtn,
-                  ...(run.assignedDriverId === d.id ? { background: d.colour, color: 'white', borderColor: d.colour } : {}),
+                  ...(run.assignedDriverId === d.id
+                    ? { background: d.colour, color: 'white', borderColor: d.colour }
+                    : {}),
+                  opacity: isSaving ? 0.6 : 1,
                 }}
-                disabled={saving}
-                onClick={() => handleAssign(d.id)}>
+                onClick={() => onAssign(run, d.id)}>
                 {d.name}
               </button>
             ))}
@@ -681,7 +751,7 @@ function RunDetailPanel({ run, drivers, onClose, onAssign }) {
           <hr style={S.divider} />
           <div style={{ fontSize: '11px', color: '#9CA3AF' }}>
             {run.crmsId
-              ? 'This entry is auto-generated from Current RMS. Driver assignments are stored in this platform only and do not affect Current RMS.'
+              ? 'Auto-generated from Current RMS. Driver assignments are stored in this platform only.'
               : 'Manual order created in this platform.'}
           </div>
         </div>
