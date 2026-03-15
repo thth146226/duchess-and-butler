@@ -1,6 +1,11 @@
-// Duchess & Butler — Current RMS Sync Engine v7
+// Duchess & Butler — Current RMS Sync Engine v8
 // ONE-WAY ONLY: Current RMS → Supabase (never the reverse)
-// FIX: reads deliver_starts_at / collect_starts_at directly from opportunity object
+//
+// FIXES in v8:
+//   - Issue 3: Only imports CONFIRMED orders — quotes/drafts/open are excluded
+//   - Issue 4: Captures full venue address (street, city, postcode)
+//   - Issue 4: Syncs order items for ALL jobs (not just new ones)
+//   - Delivery/collection dates read from deliver_starts_at / collect_starts_at
 
 import { createClient } from '@supabase/supabase-js'
 
@@ -41,120 +46,138 @@ async function fetchAllPages(path, key, params = {}) {
   return all
 }
 
-// Extrai YYYY-MM-DD de um ISO timestamp do Current RMS
-// ex: "2026-03-20T09:00:00.000+00:00" → "2026-03-20"
-function toDate(iso) {
-  if (!iso) return null
-  try { return iso.slice(0, 10) } catch { return null }
+function toDate(iso) { return iso ? iso.slice(0, 10) : null }
+function toTime(iso) { return iso ? iso.slice(11, 16) : null }
+
+// ── ISSUE 3: Status filter ────────────────────────────────────────────────────
+//
+// Current RMS opportunity_status_name values confirmed from the API:
+//   "Confirmed"  → import ✅
+//   "Booked"     → import ✅
+//   "Prepared"   → import ✅  (prepared = confirmed in CRMS workflow)
+//   "Open"       → SKIP ❌   (open = quote/unconfirmed)
+//   "Draft"      → SKIP ❌
+//   "Quote"      → SKIP ❌
+//   "Cancelled"  → SKIP ❌
+//   "Invoiced"   → import ✅  (already happened, keep for records)
+//   "Completed"  → import ✅
+
+function shouldImport(crmsStatusName) {
+  const s = (crmsStatusName || '').toLowerCase().trim()
+  // Explicitly exclude quotes and unconfirmed
+  if (s === 'open')        return false   // unconfirmed quote in CRMS
+  if (s === 'draft')       return false
+  if (s === 'quote')       return false
+  if (s === 'quotation')   return false
+  if (s === 'prospect')    return false
+  if (s === 'cancelled')   return false
+  if (s === 'lost')        return false
+  // Import everything else (confirmed, prepared, booked, invoiced, completed)
+  return true
 }
 
-// Extrai HH:MM de um ISO timestamp do Current RMS
-// ex: "2026-03-20T09:00:00.000+00:00" → "09:00"
-function toTime(iso) {
-  if (!iso) return null
-  try { return iso.slice(11, 16) } catch { return null }
+function mapStatus(crmsStatus) {
+  const s = (crmsStatus || '').toLowerCase()
+  if (s.includes('cancel'))                                     return 'cancelled'
+  if (s.includes('confirm'))                                    return 'confirmed'
+  if (s.includes('prepared') || s.includes('booked'))          return 'confirmed'
+  if (s.includes('dispatch'))                                   return 'dispatched'
+  if (s.includes('complet') || s.includes('invoic'))           return 'completed'
+  return 'confirmed'  // default for anything that passed shouldImport
+}
+
+// ── ISSUE 4: Full venue address ───────────────────────────────────────────────
+//
+// Current RMS nests venue/destination as an object on the opportunity.
+// Fields available: name, address1, address2, town_city, county, postcode, country_name
+
+function extractVenueName(o) {
+  // venue_name is a flat field; destination/venue is the nested object
+  return (
+    o.venue_name ||
+    o.destination?.name ||
+    o.venue?.name ||
+    o.location ||
+    ''
+  )
+}
+
+function extractVenueAddress(o) {
+  // Try nested destination object first (most complete)
+  const dest = o.destination || o.venue || null
+  if (dest) {
+    const parts = [
+      dest.address1,
+      dest.address2,
+      dest.town_city || dest.city,
+      dest.county,
+      dest.postcode,
+      dest.country_name,
+    ].filter(Boolean)
+    if (parts.length > 0) return parts.join(', ')
+  }
+  // Fallback: delivery_address flat field
+  if (o.delivery_address) return o.delivery_address
+  return null
 }
 
 // ── field mapper ──────────────────────────────────────────────────────────────
-//
-// Current RMS opportunity fields confirmed from scheduling form (photos):
-//   deliver_starts_at  → Delivery start  (e.g. "2026-03-20T09:00:00.000+00:00")
-//   deliver_ends_at    → Delivery end    (e.g. "2026-03-20T18:00:00.000+00:00")
-//   collect_starts_at  → Collection start (e.g. "2026-03-23T09:00:00.000+00:00")
-//   collect_ends_at    → Collection end   (e.g. "2026-03-23T18:00:00.000+00:00")
-//   starts_at          → Event start date (always present)
-//   ends_at            → Event end date   (always present)
-//   prep_starts_at / load_starts_at / setup_starts_at / takedown_starts_at / unload_starts_at
-//   opportunity_status_name → "Prepared", "Confirmed", "Cancelled", etc.
 
 function mapOpportunity(o) {
-  // ── Delivery ──────────────────────────────────────────────────────────────
-  // Primary:  deliver_starts_at (filled when scheduling is done in CRMS)
-  // Fallback: load_starts_at   (sometimes used as proxy)
-  // Fallback: null             (order not yet scheduled — normal for Prepared/Open)
-  const deliveryISO   = o.deliver_starts_at || o.load_starts_at || null
-  const deliveryEndISO = o.deliver_ends_at  || null
-
-  // ── Collection ────────────────────────────────────────────────────────────
-  const collectionISO    = o.collect_starts_at || o.unload_starts_at || null
-  const collectionEndISO = o.collect_ends_at   || null
-
-  // ── Event date ────────────────────────────────────────────────────────────
-  // starts_at is always present; use as the canonical event date
-  const eventDateISO = o.starts_at || null
-
-  // ── Venue / address ───────────────────────────────────────────────────────
-  // Current RMS nests venue in opportunity.venue or opportunity.destination
-  const venue = o.venue_name
-    || o.destination?.name
-    || o.venue?.name
-    || o.location
-    || ''
-
-  // ── Client ────────────────────────────────────────────────────────────────
-  const clientName = o.member?.name
-    || o.member?.full_name
-    || o.company_name
-    || o.member_name
-    || ''
+  // Delivery dates — read directly from scheduling fields
+  const deliveryISO    = o.deliver_starts_at || o.load_starts_at    || null
+  const collectionISO  = o.collect_starts_at || o.unload_starts_at  || null
+  const eventDateISO   = o.starts_at         || o.deliver_starts_at || null
 
   return {
     crms_id:          String(o.id),
     crms_ref:         o.number || o.reference || String(o.id),
     event_name:       o.name   || o.subject   || '',
-    client_name:      clientName,
+    client_name:      o.member?.name || o.member?.full_name || o.company_name || o.member_name || '',
     client_id:        o.member_id ? String(o.member_id) : null,
-    venue:            venue,
+
+    // Venue — name + full address separately
+    venue:            extractVenueName(o),
+    venue_address:    extractVenueAddress(o),
 
     // Event dates
     event_date:       toDate(eventDateISO),
     event_ends_at:    toDate(o.ends_at),
 
-    // Delivery — populated only after scheduling in Current RMS
+    // Delivery
     delivery_date:    toDate(deliveryISO),
     delivery_time:    toTime(deliveryISO),
-    delivery_end_time: toTime(deliveryEndISO),
+    delivery_end_time: toTime(o.deliver_ends_at),
 
-    // Collection — populated only after scheduling in Current RMS
+    // Collection
     collection_date:  toDate(collectionISO),
     collection_time:  toTime(collectionISO),
-    collection_end_time: toTime(collectionEndISO),
+    collection_end_time: toTime(o.collect_ends_at),
 
     // Status
     status:           mapStatus(o.opportunity_status_name || o.status_name || ''),
     crms_status:      o.opportunity_status_name || o.status_name || '',
 
-    // Other fields
-    notes:                o.description        || o.notes || '',
+    // Content
+    notes:                o.description         || o.notes || '',
     special_instructions: o.special_instructions || '',
     total_value:          parseFloat(o.grand_total || o.total || 0),
 
-    // Raw data for debug (full object stored in jsonb)
+    // Audit
     crms_raw:         o,
     last_synced_at:   new Date().toISOString(),
     crms_updated_at:  o.updated_at || null,
   }
 }
 
-function mapStatus(crmsStatus) {
-  const s = (crmsStatus || '').toLowerCase()
-  if (s.includes('cancel'))                                    return 'cancelled'
-  if (s.includes('confirm'))                                   return 'confirmed'
-  if (s.includes('dispatch'))                                  return 'dispatched'
-  if (s.includes('complet'))                                   return 'completed'
-  if (s.includes('draft') || s.includes('quote')
-    || s.includes('prospect') || s.includes('prepared')
-    || s.includes('open'))                                     return 'pending'
-  return 'pending'
-}
-
-function mapItem(item, crmsOpportunityId) {
+function mapItem(item, crmsOpportunityId, jobId) {
   return {
+    job_id:              jobId ? String(jobId) : null,
     crms_opportunity_id: String(crmsOpportunityId),
     crms_item_id:        String(item.id),
     item_name:           item.product_name || item.name || '',
     category:            item.product_group_name || item.category || 'other',
-    quantity:            parseInt(item.quantity || 0),
+    quantity:            parseInt(item.quantity || item.quantity_reserved || 0),
     unit:                item.rental_price_name || 'unit',
     item_type:           item.type_name || 'rental',
     crms_raw:            item,
@@ -166,9 +189,8 @@ function mapItem(item, crmsOpportunityId) {
 function detectChanges(existing, incoming) {
   const changes = []
   const fields = [
-    'event_name', 'client_name', 'venue', 'event_date',
-    'delivery_date', 'delivery_time', 'delivery_end_time',
-    'collection_date', 'collection_time', 'collection_end_time',
+    'event_name', 'client_name', 'venue', 'venue_address', 'event_date',
+    'delivery_date', 'delivery_time', 'collection_date', 'collection_time',
     'status', 'notes', 'special_instructions', 'total_value',
   ]
   for (const f of fields) {
@@ -187,70 +209,101 @@ function detectChanges(existing, incoming) {
   return changes
 }
 
+// ── sync items for a job ──────────────────────────────────────────────────────
+
+async function syncItems(supabase, oppId, jobUuid) {
+  try {
+    const data = await crmsGet(`/opportunities/${oppId}/opportunity_items`)
+    const items = (data.opportunity_items || [])
+    if (items.length === 0) return 0
+
+    const rows = items.map(i => mapItem(i, oppId, jobUuid))
+
+    // Upsert by crms_item_id + crms_opportunity_id
+    await supabase
+      .from('crms_job_items')
+      .upsert(rows, { onConflict: 'crms_opportunity_id,crms_item_id', ignoreDuplicates: false })
+
+    return rows.length
+  } catch {
+    return 0  // items are best-effort
+  }
+}
+
 // ── main handler ──────────────────────────────────────────────────────────────
 
 export default async function handler(req, res) {
   const supabase  = createClient(SUPABASE_URL, SUPABASE_KEY)
   const startedAt = new Date().toISOString()
-  const stats     = { fetched: 0, created: 0, updated: 0, unchanged: 0, changes_logged: 0, errors: [] }
+  const stats     = {
+    fetched: 0, skipped_quotes: 0,
+    created: 0, updated: 0, unchanged: 0,
+    changes_logged: 0, items_synced: 0,
+    errors: [],
+  }
 
   try {
-    // 1. Fetch opportunities from Current RMS
-    // Window: 30 days back → 365 days forward (catches all upcoming jobs)
-    const since = new Date(); since.setDate(since.getDate() - 30)
+    // ── 1. Fetch opportunities from Current RMS ──────────────────────────────
+    // Window: 60 days back → 365 days forward
+    const since = new Date(); since.setDate(since.getDate() - 60)
     const until = new Date(); until.setDate(until.getDate() + 365)
 
-    const opportunities = await fetchAllPages('/opportunities', 'opportunities', {
+    const allOpportunities = await fetchAllPages('/opportunities', 'opportunities', {
       'q[starts_at_gteq]': since.toISOString().split('T')[0],
       'q[starts_at_lteq]': until.toISOString().split('T')[0],
     })
 
-    stats.fetched = opportunities.length
+    stats.fetched = allOpportunities.length
 
-    // 2. Load existing records from Supabase (for change detection)
+    // ── ISSUE 3: Filter out quotes / unconfirmed ─────────────────────────────
+    const opportunities = allOpportunities.filter(o => {
+      const status = o.opportunity_status_name || o.status_name || ''
+      if (!shouldImport(status)) {
+        stats.skipped_quotes++
+        return false
+      }
+      return true
+    })
+
+    // ── 2. Load existing Supabase records ────────────────────────────────────
     const { data: existingRecords } = await supabase
       .from('crms_jobs')
-      .select('id, crms_id, delivery_date, delivery_time, delivery_end_time, collection_date, collection_time, collection_end_time, status, event_name, client_name, venue, notes, special_instructions, total_value, event_date, sync_change_count')
+      .select('id, crms_id, delivery_date, delivery_time, delivery_end_time, collection_date, collection_time, collection_end_time, status, event_name, client_name, venue, venue_address, notes, special_instructions, total_value, event_date, sync_change_count')
 
     const existingMap = {}
     for (const r of (existingRecords || [])) existingMap[r.crms_id] = r
 
-    // 3. Process each opportunity
+    // ── 3. Process each confirmed opportunity ────────────────────────────────
     for (const opp of opportunities) {
       try {
         const mapped   = mapOpportunity(opp)
         const existing = existingMap[mapped.crms_id]
 
         if (!existing) {
-          // ── NEW job ───────────────────────────────────────────────────────
-          const { data: inserted } = await supabase
+          // ── NEW job ────────────────────────────────────────────────────────
+          const { data: inserted, error: insertErr } = await supabase
             .from('crms_jobs')
             .insert(mapped)
             .select('id')
             .single()
 
-          // Fetch & insert items (best-effort)
-          try {
-            const itemsData = await crmsGet(`/opportunities/${opp.id}/opportunity_items`)
-            const items = (itemsData.opportunity_items || []).map(i => mapItem(i, opp.id))
-            if (items.length > 0 && inserted?.id) {
-              await supabase.from('crms_job_items').insert(
-                items.map(i => ({ ...i, job_id: inserted.id }))
-              )
-            }
-          } catch { /* items optional */ }
+          if (insertErr) throw insertErr
+
+          // Sync items immediately for new jobs
+          const itemCount = await syncItems(supabase, opp.id, inserted?.id)
+          stats.items_synced += itemCount
 
           await supabase.from('sync_log').insert({
-            crms_id:    mapped.crms_id,
-            event_type: 'job_created',
-            description: `New: ${mapped.event_name} (${mapped.crms_ref}) · delivery ${mapped.delivery_date || 'TBC'} · collection ${mapped.collection_date || 'TBC'}`,
-            synced_at:  new Date().toISOString(),
+            crms_id:     mapped.crms_id,
+            event_type:  'job_created',
+            description: `New: ${mapped.event_name} (${mapped.crms_ref}) · delivery ${mapped.delivery_date || 'TBC'} · ${itemCount} items`,
+            synced_at:   new Date().toISOString(),
           })
 
           stats.created++
 
         } else {
-          // ── EXISTING job — check for changes ──────────────────────────────
+          // ── EXISTING job ───────────────────────────────────────────────────
           const changes = detectChanges(existing, mapped)
 
           if (changes.length > 0) {
@@ -283,22 +336,33 @@ export default async function handler(req, res) {
             })
 
             stats.updated++
-
           } else {
-            // No changes — just touch last_synced_at
             await supabase
               .from('crms_jobs')
               .update({ last_synced_at: new Date().toISOString() })
               .eq('crms_id', mapped.crms_id)
             stats.unchanged++
           }
+
+          // ── ISSUE 4: Sync items for ALL existing jobs too ──────────────────
+          // Only sync if job had no items yet (avoids hammering API every 5 min)
+          const { count } = await supabase
+            .from('crms_job_items')
+            .select('id', { count: 'exact', head: true })
+            .eq('crms_opportunity_id', mapped.crms_id)
+
+          if ((count || 0) === 0) {
+            const itemCount = await syncItems(supabase, opp.id, existing.id)
+            stats.items_synced += itemCount
+          }
         }
+
       } catch (jobErr) {
         stats.errors.push({ crms_id: opp.id, error: jobErr.message })
       }
     }
 
-    // 4. Record sync run
+    // ── 4. Record sync run ───────────────────────────────────────────────────
     await supabase.from('sync_runs').insert({
       started_at:     startedAt,
       completed_at:   new Date().toISOString(),
@@ -311,18 +375,16 @@ export default async function handler(req, res) {
       status:         stats.errors.length > 0 ? 'partial' : 'success',
     })
 
-    // 5. Summary for manual trigger response
-    const withDelivery   = opportunities.filter(o => o.deliver_starts_at).length
-    const withCollection = opportunities.filter(o => o.collect_starts_at).length
-
     return res.status(200).json({
       success: true,
       stats,
       summary: {
-        total:          stats.fetched,
-        with_delivery:  withDelivery,
-        with_collection: withCollection,
-        without_dates:  stats.fetched - withDelivery,
+        total_from_crms:  stats.fetched,
+        skipped_quotes:   stats.skipped_quotes,
+        imported:         opportunities.length,
+        with_delivery:    opportunities.filter(o => o.deliver_starts_at).length,
+        with_collection:  opportunities.filter(o => o.collect_starts_at).length,
+        items_synced:     stats.items_synced,
       },
     })
 
