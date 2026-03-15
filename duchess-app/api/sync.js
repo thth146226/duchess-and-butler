@@ -1,5 +1,5 @@
-// Duchess & Butler — Current RMS Sync Engine v4
-// Fetches full opportunity details including dates
+// Duchess & Butler — Current RMS Sync Engine v5
+// Uses correct field names: deliver_starts_at, collect_starts_at
 
 const CRMS_SUBDOMAIN = process.env.CRMS_SUBDOMAIN
 const CRMS_API_KEY = process.env.CRMS_API_KEY
@@ -12,14 +12,6 @@ function crmsHeaders() {
     'X-SUBDOMAIN': CRMS_SUBDOMAIN,
     'Content-Type': 'application/json',
   }
-}
-
-async function crmsGet(path) {
-  const res = await fetch(`https://api.current-rms.com/api/v1${path}`, {
-    headers: crmsHeaders()
-  })
-  if (!res.ok) throw new Error(`CRMS ${path} → ${res.status}`)
-  return res.json()
 }
 
 async function supabaseUpsert(table, data) {
@@ -36,15 +28,6 @@ async function supabaseUpsert(table, data) {
   return res.ok
 }
 
-function mapStatus(s = '') {
-  s = s.toLowerCase()
-  if (s.includes('cancel')) return 'cancelled'
-  if (s.includes('confirm')) return 'confirmed'
-  if (s.includes('dispatch')) return 'dispatched'
-  if (s.includes('complete')) return 'completed'
-  return 'pending'
-}
-
 function extractDate(dateStr) {
   if (!dateStr) return null
   return dateStr.split('T')[0]
@@ -57,40 +40,13 @@ function extractTime(dateStr) {
   return t.slice(0, 5)
 }
 
-function findDeliveryCollection(opp) {
-  // Method 1: opportunity_dates array
-  const dates = opp.opportunity_dates || opp.dates || []
-  
-  let delivery = null
-  let collection = null
-
-  for (const d of dates) {
-    const name = (d.date_type_name || d.name || '').toLowerCase()
-    if (name.includes('deliver') || name.includes('drop')) {
-      delivery = d
-    } else if (name.includes('collect') || name.includes('pick') || name.includes('return')) {
-      collection = d
-    }
-  }
-
-  // Method 2: use starts_at as delivery, ends_at as collection
-  const deliveryDate = delivery?.starts_at 
-    ? extractDate(delivery.starts_at)
-    : extractDate(opp.delivery_date || opp.starts_at)
-    
-  const deliveryTime = delivery?.starts_at
-    ? extractTime(delivery.starts_at)
-    : extractTime(opp.delivery_time || opp.starts_at)
-
-  const collectionDate = collection?.starts_at
-    ? extractDate(collection.starts_at)
-    : extractDate(opp.collection_date || opp.ends_at)
-    
-  const collectionTime = collection?.starts_at
-    ? extractTime(collection.starts_at)
-    : extractTime(opp.collection_time || opp.ends_at)
-
-  return { deliveryDate, deliveryTime, collectionDate, collectionTime }
+function mapStatus(s = '') {
+  s = s.toLowerCase()
+  if (s.includes('cancel')) return 'cancelled'
+  if (s.includes('confirm')) return 'confirmed'
+  if (s.includes('dispatch')) return 'dispatched'
+  if (s.includes('complete')) return 'completed'
+  return 'pending'
 }
 
 module.exports = async function handler(req, res) {
@@ -102,7 +58,6 @@ module.exports = async function handler(req, res) {
   const stats = { fetched: 0, processed: 0, errors: [] }
 
   try {
-    // Fetch list of opportunities
     const since = new Date(); since.setDate(since.getDate() - 30)
     const until = new Date(); until.setDate(until.getDate() + 365)
 
@@ -116,37 +71,31 @@ module.exports = async function handler(req, res) {
 
     for (const opp of opportunities) {
       try {
-        // Fetch full opportunity details to get dates
-        let fullOpp = opp
-        try {
-          const detail = await crmsGet(`/opportunities/${opp.id}`)
-          fullOpp = detail.opportunity || opp
-        } catch (e) {
-          // Use basic opp if detail fails
-        }
-
-        const { deliveryDate, deliveryTime, collectionDate, collectionTime } = findDeliveryCollection(fullOpp)
-
-        // Log what we found for debugging
-        console.log(`Opp ${opp.id} (${opp.number}): DEL=${deliveryDate} ${deliveryTime}, COL=${collectionDate} ${collectionTime}`)
+        // Fetch full opportunity to get deliver_starts_at and collect_starts_at
+        const detailRes = await fetch(
+          `https://api.current-rms.com/api/v1/opportunities/${opp.id}`,
+          { headers: crmsHeaders() }
+        )
+        const detailData = await detailRes.json()
+        const o = detailData.opportunity || opp
 
         const job = {
-          crms_id: String(fullOpp.id),
-          crms_ref: fullOpp.number || String(fullOpp.id),
-          event_name: fullOpp.name || '',
-          client_name: fullOpp.member?.name || fullOpp.company_name || '',
-          venue: fullOpp.venue_name || fullOpp.location || '',
-          event_date: extractDate(fullOpp.starts_at),
-          delivery_date: deliveryDate,
-          delivery_time: deliveryTime,
-          collection_date: collectionDate,
-          collection_time: collectionTime,
-          status: mapStatus(fullOpp.opportunity_status_name || ''),
-          crms_status: fullOpp.opportunity_status_name || '',
-          notes: fullOpp.description || fullOpp.notes || '',
-          special_instructions: fullOpp.special_instructions || '',
-          crms_raw: fullOpp,
-          last_synced_at: new Date().toISOString(),
+          crms_id:          String(o.id),
+          crms_ref:         o.number || String(o.id),
+          event_name:       o.name || o.subject || '',
+          client_name:      o.member?.name || '',
+          venue:            o.venue?.name || o.venue_name || '',
+          event_date:       extractDate(o.starts_at),
+          // ✅ Correct field names from Current RMS API
+          delivery_date:    extractDate(o.deliver_starts_at),
+          delivery_time:    extractTime(o.deliver_starts_at),
+          collection_date:  extractDate(o.collect_starts_at),
+          collection_time:  extractTime(o.collect_starts_at),
+          status:           mapStatus(o.status_name || o.state_name || ''),
+          crms_status:      o.status_name || o.state_name || '',
+          notes:            o.description || '',
+          special_instructions: o.delivery_instructions || o.collection_instructions || '',
+          last_synced_at:   new Date().toISOString(),
         }
 
         await supabaseUpsert('crms_jobs', job)
@@ -159,11 +108,11 @@ module.exports = async function handler(req, res) {
 
     // Log sync run
     await supabaseUpsert('sync_runs', {
-      started_at: startedAt,
-      completed_at: new Date().toISOString(),
-      jobs_fetched: stats.fetched,
-      jobs_created: stats.processed,
-      status: stats.errors.length > 0 ? 'partial' : 'success',
+      started_at:    startedAt,
+      completed_at:  new Date().toISOString(),
+      jobs_fetched:  stats.fetched,
+      jobs_created:  stats.processed,
+      status:        stats.errors.length > 0 ? 'partial' : 'success',
     })
 
     return res.status(200).json({ success: true, stats })
