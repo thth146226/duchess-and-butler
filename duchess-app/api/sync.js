@@ -72,17 +72,18 @@ function shouldImport(crmsStatusName) {
   if (s === 'prospect')    return false
   if (s === 'cancelled')   return false
   if (s === 'lost')        return false
-  // Import everything else (confirmed, prepared, booked, invoiced, completed)
+  // Import everything else: confirmed, prepared, provisional, booked, invoiced, completed
   return true
 }
 
 function mapStatus(crmsStatus) {
   const s = (crmsStatus || '').toLowerCase()
-  if (s.includes('cancel'))                                     return 'cancelled'
-  if (s.includes('confirm'))                                    return 'confirmed'
-  if (s.includes('prepared') || s.includes('booked'))          return 'confirmed'
-  if (s.includes('dispatch'))                                   return 'dispatched'
-  if (s.includes('complet') || s.includes('invoic'))           return 'completed'
+  if (s.includes('cancel'))                                           return 'cancelled'
+  if (s.includes('confirm'))                                          return 'confirmed'
+  if (s.includes('prepared') || s.includes('booked'))                return 'confirmed'
+  if (s.includes('provisional'))                                      return 'confirmed'
+  if (s.includes('dispatch'))                                         return 'dispatched'
+  if (s.includes('complet') || s.includes('invoic'))                 return 'completed'
   return 'confirmed'  // default for anything that passed shouldImport
 }
 
@@ -103,21 +104,29 @@ function extractVenueName(o) {
 }
 
 function extractVenueAddress(o) {
-  // Current RMS confirmed field names from debug (destination object):
-  //   street, postcode, city, county, country.name
-  const dest = o.destination || o.billing_address || o.venue || null
-  if (dest) {
+  // Current RMS confirmed field structure from debug:
+  // destination: { id, name, street, postcode, city, county, country: { name } }
+  // billing_address: { id, name, street, postcode, city, county, country_id, country_name }
+  // Both are OBJECTS — must extract individual fields, not pass object as string
+
+  const dest = o.destination || o.billing_address || null
+
+  if (dest && typeof dest === 'object') {
     const parts = [
       dest.street    || dest.address1 || dest.address,
       dest.city      || dest.town_city,
       dest.county,
       dest.postcode,
-      dest.country?.name || dest.country_name,
-    ].filter(Boolean)
-    // Clean up any \r\n in street field
-    if (parts.length > 0) return parts.join(', ').replace(/\r\n/g, ', ').replace(/,\s*,/g, ',')
+    ].filter(v => v && typeof v === 'string' && v.trim())
+
+    if (parts.length > 0) {
+      // Clean \r\n that sometimes appears inside street field
+      return parts.join(', ').replace(/\r\n/g, ', ').replace(/,\s*,/g, ',').trim()
+    }
   }
-  if (o.delivery_address) return o.delivery_address
+
+  // Fallback: flat string fields
+  if (o.delivery_address && typeof o.delivery_address === 'string') return o.delivery_address
   return null
 }
 
