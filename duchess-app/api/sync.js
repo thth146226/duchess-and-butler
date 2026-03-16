@@ -213,20 +213,21 @@ function detectChanges(existing, incoming) {
 
 async function syncItems(supabase, oppId, jobUuid) {
   try {
+    // Current RMS items endpoint
     const data = await crmsGet(`/opportunities/${oppId}/opportunity_items`)
-    const items = (data.opportunity_items || [])
-    if (items.length === 0) return 0
+    const items = (data.opportunity_items || data.items || [])
+    if (items.length === 0) return { count: 0, error: null }
 
     const rows = items.map(i => mapItem(i, oppId, jobUuid))
 
-    // Upsert by crms_item_id + crms_opportunity_id
-    await supabase
+    const { error } = await supabase
       .from('crms_job_items')
       .upsert(rows, { onConflict: 'crms_opportunity_id,crms_item_id', ignoreDuplicates: false })
 
-    return rows.length
-  } catch {
-    return 0  // items are best-effort
+    if (error) return { count: 0, error: error.message }
+    return { count: rows.length, error: null }
+  } catch (e) {
+    return { count: 0, error: e.message }
   }
 }
 
@@ -239,6 +240,7 @@ export default async function handler(req, res) {
     fetched: 0, skipped_quotes: 0,
     created: 0, updated: 0, unchanged: 0,
     changes_logged: 0, items_synced: 0,
+    item_errors: [],
     errors: [],
   }
 
@@ -290,13 +292,14 @@ export default async function handler(req, res) {
           if (insertErr) throw insertErr
 
           // Sync items immediately for new jobs
-          const itemCount = await syncItems(supabase, opp.id, inserted?.id)
-          stats.items_synced += itemCount
+          const itemResult = await syncItems(supabase, opp.id, inserted?.id)
+          stats.items_synced += itemResult.count
+          if (itemResult.error) stats.item_errors.push({ crms_id: opp.id, error: itemResult.error })
 
           await supabase.from('sync_log').insert({
             crms_id:     mapped.crms_id,
             event_type:  'job_created',
-            description: `New: ${mapped.event_name} (${mapped.crms_ref}) · delivery ${mapped.delivery_date || 'TBC'} · ${itemCount} items`,
+            description: `New: ${mapped.event_name} (${mapped.crms_ref}) · ${itemResult.count} items${itemResult.error ? ' [item error: ' + itemResult.error + ']' : ''}`,
             synced_at:   new Date().toISOString(),
           })
 
@@ -345,8 +348,9 @@ export default async function handler(req, res) {
           }
 
           // ── Sync items for ALL existing jobs (upsert is idempotent) ──────
-          const itemCount = await syncItems(supabase, opp.id, existing.id)
-          stats.items_synced += itemCount
+          const itemResult = await syncItems(supabase, opp.id, existing.id)
+          stats.items_synced += itemResult.count
+          if (itemResult.error) stats.item_errors.push({ crms_id: opp.id, error: itemResult.error })
         }
 
       } catch (jobErr) {
@@ -377,6 +381,7 @@ export default async function handler(req, res) {
         with_delivery:    opportunities.filter(o => o.deliver_starts_at).length,
         with_collection:  opportunities.filter(o => o.collect_starts_at).length,
         items_synced:     stats.items_synced,
+        item_errors:      stats.item_errors,
       },
     })
 
