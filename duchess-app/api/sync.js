@@ -103,20 +103,20 @@ function extractVenueName(o) {
 }
 
 function extractVenueAddress(o) {
-  // Try nested destination object first (most complete)
-  const dest = o.destination || o.venue || null
+  // Current RMS confirmed field names from debug (destination object):
+  //   street, postcode, city, county, country.name
+  const dest = o.destination || o.billing_address || o.venue || null
   if (dest) {
     const parts = [
-      dest.address1,
-      dest.address2,
-      dest.town_city || dest.city,
+      dest.street    || dest.address1 || dest.address,
+      dest.city      || dest.town_city,
       dest.county,
       dest.postcode,
-      dest.country_name,
+      dest.country?.name || dest.country_name,
     ].filter(Boolean)
-    if (parts.length > 0) return parts.join(', ')
+    // Clean up any \r\n in street field
+    if (parts.length > 0) return parts.join(', ').replace(/\r\n/g, ', ').replace(/,\s*,/g, ',')
   }
-  // Fallback: delivery_address flat field
   if (o.delivery_address) return o.delivery_address
   return null
 }
@@ -344,17 +344,9 @@ export default async function handler(req, res) {
             stats.unchanged++
           }
 
-          // ── ISSUE 4: Sync items for ALL existing jobs too ──────────────────
-          // Only sync if job had no items yet (avoids hammering API every 5 min)
-          const { count } = await supabase
-            .from('crms_job_items')
-            .select('id', { count: 'exact', head: true })
-            .eq('crms_opportunity_id', mapped.crms_id)
-
-          if ((count || 0) === 0) {
-            const itemCount = await syncItems(supabase, opp.id, existing.id)
-            stats.items_synced += itemCount
-          }
+          // ── Sync items for ALL existing jobs (upsert is idempotent) ──────
+          const itemCount = await syncItems(supabase, opp.id, existing.id)
+          stats.items_synced += itemCount
         }
 
       } catch (jobErr) {
