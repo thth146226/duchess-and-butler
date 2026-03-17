@@ -87,7 +87,41 @@ function mapStatus(crmsStatus) {
   return 'confirmed'  // default for anything that passed shouldImport
 }
 
-// ── ISSUE 4: Full venue address ───────────────────────────────────────────────
+// ── ORDER vs QUOTATION detection ─────────────────────────────────────────────
+//
+// Current RMS uses the 'state' numeric field:
+//   1 = Quote / Opportunity (not confirmed)
+//   2 = Provisional         (not confirmed)  
+//   3 = Order               (confirmed — appears in Schedule)
+//   4 = Completed / Invoiced (keep for records)
+//
+// Also check state_name as fallback text matching
+
+function isConfirmedOrder(o) {
+  // PRIMARY CHECK: ordered_at field
+  // When a Quotation (ORANGE) is converted to an Order (RED) in Current RMS,
+  // the ordered_at field gets a timestamp.
+  // ordered_at = null  → still a Quotation (ORANGE) → exclude from Schedule
+  // ordered_at = value → confirmed Order (RED)       → include in Schedule
+  if (o.ordered_at) return true
+
+  // SECONDARY: numeric state field
+  // state 3 = Order, state 4 = Completed/Invoiced
+  // state 1 = Quote, state 2 = Provisional
+  const state = o.state
+  if (state === 3 || state === 4) return true
+  if (state === 1 || state === 2) return false
+
+  // TERTIARY: state_name text
+  const sn = (o.state_name || '').toLowerCase()
+  if (sn === 'order' || sn === 'completed' || sn === 'invoiced') return true
+  if (sn === 'quote' || sn === 'quotation' || sn === 'provisional' || sn === 'open') return false
+
+  // Default: exclude from Schedule
+  return false
+}
+
+
 //
 // Current RMS nests venue/destination as an object on the opportunity.
 // Fields available: name, address1, address2, town_city, county, postcode, country_name
@@ -166,6 +200,14 @@ function mapOpportunity(o) {
     // Status
     status:           mapStatus(o.opportunity_status_name || o.status_name || ''),
     crms_status:      o.opportunity_status_name || o.status_name || '',
+
+    // ORDER vs QUOTATION
+    // ordered_at = timestamp when converted to Order (RED) in Current RMS
+    // null = still a Quotation (ORANGE)
+    is_order:         isConfirmedOrder(o),
+    ordered_at:       o.ordered_at || null,
+    crms_state:       o.state      || null,
+    crms_state_name:  o.state_name || null,
 
     // Content
     notes:                o.description         || o.notes || '',
