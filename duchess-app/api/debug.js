@@ -4,25 +4,27 @@ const HEADERS = { 'X-AUTH-TOKEN': CRMS_API_KEY, 'X-SUBDOMAIN': CRMS_SUBDOMAIN }
 
 module.exports = async function handler(req, res) {
   try {
-    const r = await fetch(
-      `https://api.current-rms.com/api/v1/opportunities?per_page=5&page=1`,
-      { headers: HEADERS }
-    )
-    const d = await r.json()
-    const opps = (d.opportunities || []).map(o => ({
-      number: o.number,
-      name: (o.name || '').slice(0, 35),
-      opportunity_status_name: o.opportunity_status_name,
-      state: o.state,
-      state_name: o.state_name,
-      source_type: o.source_type,
-      type: o.type,
-      subject: o.subject,
-      ordered_at: o.ordered_at,
-      invoiced: o.invoiced,
-      has_opportunity_deal: o.has_opportunity_deal,
-    }))
-    return res.status(200).json({ total: d.meta?.total_count, opportunities: opps })
+    // Fetch specific jobs to compare ORDER vs QUOTATION fields
+    const ids = ['7723', '7720', '7533', '7586', '7742', '7719']
+    const results = []
+    for (const id of ids) {
+      const r = await fetch(
+        `https://api.current-rms.com/api/v1/opportunities?q[number_eq]=QDB${id}`,
+        { headers: HEADERS }
+      )
+      const d = await r.json()
+      const o = d.opportunities?.[0]
+      if (o) results.push({
+        number: o.number,
+        state: o.state,
+        state_name: o.state_name,
+        opportunity_status_name: o.opportunity_status_name,
+        ordered_at: o.ordered_at,
+        source_opportunity_id: o.source_opportunity_id,
+        invoiced: o.invoiced,
+      })
+    }
+    return res.status(200).json({ results })
   } catch (err) {
     return res.status(500).json({ error: err.message })
   }
