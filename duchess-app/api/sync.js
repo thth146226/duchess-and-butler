@@ -104,34 +104,15 @@ function mapStatus(crmsStatus) {
 // Also check state_name as fallback text matching
 
 function isConfirmedOrder(o) {
-  const orderedAt = o?.ordered_at || null
   const stateNum = o?.state == null ? null : Number(o.state)
+  const orderedAt = o?.ordered_at || null
 
   // Single binary discriminator for Schedule:
-  // ordered_at is set when a Quotation (ORANGE) is converted to an Order (RED).
-  // ordered_at = null → still a Quotation → must not appear in Schedule.
-  if (orderedAt) {
-    const is_order = true
-    if (DEBUG_CRMS_CLASSIFICATION && (DEBUG_CRMS_IDS.length === 0 || DEBUG_CRMS_IDS.includes(String(o.id)) || DEBUG_CRMS_IDS.includes(String(o.number)) || DEBUG_CRMS_IDS.includes(String(o.reference)))) {
-      console.log('[crms_classify]', JSON.stringify({
-        crms_id: String(o.id),
-        crms_ref: o.number || o.reference || null,
-        candidates: {
-          ordered_at: orderedAt,
-          state: o.state,
-          state_name: o.state_name,
-          opportunity_status_name: o.opportunity_status_name || o.status_name || null,
-        },
-        is_order,
-        include_in_schedule: is_order,
-        reason: 'ordered_at present'
-      }))
-    }
-    return is_order
-  }
-
-  // Safety fallback for cases where ordered_at is missing/unparseable:
-  // state 3/4 represent Orders/confirmed work; state 1/2 represent non-confirmed work.
+  // Use Current RMS `state` as primary truth:
+  // - state 3/4 = Order/confirmed → Schedule
+  // - state 1/2 = Quote/quotation/provisional → never Schedule
+  //
+  // ordered_at is NOT a reliable discriminator by itself (it can be present for quotations).
   if (stateNum === 3 || stateNum === 4) {
     const is_order = true
     if (DEBUG_CRMS_CLASSIFICATION && (DEBUG_CRMS_IDS.length === 0 || DEBUG_CRMS_IDS.includes(String(o.id)) || DEBUG_CRMS_IDS.includes(String(o.number)) || DEBUG_CRMS_IDS.includes(String(o.reference)))) {
@@ -185,7 +166,7 @@ function isConfirmedOrder(o) {
       },
       is_order,
       include_in_schedule: is_order,
-      reason: 'ordered_at missing and state not in {1,2,3,4} (fail closed)'
+      reason: 'state not in {1,2,3,4} (fail closed)'
     }))
   }
   return false
