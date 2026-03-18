@@ -63,17 +63,13 @@ function toTime(iso) { return iso ? iso.slice(11, 16) : null }
 //   "Invoiced"   → import ✅  (already happened, keep for records)
 //   "Completed"  → import ✅
 
-function shouldImport(crmsStatusName) {
-  const s = (crmsStatusName || '').toLowerCase().trim()
-  // Explicitly exclude quotes and unconfirmed
-  if (s === 'open')        return false   // unconfirmed quote in CRMS
-  if (s === 'draft')       return false
-  if (s === 'quote')       return false
-  if (s === 'quotation')   return false
-  if (s === 'prospect')    return false
-  if (s === 'cancelled')   return false
-  if (s === 'lost')        return false
-  // Import everything else: confirmed, prepared, provisional, booked, invoiced, completed
+function shouldImport(o) {
+  const state = o.state
+  if (state === 1) return false  // Draft/Quote only
+  if (state === 2 || state === 3 || state === 4) return true
+  // Fallback status name
+  const s = (o.opportunity_status_name || '').toLowerCase()
+  if (s === 'cancelled' || s === 'lost') return false
   return true
 }
 
@@ -99,26 +95,19 @@ function mapStatus(crmsStatus) {
 // Also check state_name as fallback text matching
 
 function isConfirmedOrder(o) {
-  // PRIMARY CHECK: ordered_at field
-  // When a Quotation (ORANGE) is converted to an Order (RED) in Current RMS,
-  // the ordered_at field gets a timestamp.
-  // ordered_at = null  → still a Quotation (ORANGE) → exclude from Schedule
-  // ordered_at = value → confirmed Order (RED)       → include in Schedule
-  if (o.ordered_at) return true
-
-  // SECONDARY: numeric state field
-  // state 3 = Order, state 4 = Completed/Invoiced
-  // state 1 = Quote, state 2 = Provisional
+  // state = 3 → Order (RED) → include in Schedule
+  // state = 1 → Draft/Quote (ORANGE) → exclude
+  // state = 2 → Provisional → include
+  // state = 4 → Completed → include
   const state = o.state
-  if (state === 3 || state === 4) return true
-  if (state === 1 || state === 2) return false
-
-  // TERTIARY: state_name text
+  if (state === 3 || state === 4 || state === 2) return true
+  if (state === 1) return false
+  // Fallback: state_name
   const sn = (o.state_name || '').toLowerCase()
-  if (sn === 'order' || sn === 'completed' || sn === 'invoiced') return true
-  if (sn === 'quote' || sn === 'quotation' || sn === 'provisional' || sn === 'open') return false
-
-  // Default: exclude from Schedule
+  if (sn === 'order' || sn === 'completed' || sn === 'provisional') return true
+  if (sn === 'draft' || sn === 'quote' || sn === 'quotation') return false
+  // Last fallback: ordered_at
+  if (o.ordered_at) return true
   return false
 }
 
@@ -306,8 +295,7 @@ export default async function handler(req, res) {
 
     // ── ISSUE 3: Filter out quotes / unconfirmed ─────────────────────────────
     const opportunities = allOpportunities.filter(o => {
-      const status = o.opportunity_status_name || o.status_name || ''
-      if (!shouldImport(status)) {
+      if (!shouldImport(o)) {
         stats.skipped_quotes++
         return false
       }
