@@ -16,6 +16,17 @@ const SUPABASE_KEY   = process.env.SUPABASE_SERVICE_KEY
 
 const CRMS_BASE = `https://api.current-rms.com/api/v1`
 
+// TEMP DEBUG: classify ORDER vs QUOTATION for Schedule correctness.
+// Enable with:
+//   DEBUG_CRMS_CLASSIFICATION=1
+// Optionally narrow to specific RMS ids/refs:
+//   DEBUG_CRMS_IDS="7723,7720"
+const DEBUG_CRMS_CLASSIFICATION = process.env.DEBUG_CRMS_CLASSIFICATION === '1'
+const DEBUG_CRMS_IDS = (process.env.DEBUG_CRMS_IDS || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean)
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 function crmsHeaders() {
@@ -93,18 +104,90 @@ function mapStatus(crmsStatus) {
 // Also check state_name as fallback text matching
 
 function isConfirmedOrder(o) {
+  const orderedAt = o?.ordered_at || null
+  const stateNum = o?.state == null ? null : Number(o.state)
+
   // Single binary discriminator for Schedule:
   // ordered_at is set when a Quotation (ORANGE) is converted to an Order (RED).
   // ordered_at = null → still a Quotation → must not appear in Schedule.
-  if (o.ordered_at) return true
+  if (orderedAt) {
+    const is_order = true
+    if (DEBUG_CRMS_CLASSIFICATION && (DEBUG_CRMS_IDS.length === 0 || DEBUG_CRMS_IDS.includes(String(o.id)) || DEBUG_CRMS_IDS.includes(String(o.number)) || DEBUG_CRMS_IDS.includes(String(o.reference)))) {
+      console.log('[crms_classify]', JSON.stringify({
+        crms_id: String(o.id),
+        crms_ref: o.number || o.reference || null,
+        candidates: {
+          ordered_at: orderedAt,
+          state: o.state,
+          state_name: o.state_name,
+          opportunity_status_name: o.opportunity_status_name || o.status_name || null,
+        },
+        is_order,
+        include_in_schedule: is_order,
+        reason: 'ordered_at present'
+      }))
+    }
+    return is_order
+  }
 
   // Safety fallback for cases where ordered_at is missing/unparseable:
   // state 3/4 represent Orders/confirmed work; state 1/2 represent non-confirmed work.
-  const state = o.state == null ? null : Number(o.state)
-  if (state === 3 || state === 4) return true
-  if (state === 1 || state === 2) return false
+  if (stateNum === 3 || stateNum === 4) {
+    const is_order = true
+    if (DEBUG_CRMS_CLASSIFICATION && (DEBUG_CRMS_IDS.length === 0 || DEBUG_CRMS_IDS.includes(String(o.id)) || DEBUG_CRMS_IDS.includes(String(o.number)) || DEBUG_CRMS_IDS.includes(String(o.reference)))) {
+      console.log('[crms_classify]', JSON.stringify({
+        crms_id: String(o.id),
+        crms_ref: o.number || o.reference || null,
+        candidates: {
+          ordered_at: orderedAt,
+          state: o.state,
+          state_name: o.state_name,
+          opportunity_status_name: o.opportunity_status_name || o.status_name || null,
+        },
+        is_order,
+        include_in_schedule: is_order,
+        reason: `state=${stateNum} implies order`
+      }))
+    }
+    return is_order
+  }
+  if (stateNum === 1 || stateNum === 2) {
+    const is_order = false
+    if (DEBUG_CRMS_CLASSIFICATION && (DEBUG_CRMS_IDS.length === 0 || DEBUG_CRMS_IDS.includes(String(o.id)) || DEBUG_CRMS_IDS.includes(String(o.number)) || DEBUG_CRMS_IDS.includes(String(o.reference)))) {
+      console.log('[crms_classify]', JSON.stringify({
+        crms_id: String(o.id),
+        crms_ref: o.number || o.reference || null,
+        candidates: {
+          ordered_at: orderedAt,
+          state: o.state,
+          state_name: o.state_name,
+          opportunity_status_name: o.opportunity_status_name || o.status_name || null,
+        },
+        is_order,
+        include_in_schedule: is_order,
+        reason: `state=${stateNum} implies quotation/draft`
+      }))
+    }
+    return is_order
+  }
 
   // Unknown / unparseable state: fail closed for Schedule correctness.
+  const is_order = false
+  if (DEBUG_CRMS_CLASSIFICATION && (DEBUG_CRMS_IDS.length === 0 || DEBUG_CRMS_IDS.includes(String(o.id)) || DEBUG_CRMS_IDS.includes(String(o.number)) || DEBUG_CRMS_IDS.includes(String(o.reference)))) {
+    console.log('[crms_classify]', JSON.stringify({
+      crms_id: String(o.id),
+      crms_ref: o.number || o.reference || null,
+      candidates: {
+        ordered_at: orderedAt,
+        state: o.state,
+        state_name: o.state_name,
+        opportunity_status_name: o.opportunity_status_name || o.status_name || null,
+      },
+      is_order,
+      include_in_schedule: is_order,
+      reason: 'ordered_at missing and state not in {1,2,3,4} (fail closed)'
+    }))
+  }
   return false
 }
 
