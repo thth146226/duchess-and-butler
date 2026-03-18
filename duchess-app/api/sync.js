@@ -296,15 +296,10 @@ export default async function handler(req, res) {
   }
 
   try {
-    // ── 1. Fetch opportunities from Current RMS ──────────────────────────────
-    // Window: 60 days back → 365 days forward
-    const since = new Date(); since.setDate(since.getDate() - 60)
-    const until = new Date(); until.setDate(until.getDate() + 365)
-
-    const allOpportunities = await fetchAllPages('/opportunities', 'opportunities', {
-      'q[starts_at_gteq]': since.toISOString().split('T')[0],
-      'q[starts_at_lteq]': until.toISOString().split('T')[0],
-    })
+    // ── 1. Fetch ALL opportunities from Current RMS ──────────────────────────
+    // No date filter — fetch everything so we don't miss confirmed orders
+    // The shouldImport filter handles what gets saved
+    const allOpportunities = await fetchAllPages('/opportunities', 'opportunities', {})
 
     stats.fetched = allOpportunities.length
 
