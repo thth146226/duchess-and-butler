@@ -64,10 +64,8 @@ function toTime(iso) { return iso ? iso.slice(11, 16) : null }
 //   "Completed"  → import ✅
 
 function shouldImport(o) {
-  // Only exclude pure drafts (state = 1)
-  // Everything else gets imported — Live Jobs shows all, Schedule filters by is_order
   const state = o.state
-  if (state === 1) return false
+  if (state === 1) return false  // Draft only
   const s = (o.opportunity_status_name || '').toLowerCase()
   if (s === 'cancelled' || s === 'lost') return false
   return true
@@ -95,22 +93,17 @@ function mapStatus(crmsStatus) {
 // Also check state_name as fallback text matching
 
 function isConfirmedOrder(o) {
-  // In Duchess & Butler's Current RMS:
-  // - state 3/4 = confirmed Order
-  // - state 2 = Provisional = confirmed
-  // - state 1 = Draft = not confirmed
-  // - state NULL = job from list endpoint (state not returned)
-  //   → if it has scheduling dates, treat as confirmed order
+  // CONFIRMED by debug: state field is reliable
+  // state 3 = Order (RED)      → Schedule ✅
+  // state 2 = Quotation (ORANGE) → Live Jobs only ❌
+  // state 1 = Draft             → exclude entirely ❌
+  // state 4 = Completed         → Schedule ✅
   const state = o.state
   if (state === 3 || state === 4) return true
-  if (state === 2) return true
-  if (state === 1) return false
-  // state is null (list endpoint) — use deliver_starts_at as confirmation signal
-  // If a job has delivery scheduled, it's a confirmed order
-  if (o.deliver_starts_at) return true
+  if (state === 1 || state === 2) return false
+  // state null from list endpoint — use ordered_at as signal
   if (o.ordered_at) return true
-  // Last resort: all non-draft imported jobs are treated as orders
-  return true
+  return false
 }
 
 
