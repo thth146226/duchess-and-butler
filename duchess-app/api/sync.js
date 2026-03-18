@@ -95,19 +95,22 @@ function mapStatus(crmsStatus) {
 // Also check state_name as fallback text matching
 
 function isConfirmedOrder(o) {
-  // state 3 = Order, state 4 = Completed = confirmed ORDER → Schedule
-  // state 2 = Provisional = confirmed ORDER → Schedule  
-  // state 1 = Draft = not confirmed → Live Jobs only
-  // For jobs with state 2 or 3 regardless of opportunity_status_name → Schedule
+  // In Duchess & Butler's Current RMS:
+  // - state 3/4 = confirmed Order
+  // - state 2 = Provisional = confirmed
+  // - state 1 = Draft = not confirmed
+  // - state NULL = job from list endpoint (state not returned)
+  //   → if it has scheduling dates, treat as confirmed order
   const state = o.state
   if (state === 3 || state === 4) return true
   if (state === 2) return true
   if (state === 1) return false
-  // No state field — use ordered_at or status name
+  // state is null (list endpoint) — use deliver_starts_at as confirmation signal
+  // If a job has delivery scheduled, it's a confirmed order
+  if (o.deliver_starts_at) return true
   if (o.ordered_at) return true
-  const sn = (o.state_name || '').toLowerCase()
-  if (sn === 'order' || sn === 'provisional' || sn === 'completed') return true
-  return false
+  // Last resort: all non-draft imported jobs are treated as orders
+  return true
 }
 
 
