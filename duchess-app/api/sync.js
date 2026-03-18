@@ -64,10 +64,10 @@ function toTime(iso) { return iso ? iso.slice(11, 16) : null }
 //   "Completed"  → import ✅
 
 function shouldImport(o) {
+  // Only exclude pure drafts (state = 1)
+  // Everything else gets imported — Live Jobs shows all, Schedule filters by is_order
   const state = o.state
-  if (state === 1) return false  // Draft/Quote only
-  if (state === 2 || state === 3 || state === 4) return true
-  // Fallback status name
+  if (state === 1) return false
   const s = (o.opportunity_status_name || '').toLowerCase()
   if (s === 'cancelled' || s === 'lost') return false
   return true
@@ -95,19 +95,18 @@ function mapStatus(crmsStatus) {
 // Also check state_name as fallback text matching
 
 function isConfirmedOrder(o) {
-  // state = 3 → Order (RED) → include in Schedule
-  // state = 1 → Draft/Quote (ORANGE) → exclude
-  // state = 2 → Provisional → include
-  // state = 4 → Completed → include
+  // state 3 = Order, state 4 = Completed = confirmed ORDER → Schedule
+  // state 2 = Provisional = confirmed ORDER → Schedule  
+  // state 1 = Draft = not confirmed → Live Jobs only
+  // For jobs with state 2 or 3 regardless of opportunity_status_name → Schedule
   const state = o.state
-  if (state === 3 || state === 4 || state === 2) return true
+  if (state === 3 || state === 4) return true
+  if (state === 2) return true
   if (state === 1) return false
-  // Fallback: state_name
-  const sn = (o.state_name || '').toLowerCase()
-  if (sn === 'order' || sn === 'completed' || sn === 'provisional') return true
-  if (sn === 'draft' || sn === 'quote' || sn === 'quotation') return false
-  // Last fallback: ordered_at
+  // No state field — use ordered_at or status name
   if (o.ordered_at) return true
+  const sn = (o.state_name || '').toLowerCase()
+  if (sn === 'order' || sn === 'provisional' || sn === 'completed') return true
   return false
 }
 
