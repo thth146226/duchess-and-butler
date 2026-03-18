@@ -93,16 +93,18 @@ function mapStatus(crmsStatus) {
 // Also check state_name as fallback text matching
 
 function isConfirmedOrder(o) {
-  // CONFIRMED by debug: state field is reliable
-  // state 3 = Order (RED)      → Schedule ✅
-  // state 2 = Quotation (ORANGE) → Live Jobs only ❌
-  // state 1 = Draft             → exclude entirely ❌
-  // state 4 = Completed         → Schedule ✅
+  // Single binary discriminator for Schedule:
+  // ordered_at is set when a Quotation (ORANGE) is converted to an Order (RED).
+  // ordered_at = null → still a Quotation → must not appear in Schedule.
+  if (o.ordered_at) return true
+
+  // Safety fallback for cases where ordered_at is missing/unparseable:
+  // state 3/4 represent Orders/confirmed work; state 1/2 represent non-confirmed work.
   const state = o.state == null ? null : Number(o.state)
   if (state === 3 || state === 4) return true
   if (state === 1 || state === 2) return false
-  // Unknown / unparseable state: do not let it into Schedule.
-  // Live Jobs remains broader and will still show it based on status/date fields.
+
+  // Unknown / unparseable state: fail closed for Schedule correctness.
   return false
 }
 
