@@ -284,18 +284,23 @@ export default async function handler(req, res) {
     // ── 1. Fetch ALL opportunities from Current RMS ──────────────────────────
     // No date filter — fetch everything so we don't miss confirmed orders
     // The shouldImport filter handles what gets saved
+    // Fetch all opportunities from list
     const allOpportunities = await fetchAllPages('/opportunities', 'opportunities', {})
 
-    stats.fetched = allOpportunities.length
-
-    // ── ISSUE 3: Filter out quotes / unconfirmed ─────────────────────────────
-    const opportunities = allOpportunities.filter(o => {
-      if (!shouldImport(o)) {
-        stats.skipped_quotes++
-        return false
-      }
-      return true
-    })
+    // Enrich each with detail endpoint to get state field
+    const enriched = await Promise.all(
+      allOpportunities.map(async (o) => {
+        try {
+          const detail = await crmsGet(`/opportunities/${o.id}`)
+          return detail.opportunity || o
+        } catch {
+          return o
+        }
+      })
+    )
+    const opportunities = enriched.filter(o => shouldImport(o))
+    stats.fetched = enriched.length
+    stats.skipped_quotes = enriched.length - opportunities.length
 
     // ── 2. Load existing Supabase records ────────────────────────────────────
     const { data: existingRecords } = await supabase
