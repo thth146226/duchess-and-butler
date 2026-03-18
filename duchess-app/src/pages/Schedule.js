@@ -30,7 +30,10 @@ function buildRuns(jobs) {
     // For CRMS jobs: only show confirmed orders (is_order = true)
     // For manual orders: show if status is confirmed
     if (job.crms_id !== null && job.crms_id !== undefined) {
-      if (!job.is_order) continue
+      // `is_order` is persisted by sync.js. Make the check strict and tolerant
+      // of boolean-ish representations (boolean true, 1, 'true', '1').
+      const isCrmsOrder = job.is_order === true || job.is_order === 1 || job.is_order === 'true' || job.is_order === '1'
+      if (!isCrmsOrder) continue
     } else {
       if (job.status === 'pending') continue
     }
