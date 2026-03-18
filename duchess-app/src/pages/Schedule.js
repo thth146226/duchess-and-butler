@@ -25,10 +25,15 @@ function getWeekRange(offset = 0) {
 function buildRuns(jobs) {
   const runs = []
   for (const job of jobs) {
-    // Only show confirmed work on the schedule — exclude pending/quotes and cancelled
     if (job.deleted) continue
     if (job.status === 'cancelled') continue
-    if (job.status === 'pending') continue
+    // For CRMS jobs: only show confirmed orders (is_order = true)
+    // For manual orders: show if status is confirmed
+    if (job.crms_id !== null && job.crms_id !== undefined) {
+      if (!job.is_order) continue
+    } else {
+      if (job.status === 'pending') continue
+    }
     const base = {
       job,
       client:             job.client_name,
