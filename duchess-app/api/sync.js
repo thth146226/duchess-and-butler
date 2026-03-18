@@ -64,7 +64,7 @@ function toTime(iso) { return iso ? iso.slice(11, 16) : null }
 //   "Completed"  → import ✅
 
 function shouldImport(o) {
-  const state = o.state
+  const state = o.state == null ? null : Number(o.state)
   if (state === 1) return false  // Draft only
   const s = (o.opportunity_status_name || '').toLowerCase()
   if (s === 'cancelled' || s === 'lost') return false
@@ -98,11 +98,11 @@ function isConfirmedOrder(o) {
   // state 2 = Quotation (ORANGE) → Live Jobs only ❌
   // state 1 = Draft             → exclude entirely ❌
   // state 4 = Completed         → Schedule ✅
-  const state = o.state
+  const state = o.state == null ? null : Number(o.state)
   if (state === 3 || state === 4) return true
   if (state === 1 || state === 2) return false
-  // state null from list endpoint — use ordered_at as signal
-  if (o.ordered_at) return true
+  // Unknown / unparseable state: do not let it into Schedule.
+  // Live Jobs remains broader and will still show it based on status/date fields.
   return false
 }
 
@@ -227,6 +227,9 @@ function detectChanges(existing, incoming) {
   const fields = [
     'event_name', 'client_name', 'venue', 'venue_address', 'event_date',
     'delivery_date', 'delivery_time', 'collection_date', 'collection_time',
+    // Keep schedule correctness in sync with classification:
+    // when an RMS Quotation becomes an Order (or vice versa) we must update is_order.
+    'is_order', 'ordered_at',
     'status', 'notes', 'special_instructions', 'total_value',
   ]
   for (const f of fields) {
