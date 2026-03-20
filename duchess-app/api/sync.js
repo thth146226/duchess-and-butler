@@ -218,6 +218,15 @@ function extractVenueAddress(o) {
 // ── field mapper ──────────────────────────────────────────────────────────────
 
 function mapOpportunity(o) {
+  if (
+    DEBUG_CRMS_CLASSIFICATION &&
+    (DEBUG_CRMS_IDS.length === 0 ||
+      DEBUG_CRMS_IDS.includes(String(o.id)) ||
+      DEBUG_CRMS_IDS.includes(String(o.number)) ||
+      DEBUG_CRMS_IDS.includes(String(o.reference)))
+  ) {
+    console.log(`[MAP] ${o.number} id=${o.id} state=${o.state} state_name=${o.state_name}`)
+  }
   // Delivery dates — read directly from scheduling fields
   const deliveryISO    = o.deliver_starts_at || o.load_starts_at    || null
   const collectionISO  = o.collect_starts_at || o.unload_starts_at  || null
