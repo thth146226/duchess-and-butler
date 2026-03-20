@@ -293,13 +293,11 @@ export default async function handler(req, res) {
 
   try {
     // ── 1. Fetch ALL opportunities from Current RMS ──────────────────────────
-    const since = new Date()
-    since.setMonth(since.getMonth() - 3)  // 3 months back
+    // Fixed window: 1st Jan 2026 onwards — operational jobs only
+    const since = new Date('2026-01-01')
     const until = new Date()
-    until.setMonth(until.getMonth() + 12) // 12 months forward
+    until.setFullYear(until.getFullYear() + 2)  // 2 years forward
 
-    // q[state_eq]=3 fetches ONLY confirmed Orders (red) in Current RMS
-    // Quotations (orange, state=1 or 2) are excluded at source
     const allOpportunities = await fetchAllPages('/opportunities', 'opportunities', {
       'q[starts_at_gteq]': since.toISOString().split('T')[0],
       'q[starts_at_lteq]': until.toISOString().split('T')[0],
