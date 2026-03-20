@@ -50,7 +50,8 @@ async function fetchAllPages(path, key, params = {}) {
   while (true) {
     const data = await crmsGet(path, { ...params, page, per_page: 50 })
     const items = data[key] || []
-    console.log(`Page ${page}: ${items.length} items, total so far: ${all.length + items.length}`)
+    const total = data.meta?.total_count || data.meta?.count || '?'
+    console.log(`Page ${page}: ${items.length} items, total so far: ${all.length + items.length}, API total: ${total}`)
     all = all.concat(items)
     if (items.length < 50) break
     page++
