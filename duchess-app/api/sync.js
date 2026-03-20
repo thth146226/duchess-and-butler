@@ -295,6 +295,7 @@ function detectChanges(existing, incoming) {
     'delivery_date', 'delivery_time', 'collection_date', 'collection_time',
     // Keep schedule correctness in sync with classification:
     // when an RMS Quotation becomes an Order (or vice versa) we must update is_order.
+    'crms_state', 'crms_state_name',
     'is_order', 'ordered_at',
     'status', 'notes', 'special_instructions', 'total_value',
   ]
@@ -419,9 +420,18 @@ export default async function handler(req, res) {
           const changes = detectChanges(existing, mapped)
 
           if (changes.length > 0) {
+            const updatePayload = {
+              ...mapped,
+              // Explicitly pin classification fields to avoid accidental omissions
+              crms_state: mapped.crms_state,
+              crms_state_name: mapped.crms_state_name,
+              is_order: mapped.is_order,
+              ordered_at: mapped.ordered_at,
+              sync_change_count: (existing.sync_change_count || 0) + 1,
+            }
             await supabase
               .from('crms_jobs')
-              .update({ ...mapped, sync_change_count: (existing.sync_change_count || 0) + 1 })
+              .update(updatePayload)
               .eq('crms_id', mapped.crms_id)
 
             for (const change of changes) {
@@ -451,7 +461,13 @@ export default async function handler(req, res) {
           } else {
             await supabase
               .from('crms_jobs')
-              .update({ last_synced_at: new Date().toISOString() })
+              .update({
+                last_synced_at: new Date().toISOString(),
+                crms_state: mapped.crms_state,
+                crms_state_name: mapped.crms_state_name,
+                is_order: mapped.is_order,
+                ordered_at: mapped.ordered_at,
+              })
               .eq('crms_id', mapped.crms_id)
             stats.unchanged++
           }
