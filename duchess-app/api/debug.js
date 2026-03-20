@@ -4,7 +4,7 @@ const HEADERS = { 'X-AUTH-TOKEN': CRMS_API_KEY, 'X-SUBDOMAIN': CRMS_SUBDOMAIN }
 
 module.exports = async function handler(req, res) {
   try {
-    const refs = ['QDB7542','QDB7710','QDB7661','QDB7690','QDB7606','QDB7601','QDB7646','QDB7691']
+    const refs = ['QDB7629','QDB7708']
     const results = []
     for (const ref of refs) {
       const r = await fetch(
