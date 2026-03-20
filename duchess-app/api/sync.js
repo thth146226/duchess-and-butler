@@ -105,15 +105,11 @@ function mapStatus(crmsStatus) {
 // Also check state_name as fallback text matching
 
 function isConfirmedOrder(o) {
-  // state available (from previous enrich or detail)
+  // All opportunities fetched already have state=3 (confirmed Order)
+  // This function is now a safety net only
   const state = o.state
-  if (state === 3 || state === 4) return true
-  if (state === 1) return false
-  if (state === 2) return false
-  // state not available — use ordered_at
-  // ordered_at is set when a Quotation is converted to an Order
-  if (o.ordered_at) return true
-  return false
+  if (state === 1 || state === 2) return false
+  return true
 }
 
 
