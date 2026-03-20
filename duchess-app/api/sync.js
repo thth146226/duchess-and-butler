@@ -302,14 +302,17 @@ export default async function handler(req, res) {
     const until = new Date()
     until.setMonth(until.getMonth() + 12) // 12 months forward
 
+    // q[state_eq]=3 fetches ONLY confirmed Orders (red) in Current RMS
+    // Quotations (orange, state=1 or 2) are excluded at source
     const allOpportunities = await fetchAllPages('/opportunities', 'opportunities', {
       'q[starts_at_gteq]': since.toISOString().split('T')[0],
       'q[starts_at_lteq]': until.toISOString().split('T')[0],
+      'q[state_eq]': '3',
       'q[s]': 'starts_at asc',
     })
     const opportunities = allOpportunities.filter(o => shouldImport(o))
     stats.fetched = allOpportunities.length
-    stats.skipped_quotes = allOpportunities.length - opportunities.length
+    stats.skipped_quotes = 0
 
     // ── 2. Load existing Supabase records ────────────────────────────────────
     const { data: existingRecords } = await supabase
