@@ -355,14 +355,14 @@ export default async function handler(req, res) {
   try {
     // ── 1. Fetch ALL opportunities from Current RMS ──────────────────────────
     const since = new Date()
-    since.setFullYear(since.getFullYear() - 2)
+    since.setMonth(since.getMonth() - 3)  // 3 months back
+    const until = new Date()
+    until.setMonth(until.getMonth() + 12) // 12 months forward
 
-    // Filter opportunities from the last 2 years
-    // The shouldImport filter handles what gets saved
-    // Fetch all opportunities from list
     const allOpportunities = await fetchAllPages('/opportunities', 'opportunities', {
       'q[starts_at_gteq]': since.toISOString().split('T')[0],
-      per_page: 50,
+      'q[starts_at_lteq]': until.toISOString().split('T')[0],
+      'q[s]': 'starts_at asc',
     })
 
     const enriched = await Promise.all(
