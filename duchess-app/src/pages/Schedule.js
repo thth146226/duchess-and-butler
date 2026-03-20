@@ -27,14 +27,15 @@ function buildRuns(jobs) {
   for (const job of jobs) {
     if (job.deleted) continue
     if (job.status === 'cancelled') continue
-    // For CRMS jobs: only show confirmed orders (is_order = true)
-    // For manual orders: show if status is confirmed
+    // For CRMS jobs: sync fetches state=3 only; exclude cancelled / no dates
+    // For manual orders: show if status is confirmed (not pending)
     if (job.crms_id !== null && job.crms_id !== undefined) {
-      // `is_order` is persisted by sync.js. Make the check strict and tolerant
-      // of boolean-ish representations (boolean true, 1, 'true', '1').
-      const isCrmsOrder = job.is_order === true || job.is_order === 1 || job.is_order === 'true' || job.is_order === '1'
-      if (!isCrmsOrder) continue
+      // Only confirmed Orders arrive from sync (state=3 filter at API level)
+      // Just exclude cancelled and jobs with no dates at all
+      if (job.status === 'cancelled') continue
+      if (!job.delivery_date && !job.collection_date) continue
     } else {
+      // Manual orders: only show confirmed
       if (job.status === 'pending') continue
     }
     const base = {
