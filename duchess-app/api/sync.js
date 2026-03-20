@@ -365,18 +365,19 @@ export default async function handler(req, res) {
       per_page: 50,
     })
 
-    // Enrich each with detail endpoint to get state field
     const enriched = await Promise.all(
       allOpportunities.map(async (o) => {
         try {
           const detail = await crmsGet(`/opportunities/${o.id}`)
           const full = detail.opportunity || detail
-          if (o.number === 'QDB7723' || o.number === 'QDB7720') {
-            console.log(`[DEBUG] ${o.number} state=${full.state} state_name=${full.state_name} keys=${Object.keys(full).filter(k => k.includes('state')).join(',')}`)
+          // Merge state fields from detail into the list object
+          return {
+            ...o,
+            state: full.state ?? o.state,
+            state_name: full.state_name ?? o.state_name,
+            ordered_at: full.ordered_at ?? o.ordered_at,
           }
-          return full
-        } catch (e) {
-          console.log(`[DEBUG] enrich failed for ${o.id}: ${e.message}`)
+        } catch {
           return o
         }
       })
