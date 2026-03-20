@@ -77,10 +77,21 @@ function toTime(iso) { return iso ? iso.slice(11, 16) : null }
 //   "Completed"  → import ✅
 
 function shouldImport(o) {
-  const state = o.state == null ? null : Number(o.state)
-  if (state === 1) return false  // Draft only
-  const s = (o.opportunity_status_name || '').toLowerCase()
-  if (s === 'cancelled' || s === 'lost') return false
+  // Exclude anything explicitly marked as Quotation in the interface
+  const stateName = (o.state_name || '').toLowerCase()
+  const statusName = (o.opportunity_status_name || '').toLowerCase()
+
+  // Exclude Quotations and Drafts by state_name
+  if (stateName === 'quotation') return false
+  if (stateName === 'draft') return false
+
+  // Exclude by opportunity_status_name
+  if (statusName === 'cancelled' || statusName === 'lost') return false
+
+  // Must have ordered_at to be a confirmed Order
+  // ordered_at is set when a Quotation is converted to an Order in Current RMS
+  if (!o.ordered_at) return false
+
   return true
 }
 
