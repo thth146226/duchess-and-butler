@@ -4,19 +4,25 @@ const HEADERS = { 'X-AUTH-TOKEN': CRMS_API_KEY, 'X-SUBDOMAIN': CRMS_SUBDOMAIN }
 
 module.exports = async function handler(req, res) {
   try {
-    const since = new Date()
-    since.setMonth(since.getMonth() - 3)
-    const until = new Date()
-    until.setMonth(until.getMonth() + 12)
-
     const r = await fetch(
-      `https://api.current-rms.com/api/v1/opportunities?per_page=1&q[starts_at_gteq]=${since.toISOString().split('T')[0]}&q[starts_at_lteq]=${until.toISOString().split('T')[0]}`,
+      'https://api.current-rms.com/api/v1/opportunities?per_page=5&q[s]=starts_at+asc',
       { headers: HEADERS }
     )
     const d = await r.json()
-    return res.status(200).json({
-      date_range: { since: since.toISOString().split('T')[0], until: until.toISOString().split('T')[0] },
-      meta: d.meta,
+    const sample = (d.opportunities || []).map(o => ({
+      id: o.id,
+      number: o.number,
+      name: o.name,
+      state: o.state,
+      state_name: o.state_name,
+      opportunity_status_name: o.opportunity_status_name,
+      ordered_at: o.ordered_at,
+      starts_at: o.starts_at,
+      deliver_starts_at: o.deliver_starts_at,
+    }))
+    return res.status(200).json({ 
+      total: d.meta?.total_row_count,
+      sample 
     })
   } catch (err) {
     return res.status(500).json({ error: err.message })
