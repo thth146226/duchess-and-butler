@@ -77,22 +77,20 @@ function toTime(iso) { return iso ? iso.slice(11, 16) : null }
 //   "Completed"  → import ✅
 
 function shouldImport(o) {
-  // Exclude anything explicitly marked as Quotation in the interface
+  // state_name is the ONLY reliable field to distinguish Orders from Quotations
+  // state=3 / state_name="Order" = confirmed (red in Current RMS UI)
+  // state=2 / state_name="Quotation" = not confirmed (orange in Current RMS UI)
+  // state=1 / state_name="Draft" = draft
+  
   const stateName = (o.state_name || '').toLowerCase()
-  const statusName = (o.opportunity_status_name || '').toLowerCase()
+  const state = o.state == null ? null : Number(o.state)
 
-  // Exclude Quotations and Drafts by state_name
-  if (stateName === 'quotation') return false
-  if (stateName === 'draft') return false
+  // Must be a confirmed Order
+  if (stateName === 'order') return true
+  if (state === 3) return true
 
-  // Exclude by opportunity_status_name
-  if (statusName === 'cancelled' || statusName === 'lost') return false
-
-  // Must have ordered_at to be a confirmed Order
-  // ordered_at is set when a Quotation is converted to an Order in Current RMS
-  if (!o.ordered_at) return false
-
-  return true
+  // Exclude everything else — Quotations, Drafts, Cancelled, Lost
+  return false
 }
 
 function mapStatus(crmsStatus) {
