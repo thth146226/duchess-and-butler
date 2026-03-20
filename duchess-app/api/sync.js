@@ -354,10 +354,16 @@ export default async function handler(req, res) {
 
   try {
     // ── 1. Fetch ALL opportunities from Current RMS ──────────────────────────
-    // No date filter — fetch everything so we don't miss confirmed orders
+    const since = new Date()
+    since.setFullYear(since.getFullYear() - 2)
+
+    // Filter opportunities from the last 2 years
     // The shouldImport filter handles what gets saved
     // Fetch all opportunities from list
-    const allOpportunities = await fetchAllPages('/opportunities', 'opportunities', {})
+    const allOpportunities = await fetchAllPages('/opportunities', 'opportunities', {
+      'q[starts_at_gteq]': since.toISOString().split('T')[0],
+      per_page: 50,
+    })
 
     // Enrich each with detail endpoint to get state field
     const enriched = await Promise.all(
