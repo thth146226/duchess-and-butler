@@ -361,8 +361,13 @@ export default async function handler(req, res) {
       allOpportunities.map(async (o) => {
         try {
           const detail = await crmsGet(`/opportunities/${o.id}`)
-          return detail.opportunity || o
-        } catch {
+          const full = detail.opportunity || detail
+          if (o.number === 'QDB7723' || o.number === 'QDB7720') {
+            console.log(`[DEBUG] ${o.number} state=${full.state} state_name=${full.state_name} keys=${Object.keys(full).filter(k => k.includes('state')).join(',')}`)
+          }
+          return full
+        } catch (e) {
+          console.log(`[DEBUG] enrich failed for ${o.id}: ${e.message}`)
           return o
         }
       })
