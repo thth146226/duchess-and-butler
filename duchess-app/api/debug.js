@@ -4,38 +4,23 @@ const HEADERS = { 'X-AUTH-TOKEN': CRMS_API_KEY, 'X-SUBDOMAIN': CRMS_SUBDOMAIN }
 
 module.exports = async function handler(req, res) {
   try {
-    // First get the ID for QDB7723
-    const r1 = await fetch(
-      `https://api.current-rms.com/api/v1/opportunities?q[number_eq]=QDB7723`,
-      { headers: HEADERS }
-    )
-    const d1 = await r1.json()
-    const opp = d1.opportunities?.[0]
-    if (!opp) return res.status(200).json({ error: 'QDB7723 not found' })
-
-    // Now get detail by ID
-    const r2 = await fetch(
-      `https://api.current-rms.com/api/v1/opportunities/${opp.id}`,
-      { headers: HEADERS }
-    )
-    const d2 = await r2.json()
-
-    return res.status(200).json({
-      list_endpoint: {
-        id: opp.id,
-        number: opp.number,
-        state: opp.state,
-        state_name: opp.state_name,
-        top_keys: Object.keys(opp).slice(0, 20),
-      },
-      detail_endpoint: {
-        top_level_keys: Object.keys(d2),
-        state: d2.state,
-        state_name: d2.state_name,
-        opportunity_state: d2.opportunity?.state,
-        opportunity_state_name: d2.opportunity?.state_name,
-      }
-    })
+    const refs = ['QDB7678','QDB7719','QDB7650','QDB7724','QDB7727','QDB7720','QDB7723','QDB7533','QDB7586','QDB7741','QDB7742','QDB7730','QDB7474','QDB7048','QDB7365','QDB7582','QDB7704']
+    const results = []
+    for (const ref of refs) {
+      const r = await fetch(
+        `https://api.current-rms.com/api/v1/opportunities?q[number_eq]=${ref}`,
+        { headers: HEADERS }
+      )
+      const d = await r.json()
+      const o = d.opportunities?.[0]
+      if (o) results.push({
+        number: o.number,
+        state: o.state,
+        state_name: o.state_name,
+        ordered_at: o.ordered_at ? 'yes' : null,
+      })
+    }
+    return res.status(200).json({ results })
   } catch (err) {
     return res.status(500).json({ error: err.message })
   }
