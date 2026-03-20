@@ -105,71 +105,14 @@ function mapStatus(crmsStatus) {
 // Also check state_name as fallback text matching
 
 function isConfirmedOrder(o) {
-  const stateNum = o?.state == null ? null : Number(o.state)
-  const orderedAt = o?.ordered_at || null
-
-  // Single binary discriminator for Schedule:
-  // Use Current RMS `state` as primary truth:
-  // - state 3/4 = Order/confirmed → Schedule
-  // - state 1/2 = Quote/quotation/provisional → never Schedule
-  //
-  // ordered_at is NOT a reliable discriminator by itself (it can be present for quotations).
-  if (stateNum === 3 || stateNum === 4) {
-    const is_order = true
-    if (DEBUG_CRMS_CLASSIFICATION && (DEBUG_CRMS_IDS.length === 0 || DEBUG_CRMS_IDS.includes(String(o.id)) || DEBUG_CRMS_IDS.includes(String(o.number)) || DEBUG_CRMS_IDS.includes(String(o.reference)))) {
-      console.log('[crms_classify]', JSON.stringify({
-        crms_id: String(o.id),
-        crms_ref: o.number || o.reference || null,
-        candidates: {
-          ordered_at: orderedAt,
-          state: o.state,
-          state_name: o.state_name,
-          opportunity_status_name: o.opportunity_status_name || o.status_name || null,
-        },
-        is_order,
-        include_in_schedule: is_order,
-        reason: `state=${stateNum} implies order`
-      }))
-    }
-    return is_order
-  }
-  if (stateNum === 1 || stateNum === 2) {
-    const is_order = false
-    if (DEBUG_CRMS_CLASSIFICATION && (DEBUG_CRMS_IDS.length === 0 || DEBUG_CRMS_IDS.includes(String(o.id)) || DEBUG_CRMS_IDS.includes(String(o.number)) || DEBUG_CRMS_IDS.includes(String(o.reference)))) {
-      console.log('[crms_classify]', JSON.stringify({
-        crms_id: String(o.id),
-        crms_ref: o.number || o.reference || null,
-        candidates: {
-          ordered_at: orderedAt,
-          state: o.state,
-          state_name: o.state_name,
-          opportunity_status_name: o.opportunity_status_name || o.status_name || null,
-        },
-        is_order,
-        include_in_schedule: is_order,
-        reason: `state=${stateNum} implies quotation/draft`
-      }))
-    }
-    return is_order
-  }
-
-  // Unknown / unparseable state: fail closed for Schedule correctness.
-  const is_order = false
-  if (DEBUG_CRMS_CLASSIFICATION && (DEBUG_CRMS_IDS.length === 0 || DEBUG_CRMS_IDS.includes(String(o.id)) || DEBUG_CRMS_IDS.includes(String(o.number)) || DEBUG_CRMS_IDS.includes(String(o.reference)))) {
-    console.log('[crms_classify]', JSON.stringify({
-      crms_id: String(o.id),
-      crms_ref: o.number || o.reference || null,
-      candidates: {
-        ordered_at: orderedAt,
-        state: o.state,
-        state_name: o.state_name,
-        opportunity_status_name: o.opportunity_status_name || o.status_name || null,
-      },
-      is_order,
-      include_in_schedule: is_order,
-      reason: 'state not in {1,2,3,4} (fail closed)'
-    }))
-  }
+  // state available (from previous enrich or detail)
+  const state = o.state
+  if (state === 3 || state === 4) return true
+  if (state === 1) return false
+  if (state === 2) return false
+  // state not available — use ordered_at
+  // ordered_at is set when a Quotation is converted to an Order
+  if (o.ordered_at) return true
   return false
 }
 
@@ -364,27 +307,9 @@ export default async function handler(req, res) {
       'q[starts_at_lteq]': until.toISOString().split('T')[0],
       'q[s]': 'starts_at asc',
     })
-
-    const enriched = await Promise.all(
-      allOpportunities.map(async (o) => {
-        try {
-          const detail = await crmsGet(`/opportunities/${o.id}`)
-          const full = detail.opportunity || detail
-          // Merge state fields from detail into the list object
-          return {
-            ...o,
-            state: full.state ?? o.state,
-            state_name: full.state_name ?? o.state_name,
-            ordered_at: full.ordered_at ?? o.ordered_at,
-          }
-        } catch {
-          return o
-        }
-      })
-    )
-    const opportunities = enriched.filter(o => shouldImport(o))
-    stats.fetched = enriched.length
-    stats.skipped_quotes = enriched.length - opportunities.length
+    const opportunities = allOpportunities.filter(o => shouldImport(o))
+    stats.fetched = allOpportunities.length
+    stats.skipped_quotes = allOpportunities.length - opportunities.length
 
     // ── 2. Load existing Supabase records ────────────────────────────────────
     const { data: existingRecords } = await supabase
