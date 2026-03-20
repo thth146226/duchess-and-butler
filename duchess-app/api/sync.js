@@ -293,16 +293,16 @@ export default async function handler(req, res) {
 
   try {
     // ── 1. Fetch ALL opportunities from Current RMS ──────────────────────────
-    // Fixed window: 1st Jan 2026 onwards — operational jobs only
-    const since = new Date('2026-01-01')
+    // Fetch all Orders from 2026-01-01 forward using deliver_starts_at
+    // This captures all operationally relevant jobs (42 confirmed Orders)
     const until = new Date()
-    until.setFullYear(until.getFullYear() + 2)  // 2 years forward
+    until.setFullYear(until.getFullYear() + 2)
 
     const allOpportunities = await fetchAllPages('/opportunities', 'opportunities', {
-      'q[starts_at_gteq]': since.toISOString().split('T')[0],
-      'q[starts_at_lteq]': until.toISOString().split('T')[0],
+      'q[deliver_starts_at_gteq]': '2026-01-01',
+      'q[deliver_starts_at_lteq]': until.toISOString().split('T')[0],
       'q[state_eq]': '3',
-      'q[s]': 'starts_at asc',
+      'q[s]': 'deliver_starts_at asc',
     })
     const opportunities = allOpportunities.filter(o => shouldImport(o))
     stats.fetched = allOpportunities.length
