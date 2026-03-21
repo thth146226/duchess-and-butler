@@ -314,6 +314,17 @@ export default async function handler(req, res) {
       'q[state_eq]': '3',
       'q[s]': 'starts_at asc',
     })
+
+    // Remove any existing Supabase records that are NOT in the
+    // current API results (state=3 Orders only)
+    const validCrmsIds = allOpportunities.map(o => String(o.id))
+    if (validCrmsIds.length > 0) {
+      await supabase
+        .from('crms_jobs')
+        .delete()
+        .not('crms_id', 'in', `(${validCrmsIds.join(',')})`)
+    }
+
     const opportunities = allOpportunities.filter(o => shouldImport(o))
     stats.fetched = allOpportunities.length
     stats.skipped_quotes = allOpportunities.length - opportunities.length
