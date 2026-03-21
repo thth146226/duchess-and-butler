@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
+import JobNotes from '../components/JobNotes'
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
 const today    = new Date().toISOString().split('T')[0]
@@ -106,6 +107,7 @@ export default function Schedule() {
   const [assigningDriver2, setAssigningDriver2] = useState(null)
   const [driver1Runs, setDriver1Runs]           = useState('both')
   const [driver2Runs, setDriver2Runs]           = useState('both')
+  const [jobNotes, setJobNotes]                 = useState({})
 
   function showToast(msg, type = 'success') {
     setToast({ msg, type })
@@ -119,6 +121,7 @@ export default function Schedule() {
     const channel = supabase.channel('schedule-crms')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'crms_jobs' }, fetchJobs)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' },    fetchJobs)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'job_notes' }, fetchJobs)
       .subscribe()
     return () => supabase.removeChannel(channel)
   }, [])
@@ -137,8 +140,26 @@ export default function Schedule() {
       crms_ref: o.ref,
       is_manual: true,
     }))
-    setJobs([...crmsJobs, ...manualJobs])
+    const merged = [...crmsJobs, ...manualJobs]
+    setJobs(merged)
+    fetchNotesCount(merged.map(j => j.id))
     setLoading(false)
+  }
+
+  async function fetchNotesCount(jobIds) {
+    if (!jobIds.length) return
+    const { data } = await supabase
+      .from('job_notes')
+      .select('job_id, category')
+      .in('job_id', jobIds)
+    if (!data) return
+    const counts = {}
+    for (const n of data) {
+      if (!counts[n.job_id]) counts[n.job_id] = { total: 0, hasUrgent: false }
+      counts[n.job_id].total++
+      if (n.category === 'urgent') counts[n.job_id].hasUrgent = true
+    }
+    setJobNotes(counts)
   }
 
   async function fetchDrivers() {
@@ -348,6 +369,7 @@ export default function Schedule() {
           onSelect={setSelectedRun}
           today={today}
           tomorrow={tomorrow}
+          jobNotes={jobNotes}
         />
       )}
 
@@ -381,6 +403,7 @@ export default function Schedule() {
           driver2Runs={driver2Runs}
           setDriver2Runs={setDriver2Runs}
           saveAssignment={saveAssignment}
+          jobNotes={jobNotes}
         />
       )}
 
@@ -404,7 +427,7 @@ export default function Schedule() {
 }
 
 // ── LIST VIEW ─────────────────────────────────────────────────────────────────
-function ListView({ filteredRuns, allRuns, groupByDriver, setGroup, drivers, onSelect, today, tomorrow }) {
+function ListView({ filteredRuns, allRuns, groupByDriver, setGroup, drivers, onSelect, today, tomorrow, jobNotes }) {
   if (filteredRuns.length === 0) return (
     <div style={{ textAlign: 'center', padding: '48px', color: '#9CA3AF', fontSize: '14px' }}>
       No schedule entries for this filter
@@ -428,14 +451,14 @@ function ListView({ filteredRuns, allRuns, groupByDriver, setGroup, drivers, onS
       {groupByDriver
         ? <GroupedByDriverView runs={filteredRuns} drivers={drivers} onSelect={onSelect} />
         : Object.entries(grouped).map(([date, runs]) => (
-          <DateGroup key={date} date={date} runs={runs} onSelect={onSelect} today={today} tomorrow={tomorrow} />
+          <DateGroup key={date} date={date} runs={runs} onSelect={onSelect} today={today} tomorrow={tomorrow} jobNotes={jobNotes} />
         ))
       }
     </div>
   )
 }
 
-function DateGroup({ date, runs, onSelect, today, tomorrow }) {
+function DateGroup({ date, runs, onSelect, today, tomorrow, jobNotes }) {
   const isToday = date === today
   const isTomorrow = date === tomorrow
   return (
@@ -457,10 +480,10 @@ function DateGroup({ date, runs, onSelect, today, tomorrow }) {
       <div style={S.card}>
         <table style={S.table}>
           <thead>
-            <tr>{['D/C','Time','Event / Client','Venue','Driver','Ref','Status',''].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
+            <tr>{['D/C','Time','Event / Client','Venue','Driver','Notes','Ref','Status',''].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
           </thead>
           <tbody>
-            {runs.map((run, i) => <RunRow key={i} run={run} onSelect={onSelect} />)}
+            {runs.map((run, i) => <RunRow key={i} run={run} onSelect={onSelect} jobNotes={jobNotes} />)}
           </tbody>
         </table>
       </div>
@@ -468,7 +491,7 @@ function DateGroup({ date, runs, onSelect, today, tomorrow }) {
   )
 }
 
-function RunRow({ run, onSelect }) {
+function RunRow({ run, onSelect, jobNotes }) {
   const colors = run.runType === 'DEL'
     ? { badge: '#EF4444' }
     : { badge: '#22C55E' }
@@ -519,6 +542,19 @@ function RunRow({ run, onSelect }) {
             }}>Unassigned</span>
           )}
         </div>
+      </td>
+      <td style={S.td}>
+        {jobNotes[run.jobId]?.total > 0 ? (
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: '3px',
+            fontSize: '10px', fontWeight: '500', padding: '2px 7px',
+            borderRadius: '10px', cursor: 'pointer',
+            background: jobNotes[run.jobId]?.hasUrgent ? '#FCEBEB' : '#F7F3EE',
+            color: jobNotes[run.jobId]?.hasUrgent ? '#A32D2D' : '#B8965A',
+          }}>
+            {jobNotes[run.jobId]?.hasUrgent ? '⚠' : '📋'} {jobNotes[run.jobId]?.total}
+          </span>
+        ) : null}
       </td>
       <td style={{ ...S.td, fontFamily: "'Cormorant Garamond', serif", fontSize: '14px', color: '#B8965A' }}>{run.ref}</td>
       <td style={S.td}>
@@ -739,6 +775,76 @@ function DispatchCard({ run, drivers, onSelect, onAssign, isSaving }) {
   )
 }
 
+// ── RUN DETAIL: ITEMS / CHANGES (tabs) ─────────────────────────────────────────
+function RunDetailItems({ run }) {
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    if (!run.crmsId || !run.jobId) {
+      setItems([])
+      setLoading(false)
+      return
+    }
+    let cancelled = false
+    supabase.from('crms_job_items').select('id, item_name, quantity, unit, category').eq('job_id', run.jobId).then(({ data }) => {
+      if (!cancelled) {
+        setItems(data || [])
+        setLoading(false)
+      }
+    })
+    return () => { cancelled = true }
+  }, [run.jobId, run.crmsId])
+  if (!run.crmsId) {
+    return <div style={{ color: '#6B6860', fontSize: '13px', lineHeight: 1.6 }}>Equipment line items are available for jobs imported from Current RMS.</div>
+  }
+  if (loading) return <div style={{ color: '#9CA3AF', fontSize: '13px' }}>Loading items…</div>
+  if (!items.length) return <div style={{ color: '#9CA3AF', fontSize: '13px' }}>No line items synced yet.</div>
+  return (
+    <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+      {items.map(it => (
+        <li key={it.id} style={{ padding: '10px 0', borderBottom: '1px solid #EDE8E0', fontSize: '13px' }}>
+          <span style={{ fontWeight: '600' }}>{it.item_name}</span>
+          <span style={{ color: '#6B6860', marginLeft: '8px' }}>×{it.quantity} {it.unit}</span>
+          {it.category && <span style={{ fontSize: '11px', color: '#9CA3AF', marginLeft: '8px' }}>({it.category})</span>}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function RunDetailChanges({ run }) {
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    if (!run.ref) {
+      setRows([])
+      setLoading(false)
+      return
+    }
+    let cancelled = false
+    supabase.from('change_log').select('*').eq('job_ref', run.ref).order('detected_at', { ascending: false }).limit(40).then(({ data }) => {
+      if (!cancelled) {
+        setRows(data || [])
+        setLoading(false)
+      }
+    })
+    return () => { cancelled = true }
+  }, [run.ref])
+  if (loading) return <div style={{ color: '#9CA3AF', fontSize: '13px' }}>Loading changes…</div>
+  if (!rows.length) return <div style={{ color: '#9CA3AF', fontSize: '13px' }}>No sync changes recorded for this job.</div>
+  return (
+    <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+      {rows.map(c => (
+        <li key={c.id} style={{ padding: '10px 0', borderBottom: '1px solid #EDE8E0', fontSize: '12px' }}>
+          <div style={{ fontWeight: '600', color: '#1C1C1E' }}>{c.field_changed?.replace(/_/g, ' ')} — {c.event_name}</div>
+          <div style={{ color: '#6B6860', marginTop: '4px' }}>{c.old_value || '(empty)'} → {c.new_value}</div>
+          <div style={{ fontSize: '10px', color: '#9CA3AF', marginTop: '4px' }}>{c.detected_at && new Date(c.detected_at).toLocaleString('en-GB')}</div>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 // ── RUN DETAIL PANEL ──────────────────────────────────────────────────────────
 function RunDetailPanel({
   run,
@@ -754,7 +860,11 @@ function RunDetailPanel({
   driver2Runs,
   setDriver2Runs,
   saveAssignment,
+  jobNotes,
 }) {
+  const [tab, setTab] = useState('details')
+  useEffect(() => { setTab('details') }, [run.id])
+
   const isSaving = assigningId === run.id
   const colors = run.runType === 'DEL'
     ? { border: '#EF4444', badge: '#EF4444', bg: '#FEF2F2' }
@@ -776,7 +886,17 @@ function RunDetailPanel({
         </div>
 
         <div style={{ padding: '24px 28px', overflowY: 'auto' }}>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '16px', borderBottom: '1px solid #EDE8E0', paddingBottom: '12px' }}>
+            <button type="button" style={{ ...S.tabBtn, ...(tab === 'details' ? S.tabBtnActive : {}) }} onClick={() => setTab('details')}>Details</button>
+            <button type="button" style={{ ...S.tabBtn, ...(tab === 'items' ? S.tabBtnActive : {}) }} onClick={() => setTab('items')}>Items</button>
+            <button type="button" style={{ ...S.tabBtn, ...(tab === 'changes' ? S.tabBtnActive : {}) }} onClick={() => setTab('changes')}>Changes</button>
+            <button type="button" style={{ ...S.tabBtn, ...(tab === 'notes' ? S.tabBtnActive : {}) }} onClick={() => setTab('notes')}>
+              Notes {jobNotes[run.jobId]?.total > 0 ? `(${jobNotes[run.jobId].total})` : ''}
+            </button>
+          </div>
 
+          {tab === 'details' && (
+          <>
           {/* Details grid */}
           <div style={S.sectionLabel}>{run.runType === 'DEL' ? 'Delivery' : 'Collection'} Details</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
@@ -995,6 +1115,20 @@ function RunDetailPanel({
               ? 'Auto-generated from Current RMS. Driver assignments are stored in this platform only.'
               : 'Manual order created in this platform.'}
           </div>
+          </>
+          )}
+
+          {tab === 'items' && <RunDetailItems run={run} />}
+          {tab === 'changes' && <RunDetailChanges run={run} />}
+          {tab === 'notes' && (
+            <div>
+              <JobNotes
+                jobId={run.jobId}
+                jobTable={run.crmsId ? 'crms_jobs' : 'orders'}
+                crmsRef={run.ref}
+              />
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1319,4 +1453,6 @@ const S = {
   divider:       { border: 'none', borderTop: '1px solid #DDD8CF', margin: '20px 0' },
   driverBtn:     { padding: '8px 16px', border: '1.5px solid #DDD8CF', borderRadius: '20px', background: 'transparent', color: '#1C1C1E', fontSize: '13px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", fontWeight: '500' },
   assignBtn:     { padding: '5px 10px', border: '1.5px solid #DDD8CF', borderRadius: '12px', background: 'transparent', color: '#6B6860', fontSize: '11px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
+  tabBtn:        { padding: '6px 12px', borderRadius: '6px', border: '1px solid #DDD8CF', background: 'transparent', color: '#6B6860', fontSize: '12px', fontWeight: '500', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
+  tabBtnActive:  { background: '#1C1C1E', color: '#fff', borderColor: '#1C1C1E' },
 }
