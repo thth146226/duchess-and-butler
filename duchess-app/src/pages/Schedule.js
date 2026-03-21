@@ -487,9 +487,38 @@ function RunRow({ run, onSelect }) {
       </td>
       <td style={{ ...S.td, fontSize: '12px', color: '#6B6860', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{run.venue || '—'}</td>
       <td style={S.td}>
-        {run.driverName
-          ? <span style={{ background: run.driverColour || '#3D5A73', color: 'white', padding: '3px 10px', borderRadius: '12px', fontSize: '11.5px', fontWeight: '600' }}>{run.driverName}</span>
-          : <span style={{ color: '#D1D5DB', fontSize: '12px' }}>—</span>}
+        <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+          {run.driverName && (
+            <span style={{
+              background: run.driverColour || '#3D5A73',
+              color: 'white',
+              fontSize: '11px',
+              fontWeight: '600',
+              padding: '3px 10px',
+              borderRadius: '10px'
+            }}>{run.driverName}</span>
+          )}
+          {run.driverName2 && (
+            <span style={{
+              background: run.driverColour2 || '#5F5E5A',
+              color: 'white',
+              fontSize: '11px',
+              fontWeight: '600',
+              padding: '3px 10px',
+              borderRadius: '10px'
+            }}>{run.driverName2}</span>
+          )}
+          {!run.driverName && !run.driverName2 && (
+            <span style={{
+              background: '#FEF3C7',
+              color: '#92400E',
+              fontSize: '11px',
+              fontWeight: '500',
+              padding: '3px 10px',
+              borderRadius: '10px'
+            }}>Unassigned</span>
+          )}
+        </div>
       </td>
       <td style={{ ...S.td, fontFamily: "'Cormorant Garamond', serif", fontSize: '14px', color: '#B8965A' }}>{run.ref}</td>
       <td style={S.td}>
@@ -1077,9 +1106,38 @@ function MonthView({ allRuns, monthDate, setMonthDate, onSelect }) {
                       <td style={S.td}><div style={{ fontWeight: 500 }}>{run.event || run.client}</div><div style={{ fontSize: '11px', color: '#6B6860' }}>{run.client}</div></td>
                       <td style={{ ...S.td, fontSize: '12px', color: '#6B6860' }}>{run.venue || '—'}</td>
                       <td style={S.td}>
-                        {run.driverName
-                          ? <span style={{ background: run.driverColour || '#3D5A73', color: 'white', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: '600' }}>{run.driverName}</span>
-                          : <span style={{ color: '#D1D5DB', fontSize: '11px' }}>—</span>}
+                        <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                          {run.driverName && (
+                            <span style={{
+                              background: run.driverColour || '#3D5A73',
+                              color: 'white',
+                              fontSize: '11px',
+                              fontWeight: '600',
+                              padding: '3px 10px',
+                              borderRadius: '10px'
+                            }}>{run.driverName}</span>
+                          )}
+                          {run.driverName2 && (
+                            <span style={{
+                              background: run.driverColour2 || '#5F5E5A',
+                              color: 'white',
+                              fontSize: '11px',
+                              fontWeight: '600',
+                              padding: '3px 10px',
+                              borderRadius: '10px'
+                            }}>{run.driverName2}</span>
+                          )}
+                          {!run.driverName && !run.driverName2 && (
+                            <span style={{
+                              background: '#FEF3C7',
+                              color: '#92400E',
+                              fontSize: '11px',
+                              fontWeight: '500',
+                              padding: '3px 10px',
+                              borderRadius: '10px'
+                            }}>Unassigned</span>
+                          )}
+                        </div>
                       </td>
                       <td style={S.td}><span style={{ background: '#ECFDF5', color: '#065F46', padding: '3px 8px', borderRadius: '10px', fontSize: '11px', textTransform: 'capitalize' }}>{run.status}</span></td>
                       <td style={S.td}><button style={S.btnGhost}>View →</button></td>
@@ -1179,9 +1237,25 @@ function MiniRunCard({ run, onClick, compact = false }) {
     : { bg: '#F0FDF4', border: '#22C55E', text: '#166534', badge: '#22C55E' }
   if (compact) return (
     <div onClick={onClick} style={{ background: colors.bg, border: `1.5px solid ${colors.border}`, borderRadius: '3px', padding: '2px 5px', marginBottom: '2px', cursor: 'pointer', fontSize: '10px' }}>
-      <span style={{ background: colors.badge, color: 'white', fontSize: '8px', fontWeight: '700', padding: '1px 3px', borderRadius: '2px', marginRight: '3px' }}>{run.runType}</span>
-      <span style={{ color: colors.text, fontWeight: '600' }}>{run.event || run.client}</span>
-      {run.driverName && <span style={{ background: run.driverColour || '#3D5A73', color: 'white', fontSize: '8px', fontWeight: '600', padding: '0px 4px', borderRadius: '6px', marginLeft: '3px' }}>{run.driverName[0]}</span>}
+      <div>
+        <span style={{ background: colors.badge, color: 'white', fontSize: '8px', fontWeight: '700', padding: '1px 3px', borderRadius: '2px', marginRight: '3px' }}>{run.runType}</span>
+        <span style={{ color: colors.text, fontWeight: '600' }}>{run.event || run.client}</span>
+      </div>
+      {(run.driverName || run.driverName2) && (
+        <div style={{ marginTop: '4px' }}>
+          <span style={{
+            background: run.driverColour || '#3D5A73',
+            color: 'white',
+            fontSize: '9px',
+            fontWeight: '600',
+            padding: '1px 6px',
+            borderRadius: '8px'
+          }}>
+            {run.driverName ? run.driverName[0] : ''}
+            {run.driverName2 ? `+${run.driverName2[0]}` : ''}
+          </span>
+        </div>
+      )}
     </div>
   )
   return (
@@ -1192,16 +1266,26 @@ function MiniRunCard({ run, onClick, compact = false }) {
       </div>
       {run.runTime && <div style={{ fontSize: '10px', color: '#6B6860' }}>🕐 {run.runTime}</div>}
       {(run.driverName || run.driverName2) && (
-        <div style={{ display: 'flex', gap: '3px', marginTop: '4px', flexWrap: 'wrap' }}>
+        <div style={{ marginTop: '4px', display: 'flex', gap: '4px' }}>
           {run.driverName && (
-            <span style={{ background: run.driverColour || '#3D5A73', color: 'white', fontSize: '9px', fontWeight: '600', padding: '1px 6px', borderRadius: '8px' }}>
-              {run.driverName}
-            </span>
+            <span style={{
+              background: run.driverColour || '#3D5A73',
+              color: 'white',
+              fontSize: '9px',
+              fontWeight: '600',
+              padding: '1px 6px',
+              borderRadius: '8px'
+            }}>{run.driverName}</span>
           )}
           {run.driverName2 && (
-            <span style={{ background: run.driverColour2 || '#5F5E5A', color: 'white', fontSize: '9px', fontWeight: '600', padding: '1px 6px', borderRadius: '8px' }}>
-              {run.driverName2}
-            </span>
+            <span style={{
+              background: run.driverColour2 || '#5F5E5A',
+              color: 'white',
+              fontSize: '9px',
+              fontWeight: '600',
+              padding: '1px 6px',
+              borderRadius: '8px'
+            }}>{run.driverName2}</span>
           )}
         </div>
       )}
