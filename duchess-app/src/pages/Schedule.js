@@ -51,8 +51,11 @@ function buildRuns(jobs) {
       isUrgent:           job.is_urgent,
       notes:              job.notes,
       driverName:         job.assigned_driver_name || null,
+      driverName2:        job.assigned_driver_name_2 || null,
       driverColour:       null,   // filled below from drivers list
+      driverColour2:      null,
       assignedDriverId:   job.assigned_driver_id   || null,
+      assignedDriverId2:  job.assigned_driver_id_2 || null,
     }
     if (job.delivery_date) runs.push({ ...base, id: `${job.id}-DEL`, runType: 'DEL', runDate: job.delivery_date, runTime: job.delivery_time, missingTime: !job.delivery_time })
     if (job.collection_date) runs.push({ ...base, id: `${job.id}-COL`, runType: 'COL', runDate: job.collection_date, runTime: job.collection_time, missingTime: !job.collection_time })
@@ -228,6 +231,7 @@ export default function Schedule() {
   const allRuns = buildRuns(jobs).map(r => ({
     ...r,
     driverColour: r.assignedDriverId ? (driverMap[r.assignedDriverId]?.colour || '#3D5A73') : null,
+    driverColour2: r.assignedDriverId2 ? (driverMap[r.assignedDriverId2]?.colour || '#5F5E5A') : null,
   }))
 
   const filtered = applyFilter(
@@ -762,6 +766,21 @@ function RunDetailPanel({
             ))}
           </div>
 
+          {(run.driverName || run.driverName2) && (
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px' }}>
+              {run.driverName && (
+                <span style={{ background: run.driverColour || '#3D5A73', color: 'white', padding: '6px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: '600' }}>
+                  🚚 {run.driverName}
+                </span>
+              )}
+              {run.driverName2 && (
+                <span style={{ background: run.driverColour2 || '#5F5E5A', color: 'white', padding: '6px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: '600' }}>
+                  🚚 {run.driverName2}
+                </span>
+              )}
+            </div>
+          )}
+
           <hr style={S.divider} />
 
           {/* ── DRIVER ASSIGNMENT ── */}
@@ -1172,9 +1191,18 @@ function MiniRunCard({ run, onClick, compact = false }) {
         <span style={{ fontSize: '11.5px', fontWeight: '600', color: colors.text, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{run.event || run.client}</span>
       </div>
       {run.runTime && <div style={{ fontSize: '10px', color: '#6B6860' }}>🕐 {run.runTime}</div>}
-      {run.driverName && (
-        <div style={{ marginTop: '4px' }}>
-          <span style={{ background: run.driverColour || '#3D5A73', color: 'white', fontSize: '9px', fontWeight: '600', padding: '1px 6px', borderRadius: '8px' }}>{run.driverName}</span>
+      {(run.driverName || run.driverName2) && (
+        <div style={{ display: 'flex', gap: '3px', marginTop: '4px', flexWrap: 'wrap' }}>
+          {run.driverName && (
+            <span style={{ background: run.driverColour || '#3D5A73', color: 'white', fontSize: '9px', fontWeight: '600', padding: '1px 6px', borderRadius: '8px' }}>
+              {run.driverName}
+            </span>
+          )}
+          {run.driverName2 && (
+            <span style={{ background: run.driverColour2 || '#5F5E5A', color: 'white', fontSize: '9px', fontWeight: '600', padding: '1px 6px', borderRadius: '8px' }}>
+              {run.driverName2}
+            </span>
+          )}
         </div>
       )}
       {run.isUrgent && <div style={{ fontSize: '9px', background: '#EF4444', color: 'white', padding: '1px 4px', borderRadius: '2px', display: 'inline-block', marginTop: '3px' }}>URGENT</div>}
