@@ -142,12 +142,19 @@ export default function Notes({ onNavigate }) {
                     <span style={{ fontSize: '10px', fontWeight: '600', padding: '2px 8px', borderRadius: '4px', background: c.badgeBg, color: c.badgeColor }}>
                       {n.category.toUpperCase()}
                     </span>
-                    {n.crms_ref && (
-                      <span
-                        style={{ fontSize: '11px', color: c.border, fontWeight: '500', cursor: 'pointer', textDecoration: 'underline' }}
-                        onClick={() => onNavigate && onNavigate('schedule')}
-                      >{n.crms_ref}</span>
-                    )}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      {n.event_name && (
+                        <span style={{ fontSize: '13px', fontWeight: '500', color: '#1C1C1E' }}>
+                          {n.event_name}
+                        </span>
+                      )}
+                      {n.crms_ref && (
+                        <span
+                          style={{ fontSize: '11px', color: c.border, cursor: 'pointer', textDecoration: 'underline' }}
+                          onClick={() => onNavigate && onNavigate('schedule')}
+                        >{n.crms_ref}</span>
+                      )}
+                    </div>
                   </div>
                   <button
                     onClick={() => deleteNote(n.id)}

@@ -3,10 +3,10 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 
 const CATEGORIES = [
-  { value: 'equipment', label: 'Equipment', icon: '📦', sub: 'Itens a não esquecer', bg: '#FEF3C7', border: '#BA7517', badgeBg: '#FDE68A', badgeColor: '#633806' },
-  { value: 'access',    label: 'Access',    icon: '🔑', sub: 'Códigos, entradas',   bg: '#E6F1FB', border: '#185FA5', badgeBg: '#BFDBFE', badgeColor: '#1E3A5F' },
-  { value: 'contact',   label: 'Contact',   icon: '📞', sub: 'Tel. cliente, contacto', bg: '#EAF3DE', border: '#3B6D11', badgeBg: '#BBF7D0', badgeColor: '#14532D' },
-  { value: 'urgent',    label: 'Urgent',    icon: '⚠',  sub: 'Atenção imediata',   bg: '#FCEBEB', border: '#A32D2D', badgeBg: '#FCA5A5', badgeColor: '#7F1D1D' },
+  { value: 'equipment', label: 'Equipment', icon: '📦', sub: 'Items to remember', bg: '#FEF3C7', border: '#BA7517', badgeBg: '#FDE68A', badgeColor: '#633806' },
+  { value: 'access',    label: 'Access',    icon: '🔑', sub: 'Access codes, entry',   bg: '#E6F1FB', border: '#185FA5', badgeBg: '#BFDBFE', badgeColor: '#1E3A5F' },
+  { value: 'contact',   label: 'Contact',   icon: '📞', sub: 'Client phone, contact', bg: '#EAF3DE', border: '#3B6D11', badgeBg: '#BBF7D0', badgeColor: '#14532D' },
+  { value: 'urgent',    label: 'Urgent',    icon: '⚠',  sub: 'Immediate attention',   bg: '#FCEBEB', border: '#A32D2D', badgeBg: '#FCA5A5', badgeColor: '#7F1D1D' },
 ]
 
 function timeAgo(ts) {
@@ -18,7 +18,7 @@ function timeAgo(ts) {
   return `${Math.floor(hrs / 24)}d ago`
 }
 
-export default function JobNotes({ jobId, jobTable = 'crms_jobs', crmsRef }) {
+export default function JobNotes({ jobId, jobTable = 'crms_jobs', crmsRef, eventName }) {
   const { profile } = useAuth()
   const [notes, setNotes]       = useState([])
   const [category, setCategory] = useState('equipment')
@@ -47,6 +47,7 @@ export default function JobNotes({ jobId, jobTable = 'crms_jobs', crmsRef }) {
       job_id:          jobId,
       job_table:       jobTable,
       crms_ref:        crmsRef || null,
+      event_name:      eventName || null,
       category,
       note_text:       text.trim(),
       created_by:      profile?.id || null,
@@ -72,7 +73,7 @@ export default function JobNotes({ jobId, jobTable = 'crms_jobs', crmsRef }) {
       {/* Existing notes */}
       {notes.length > 0 && (
         <div style={{ marginBottom: '16px' }}>
-          <div style={S.sectionLabel}>Notes do job</div>
+          <div style={S.sectionLabel}>Job notes</div>
           {notes.map(n => {
             const c = cat(n.category)
             return (
@@ -96,7 +97,7 @@ export default function JobNotes({ jobId, jobTable = 'crms_jobs', crmsRef }) {
                   </div>
                 </div>
                 <div style={{ fontSize: '13px', color: '#1C1C1E', lineHeight: '1.5', marginBottom: '4px' }}>{n.note_text}</div>
-                <div style={{ fontSize: '11px', color: '#6B6860' }}>por {n.created_by_name}</div>
+                <div style={{ fontSize: '11px', color: '#6B6860' }}>by {n.created_by_name}</div>
               </div>
             )
           })}
@@ -104,7 +105,7 @@ export default function JobNotes({ jobId, jobTable = 'crms_jobs', crmsRef }) {
       )}
 
       {/* Add note */}
-      <div style={S.sectionLabel}>Adicionar note</div>
+      <div style={S.sectionLabel}>Add note</div>
 
       {/* Category selector */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
@@ -130,7 +131,7 @@ export default function JobNotes({ jobId, jobTable = 'crms_jobs', crmsRef }) {
       <textarea
         value={text}
         onChange={e => setText(e.target.value)}
-        placeholder="Escreve a note aqui…"
+        placeholder="Write a note…"
         style={{
           width: '100%', padding: '10px 12px',
           border: '1.5px solid #DDD8CF', borderRadius: '8px',
@@ -151,7 +152,7 @@ export default function JobNotes({ jobId, jobTable = 'crms_jobs', crmsRef }) {
           fontFamily: "'DM Sans', sans-serif",
         }}
       >
-        {saving ? 'A guardar…' : 'Guardar note'}
+        {saving ? 'Saving…' : 'Save note'}
       </button>
     </div>
   )

@@ -1126,6 +1126,7 @@ function RunDetailPanel({
                 jobId={run.jobId}
                 jobTable={run.crmsId ? 'crms_jobs' : 'orders'}
                 crmsRef={run.ref}
+                eventName={run.event}
               />
             </div>
           )}

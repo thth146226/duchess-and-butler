@@ -502,6 +502,7 @@ function JobDetailPanel({ job, changes, tab, setTab, onClose, onAcknowledge }) {
                 jobId={job.id}
                 jobTable='crms_jobs'
                 crmsRef={job.crms_ref}
+                eventName={job.event_name}
               />
             </div>
           )}
