@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext'
 import Login from './pages/Login'
 import Sidebar from './components/Sidebar'
 import Dashboard from './pages/Dashboard'
+import Notifications from './pages/Notifications'
 import Orders from './pages/Orders'
 import Schedule from './pages/Schedule'
 import LiveJobs from './pages/LiveJobs'
@@ -10,6 +11,7 @@ import { Inventory, Paperwork, Reports, Team } from './pages/Placeholders'
 
 const pageTitles = {
   dashboard: 'Dashboard',
+  notifications: 'Notifications',
   livejobs: 'Live Jobs — Current RMS',
   orders: 'Orders',
   schedule: 'Schedule',
@@ -32,7 +34,7 @@ function AppInner() {
 
   if (!user) return <Login />
 
-  const pages = { dashboard: Dashboard, livejobs: LiveJobs, orders: Orders, schedule: Schedule, inventory: Inventory, paperwork: Paperwork, reports: Reports, team: Team }
+  const pages = { dashboard: Dashboard, notifications: Notifications, livejobs: LiveJobs, orders: Orders, schedule: Schedule, inventory: Inventory, paperwork: Paperwork, reports: Reports, team: Team }
   const PageComponent = pages[page] || Dashboard
 
   return (

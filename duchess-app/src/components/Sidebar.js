@@ -3,6 +3,7 @@ import { useAuth } from '../contexts/AuthContext'
 const navItems = [
   { section: 'Overview', items: [
     { id: 'dashboard', icon: '◈', label: 'Dashboard', roles: ['admin','operations','driver'] },
+    { id: 'notifications', icon: '🔔', label: 'Notifications', roles: ['admin','operations','driver'] },
   ]},
   { section: 'Live Operations', items: [
     { id: 'livejobs', icon: '⚡', label: 'Live Jobs', roles: ['admin','operations','driver'], highlight: true },
