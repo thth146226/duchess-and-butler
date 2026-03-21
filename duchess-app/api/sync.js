@@ -316,7 +316,7 @@ export default async function handler(req, res) {
     })
     const opportunities = allOpportunities.filter(o => shouldImport(o))
     stats.fetched = allOpportunities.length
-    stats.skipped_quotes = 0
+    stats.skipped_quotes = allOpportunities.length - opportunities.length
 
     // ── 2. Load existing Supabase records ────────────────────────────────────
     const { data: existingRecords } = await supabase
@@ -325,6 +325,15 @@ export default async function handler(req, res) {
 
     const existingMap = {}
     for (const r of (existingRecords || [])) existingMap[r.crms_id] = r
+
+    console.log('Sample opportunity states:', 
+      allOpportunities.slice(0, 5).map(o => ({
+        number: o.number,
+        state: o.state,
+        state_name: o.state_name,
+        shouldImport: shouldImport(o)
+      }))
+    )
 
     // ── 3. Process each confirmed opportunity ────────────────────────────────
     for (const opp of opportunities) {
