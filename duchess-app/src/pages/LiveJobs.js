@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import JobNotes from '../components/JobNotes'
 
 const STATUS_STYLE = {
   confirmed:  { bg: '#ECFDF5', color: '#065F46', label: 'Confirmed' },
@@ -295,6 +296,12 @@ function JobDetailPanel({ job, changes, tab, setTab, onClose, onAcknowledge }) {
             <button key={t} onClick={() => setTab(t)}
               style={{ ...S.tabBtn, ...(tab === t ? S.tabBtnActive : {}) }}>{label}</button>
           ))}
+          <button
+            style={{ ...S.tabBtn, ...(tab === 'notes' ? S.tabBtnActive : {}) }}
+            onClick={() => setTab('notes')}
+          >
+            Notes
+          </button>
         </div>
 
         <div style={{ padding: '20px 24px', overflowY: 'auto', flex: 1 }}>
@@ -486,6 +493,16 @@ function JobDetailPanel({ job, changes, tab, setTab, onClose, onAcknowledge }) {
                   {c.acknowledged_at && <span style={{ fontSize: '11px', color: '#22C55E' }}>✓ Acknowledged</span>}
                 </div>
               ))}
+            </div>
+          )}
+
+          {tab === 'notes' && job && (
+            <div style={{ padding: '20px 24px' }}>
+              <JobNotes
+                jobId={job.id}
+                jobTable='crms_jobs'
+                crmsRef={job.crms_ref}
+              />
             </div>
           )}
 
