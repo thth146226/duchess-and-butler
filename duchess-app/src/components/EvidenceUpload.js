@@ -23,7 +23,7 @@ export default function EvidenceUpload({ jobId, jobTable = 'crms_jobs', crmsRef,
     const { data } = await supabase
       .from('evidence_photos')
       .select('*')
-      .eq('job_id', jobId)
+      .eq('order_id', jobId)
       .order('created_at', { ascending: false })
     if (data) setPhotos(data)
   }
@@ -41,7 +41,6 @@ export default function EvidenceUpload({ jobId, jobTable = 'crms_jobs', crmsRef,
 
       if (uploadError) {
         console.error('Storage upload error:', uploadError)
-        alert('Upload error: ' + uploadError.message)
         continue
       }
 
@@ -54,7 +53,7 @@ export default function EvidenceUpload({ jobId, jobTable = 'crms_jobs', crmsRef,
       console.log('Public URL:', publicUrl)
 
       const { error: dbError } = await supabase.from('evidence_photos').insert({
-        job_id:           jobId,
+        order_id:         jobId,
         job_table:        jobTable,
         crms_ref:         crmsRef || null,
         event_name:       eventName || null,
@@ -68,7 +67,6 @@ export default function EvidenceUpload({ jobId, jobTable = 'crms_jobs', crmsRef,
 
       if (dbError) {
         console.error('Database insert error:', dbError)
-        alert('Database error: ' + dbError.message)
       }
     }
     setUploading(false)
