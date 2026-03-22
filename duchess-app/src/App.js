@@ -9,7 +9,8 @@ import Schedule from './pages/Schedule'
 import LiveJobs from './pages/LiveJobs'
 import Notes from './pages/Notes'
 import Evidences from './pages/Evidences'
-import { Inventory, Paperwork, Reports, Team } from './pages/Placeholders'
+import Paperwork from './pages/Paperwork'
+import { Inventory, Reports, Team } from './pages/Placeholders'
 
 const pageTitles = {
   dashboard: 'Dashboard',

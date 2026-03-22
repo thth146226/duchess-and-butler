@@ -1,4 +1,4 @@
-// Schedule, Inventory, Paperwork, Reports, Team — Phase 3 & 4 will complete these
+// Schedule, Inventory, Reports, Team — Phase 3 & 4 will complete these (Paperwork is in pages/Paperwork.js)
 
 export function Schedule() {
   return (
@@ -16,16 +16,6 @@ export function Inventory() {
       <div style={icon}>📦</div>
       <div style={title}>Inventory</div>
       <div style={sub}>Coming in Phase 3 — live stock levels with low-stock alerts.</div>
-    </div>
-  )
-}
-
-export function Paperwork() {
-  return (
-    <div style={placeholderStyle}>
-      <div style={icon}>📄</div>
-      <div style={title}>Paperwork</div>
-      <div style={sub}>Coming in Phase 4 — auto-generated delivery notes, collection notes and run sheets as PDF.</div>
     </div>
   )
 }
