@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import JobNotes from '../components/JobNotes'
+import EvidenceUpload from '../components/EvidenceUpload'
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
 const today    = new Date().toISOString().split('T')[0]
@@ -893,6 +894,13 @@ function RunDetailPanel({
             <button type="button" style={{ ...S.tabBtn, ...(tab === 'notes' ? S.tabBtnActive : {}) }} onClick={() => setTab('notes')}>
               Notes {jobNotes[run.jobId]?.total > 0 ? `(${jobNotes[run.jobId].total})` : ''}
             </button>
+            <button
+              type="button"
+              style={{ ...S.tabBtn, ...(tab === 'evidence' ? S.tabBtnActive : {}) }}
+              onClick={() => setTab('evidence')}
+            >
+              Evidence
+            </button>
           </div>
 
           {tab === 'details' && (
@@ -1123,6 +1131,16 @@ function RunDetailPanel({
           {tab === 'notes' && (
             <div>
               <JobNotes
+                jobId={run.jobId}
+                jobTable={run.crmsId ? 'crms_jobs' : 'orders'}
+                crmsRef={run.ref}
+                eventName={run.event}
+              />
+            </div>
+          )}
+          {tab === 'evidence' && run && (
+            <div style={{ padding: '20px 24px' }}>
+              <EvidenceUpload
                 jobId={run.jobId}
                 jobTable={run.crmsId ? 'crms_jobs' : 'orders'}
                 crmsRef={run.ref}
