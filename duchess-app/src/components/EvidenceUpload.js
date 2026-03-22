@@ -15,6 +15,7 @@ export default function EvidenceUpload({ jobId, jobTable = 'crms_jobs', crmsRef,
   const [uploading, setUploading] = useState(false)
   const [lightbox, setLightbox]   = useState(null)
   const fileRef = useRef()
+  const galleryRef = useRef()
 
   useEffect(() => { if (jobId) fetchPhotos() }, [jobId])
 
@@ -55,7 +56,8 @@ export default function EvidenceUpload({ jobId, jobTable = 'crms_jobs', crmsRef,
       })
     }
     setUploading(false)
-    fileRef.current.value = ''
+    if (fileRef.current) fileRef.current.value = ''
+    if (galleryRef.current) galleryRef.current.value = ''
     fetchPhotos()
   }
 
@@ -105,17 +107,39 @@ export default function EvidenceUpload({ jobId, jobTable = 'crms_jobs', crmsRef,
           style={{ display: 'none' }}
           onChange={handleUpload}
         />
-        <button
-          onClick={() => fileRef.current.click()}
-          disabled={uploading}
-          style={{
-            fontSize: '13px', fontWeight: '500', padding: '10px 24px',
-            borderRadius: '6px', border: 'none',
-            background: uploading ? '#DDD8CF' : '#1C1C1E',
-            color: '#fff', cursor: uploading ? 'default' : 'pointer',
-            fontFamily: "'DM Sans', sans-serif",
-          }}
-        >{uploading ? 'Uploading…' : '📷 Choose photos'}</button>
+        <input
+          ref={galleryRef}
+          type="file"
+          accept="image/*"
+          multiple
+          style={{ display: 'none' }}
+          onChange={handleUpload}
+        />
+        <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
+          <button
+            onClick={() => fileRef.current.click()}
+            disabled={uploading}
+            style={{
+              fontSize: '13px', fontWeight: '500', padding: '10px 20px',
+              borderRadius: '6px', border: 'none',
+              background: uploading ? '#DDD8CF' : '#1C1C1E',
+              color: '#fff', cursor: uploading ? 'default' : 'pointer',
+              fontFamily: "'DM Sans', sans-serif",
+            }}
+          >{uploading ? 'Uploading…' : '📷 Take photo'}</button>
+
+          <button
+            onClick={() => galleryRef.current.click()}
+            disabled={uploading}
+            style={{
+              fontSize: '13px', fontWeight: '500', padding: '10px 20px',
+              borderRadius: '6px', border: '1.5px solid #DDD8CF',
+              background: 'transparent',
+              color: '#1C1C1E', cursor: uploading ? 'default' : 'pointer',
+              fontFamily: "'DM Sans', sans-serif",
+            }}
+          >🖼 Choose from gallery</button>
+        </div>
       </div>
 
       {/* Uploaded photos grouped by type */}
