@@ -64,7 +64,7 @@ export default function Evidences() {
   // Group by job
   const grouped = {}
   for (const p of filtered) {
-    const key = p.job_id
+    const key = p.order_id
     if (!grouped[key]) grouped[key] = { event_name: p.event_name, crms_ref: p.crms_ref, photos: [] }
     grouped[key].photos.push(p)
   }
