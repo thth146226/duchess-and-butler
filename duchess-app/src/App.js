@@ -11,6 +11,7 @@ import LiveJobs from './pages/LiveJobs'
 import Notes from './pages/Notes'
 import Evidences from './pages/Evidences'
 import Paperwork from './pages/Paperwork'
+import DriverLinks from './pages/DriverLinks'
 import { Inventory, Reports, Team } from './pages/Placeholders'
 
 const pageTitles = {
@@ -24,6 +25,7 @@ const pageTitles = {
   inventory: 'Inventory',
   paperwork: 'Paperwork',
   reports: 'Reports',
+  driverlinks: 'Driver Links',
   team: 'Team Access',
 }
 
@@ -44,7 +46,7 @@ function AppInner() {
 
   if (!user) return <Login />
 
-  const pages = { dashboard: Dashboard, notifications: Notifications, notes: Notes, evidences: Evidences, livejobs: LiveJobs, orders: Orders, schedule: Schedule, inventory: Inventory, paperwork: Paperwork, reports: Reports, team: Team }
+  const pages = { dashboard: Dashboard, notifications: Notifications, notes: Notes, evidences: Evidences, livejobs: LiveJobs, orders: Orders, schedule: Schedule, inventory: Inventory, paperwork: Paperwork, reports: Reports, driverlinks: DriverLinks, team: Team }
   const PageComponent = pages[page] || Dashboard
 
   return (

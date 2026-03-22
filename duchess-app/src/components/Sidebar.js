@@ -20,6 +20,7 @@ const navItems = [
     { id: 'reports', icon: '📊', label: 'Reports', roles: ['admin'] },
   ]},
   { section: 'Settings', items: [
+    { id: 'driverlinks', icon: '🔗', label: 'Driver Links', roles: ['admin'] },
     { id: 'team', icon: '👥', label: 'Team Access', roles: ['admin'] },
   ]},
 ]
