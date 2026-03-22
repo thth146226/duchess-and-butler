@@ -54,7 +54,31 @@ export default function Paperwork() {
     return groups
   }
 
+  async function getLogoBase64() {
+    try {
+      const response = await fetch(
+        'https://duchessandbutler.com/wp-content/uploads/2025/02/duchess-butler-logo.png'
+      )
+      const blob = await response.blob()
+      return new Promise((resolve) => {
+        const reader = new FileReader()
+        reader.onloadend = () => resolve(reader.result)
+        reader.readAsDataURL(blob)
+      })
+    } catch {
+      return null
+    }
+  }
+
   async function printDocument(job, type) {
+    const logoBase64 = await getLogoBase64()
+    const logoHTML = logoBase64
+      ? `<img src="${logoBase64}" alt="Duchess & Butler" style="height:80px" />`
+      : `<div style="font-family:Georgia,serif;font-size:22px;font-weight:600;letter-spacing:0.04em;color:#1a1a1a">
+        Duchess & Butler
+        <div style="font-size:10px;letter-spacing:0.2em;color:#B8965A;font-weight:400;margin-top:4px">LUXURY TABLESCAPES & EVENT DECOR</div>
+       </div>`
+
     const notes = await fetchNotes(job.id)
     const groups = groupItems(job.crms_job_items)
     const isDelivery = type === 'DEL'
@@ -116,14 +140,7 @@ export default function Paperwork() {
 <body>
 <div class="page">
   <div class="logo">
-    <img src="https://duchessandbutler.com/wp-content/uploads/2025/02/duchess-butler-logo.png" 
-    alt="Duchess & Butler"
-    onerror="this.style.display='none';document.getElementById('logo-text').style.display='block'"
-  />
-  <div id="logo-text" style="display:none;font-family:Georgia,serif;font-size:24px;font-weight:600;letter-spacing:0.04em">
-    Duchess & Butler
-    <div style="font-size:10px;letter-spacing:0.2em;color:#B8965A;font-weight:400">LUXURY TABLESCAPES & EVENT DECOR</div>
-  </div>
+    ${logoHTML}
   </div>
 
   <div class="title">${typeLabel}: ${job.event_name?.toUpperCase()}</div>
@@ -216,6 +233,14 @@ export default function Paperwork() {
   }
 
   async function printRunSheet(date) {
+    const logoBase64 = await getLogoBase64()
+    const logoHTML = logoBase64
+      ? `<img src="${logoBase64}" alt="Duchess & Butler" style="height:60px" />`
+      : `<div style="font-family:Georgia,serif;font-size:22px;font-weight:600;letter-spacing:0.04em;color:#1a1a1a">
+        Duchess & Butler
+        <div style="font-size:10px;letter-spacing:0.2em;color:#B8965A;font-weight:400;margin-top:4px">LUXURY TABLESCAPES & EVENT DECOR</div>
+       </div>`
+
     const dayJobs = jobs.filter(j => j.delivery_date === date || j.collection_date === date)
     const runs = []
     for (const j of dayJobs) {
@@ -269,7 +294,7 @@ export default function Paperwork() {
 <div class="page">
   <div class="header">
     <div>
-      <img src="https://duchessandbutler.com/wp-content/uploads/2025/02/duchess-butler-logo.png" alt="Duchess & Butler" style="height:60px" />
+      ${logoHTML}
     </div>
     <div style="text-align:right">
       <div class="title">Run Sheet</div>
