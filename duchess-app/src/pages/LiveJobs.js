@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import JobNotes from '../components/JobNotes'
+import EvidenceUpload from '../components/EvidenceUpload'
 
 const STATUS_STYLE = {
   confirmed:  { bg: '#ECFDF5', color: '#065F46', label: 'Confirmed' },
@@ -499,6 +500,17 @@ function JobDetailPanel({ job, changes, tab, setTab, onClose, onAcknowledge }) {
           {tab === 'notes' && job && (
             <div style={{ padding: '20px 24px' }}>
               <JobNotes
+                jobId={job.id}
+                jobTable='crms_jobs'
+                crmsRef={job.crms_ref}
+                eventName={job.event_name}
+              />
+            </div>
+          )}
+
+          {tab === 'evidence' && job && (
+            <div style={{ padding: '20px 24px' }}>
+              <EvidenceUpload
                 jobId={job.id}
                 jobTable='crms_jobs'
                 crmsRef={job.crms_ref}
