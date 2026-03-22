@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import Login from './pages/Login'
+import DriverAccess from './pages/DriverAccess'
 import Sidebar from './components/Sidebar'
 import Dashboard from './pages/Dashboard'
 import Notifications from './pages/Notifications'
@@ -36,6 +37,10 @@ function AppInner() {
       Duchess & Butler…
     </div>
   )
+
+  // Public driver portal — no auth required
+  const params = new URLSearchParams(window.location.search)
+  if (params.get('token')) return <DriverAccess />
 
   if (!user) return <Login />
 
