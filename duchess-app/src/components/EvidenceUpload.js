@@ -35,14 +35,25 @@ export default function EvidenceUpload({ jobId, jobTable = 'crms_jobs', crmsRef,
     for (const file of files) {
       const ext = file.name.split('.').pop()
       const fileName = `${jobId}/${runType}_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`
-      const { error: uploadError } = await supabase.storage
+      const { data: uploadData, error: uploadError } = await supabase.storage
         .from('evidence-photos')
         .upload(fileName, file, { contentType: file.type })
-      if (uploadError) { console.error(uploadError); continue }
+
+      if (uploadError) {
+        console.error('Storage upload error:', uploadError)
+        alert('Upload error: ' + uploadError.message)
+        continue
+      }
+
+      console.log('Upload success:', uploadData)
+
       const { data: { publicUrl } } = supabase.storage
         .from('evidence-photos')
         .getPublicUrl(fileName)
-      await supabase.from('evidence_photos').insert({
+
+      console.log('Public URL:', publicUrl)
+
+      const { error: dbError } = await supabase.from('evidence_photos').insert({
         job_id:           jobId,
         job_table:        jobTable,
         crms_ref:         crmsRef || null,
@@ -54,6 +65,11 @@ export default function EvidenceUpload({ jobId, jobTable = 'crms_jobs', crmsRef,
         uploaded_by_name: profile?.name || 'Team',
         driver_name:      profile?.name || null,
       })
+
+      if (dbError) {
+        console.error('Database insert error:', dbError)
+        alert('Database error: ' + dbError.message)
+      }
     }
     setUploading(false)
     if (fileRef.current) fileRef.current.value = ''
