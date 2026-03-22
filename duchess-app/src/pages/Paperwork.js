@@ -34,9 +34,20 @@ export default function Paperwork() {
   }
 
   function groupItems(items) {
+    const CATEGORY_MAP = {
+      'crockery': 'DINNERWARE',
+      'glassware': 'GLASSWARE',
+      'cutlery': 'CUTLERY',
+      'linens': 'LINENS',
+      'furniture': 'FURNITURE',
+      'other': 'OTHER',
+    }
     const groups = {}
     for (const item of (items || [])) {
-      const cat = (item.category || 'Other').toUpperCase()
+      // Skip items with quantity 0 — these are category headers from Current RMS
+      if (!item.quantity || parseInt(item.quantity) === 0) continue
+      const rawCat = (item.category || 'other').toLowerCase()
+      const cat = CATEGORY_MAP[rawCat] || rawCat.toUpperCase()
       if (!groups[cat]) groups[cat] = []
       groups[cat].push(item)
     }
@@ -49,9 +60,10 @@ export default function Paperwork() {
     const isDelivery = type === 'DEL'
     const typeLabel = isDelivery ? 'DELIVERY NOTE' : 'COLLECTION NOTE'
     const dateLabel = isDelivery ? 'Delivery Date' : 'Collection Date'
+    const cleanTime = (t) => t ? t.substring(0, 5) : null
     const dateValue = isDelivery
-      ? fmtDate(job.delivery_date, job.delivery_time ? `${job.delivery_time} - 17:00` : null)
-      : fmtDate(job.collection_date, job.collection_time ? `${job.collection_time} - 17:00` : null)
+      ? fmtDate(job.delivery_date, cleanTime(job.delivery_time) ? `${cleanTime(job.delivery_time)} - 17:00` : null)
+      : fmtDate(job.collection_date, cleanTime(job.collection_time) ? `${cleanTime(job.collection_time)} - 17:00` : null)
 
     const specialNotes = notes.map(n => n.note_text).join(' | ')
     const drivers = [job.assigned_driver_name, job.assigned_driver_name_2].filter(Boolean).join(' + ')
@@ -104,7 +116,14 @@ export default function Paperwork() {
 <body>
 <div class="page">
   <div class="logo">
-    <img src="https://duchessandbutler.com/wp-content/uploads/2025/02/duchess-butler-logo.png" alt="Duchess & Butler" />
+    <img src="https://duchessandbutler.com/wp-content/uploads/2025/02/duchess-butler-logo.png" 
+    alt="Duchess & Butler"
+    onerror="this.style.display='none';document.getElementById('logo-text').style.display='block'"
+  />
+  <div id="logo-text" style="display:none;font-family:Georgia,serif;font-size:24px;font-weight:600;letter-spacing:0.04em">
+    Duchess & Butler
+    <div style="font-size:10px;letter-spacing:0.2em;color:#B8965A;font-weight:400">LUXURY TABLESCAPES & EVENT DECOR</div>
+  </div>
   </div>
 
   <div class="title">${typeLabel}: ${job.event_name?.toUpperCase()}</div>
@@ -113,7 +132,7 @@ export default function Paperwork() {
     <tr>
       <td style="width:50%;vertical-align:top">
         <table style="width:100%;border:none">
-          <tr><td class="label" style="border:none;padding:4px 0;width:140px">Order Date:</td><td style="border:none;padding:4px 0">${fmtDate(job.event_date)}</td></tr>
+          <tr><td class="label" style="border:none;padding:4px 0;width:140px">Order Date:</td><td style="border:none;padding:4px 0">${job.ordered_at ? fmtDate(job.ordered_at.split('T')[0]) : fmtDate(job.event_date)}</td></tr>
           <tr><td class="label" style="border:none;padding:4px 0">Our Reference:</td><td style="border:none;padding:4px 0">${job.crms_ref || '—'}</td></tr>
           <tr><td class="label" style="border:none;padding:4px 0">${dateLabel}:</td><td style="border:none;padding:4px 0">${dateValue}</td></tr>
           <tr><td class="label" style="border:none;padding:4px 0">Event Date:</td><td style="border:none;padding:4px 0">${fmtDate(job.event_date)}</td></tr>
@@ -122,7 +141,11 @@ export default function Paperwork() {
       </td>
       <td style="width:25%;vertical-align:top">
         <div class="header" style="padding:4px 0;margin-bottom:6px">Delivery Address</div>
-        <div style="font-size:12px;line-height:1.6">${(job.venue_address || job.venue || '—').replace(/,\s*/g, '<br>')}</div>
+        <div style="font-size:12px;line-height:1.8">
+    ${job.venue ? `<strong>${job.venue}</strong><br>` : ''}
+    ${(job.venue_address || '').replace(/,\s*/g, '<br>')}
+    ${!job.venue && !job.venue_address ? '—' : ''}
+  </div>
       </td>
       <td style="width:25%;vertical-align:top">
         <div class="header" style="padding:4px 0;margin-bottom:6px">Client Address</div>
