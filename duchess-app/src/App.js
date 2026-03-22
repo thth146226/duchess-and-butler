@@ -8,12 +8,14 @@ import Orders from './pages/Orders'
 import Schedule from './pages/Schedule'
 import LiveJobs from './pages/LiveJobs'
 import Notes from './pages/Notes'
+import Evidences from './pages/Evidences'
 import { Inventory, Paperwork, Reports, Team } from './pages/Placeholders'
 
 const pageTitles = {
   dashboard: 'Dashboard',
   notifications: 'Notifications',
   notes: 'Notes',
+  evidences: 'Evidence Photos',
   livejobs: 'Live Jobs — Current RMS',
   orders: 'Orders',
   schedule: 'Schedule',
@@ -36,7 +38,7 @@ function AppInner() {
 
   if (!user) return <Login />
 
-  const pages = { dashboard: Dashboard, notifications: Notifications, notes: Notes, livejobs: LiveJobs, orders: Orders, schedule: Schedule, inventory: Inventory, paperwork: Paperwork, reports: Reports, team: Team }
+  const pages = { dashboard: Dashboard, notifications: Notifications, notes: Notes, evidences: Evidences, livejobs: LiveJobs, orders: Orders, schedule: Schedule, inventory: Inventory, paperwork: Paperwork, reports: Reports, team: Team }
   const PageComponent = pages[page] || Dashboard
 
   return (
