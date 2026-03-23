@@ -44,20 +44,36 @@ export default function DriverPortal({ token }) {
   useEffect(() => { if (token) fetchDriver() }, [token])
 
   async function fetchDriver() {
-    console.log('Token received:', token)
-    const { data, error } = await supabase
-      .from('drivers')
-      .select('*')
-      .eq('access_token', token)
-      .single()
-    console.log('Driver found:', data, 'Error:', error)
-    if (error || !data) { 
-      setError('Invalid or expired link. Token: ' + token) 
+    try {
+      console.log('Fetching driver with token:', token)
+
+      const { data, error, status, statusText } = await supabase
+        .from('drivers')
+        .select('id, name, colour, active')
+        .eq('access_token', token)
+        .maybeSingle()
+
+      console.log('Response:', { data, error, status, statusText })
+
+      if (error) {
+        setError('Database error: ' + error.message)
+        setLoading(false)
+        return
+      }
+
+      if (!data) {
+        setError('No driver found for token: ' + token)
+        setLoading(false)
+        return
+      }
+
+      setDriver(data)
+      fetchJobs(data.name)
+    } catch(e) {
+      console.error('Exception:', e)
+      setError('Exception: ' + e.message)
       setLoading(false)
-      return 
     }
-    setDriver(data)
-    fetchJobs(data.name)
   }
 
   async function fetchJobs(driverName) {
