@@ -83,7 +83,7 @@ export default function Paperwork() {
     const groups = groupItems(job.crms_job_items)
     const isDelivery = type === 'DEL'
     const typeLabel = isDelivery ? 'DELIVERY NOTE' : 'COLLECTION NOTE'
-    const cleanTime = (t) => t ? t.substring(0, 5) : null
+    const cleanTime = (t) => t ? String(t).substring(0, 5) : null
     const deliveryTimeStr = cleanTime(job.delivery_time)
     const collectionTimeStr = cleanTime(job.collection_time)
     const dateValue = isDelivery
@@ -246,8 +246,8 @@ export default function Paperwork() {
     const dayJobs = jobs.filter(j => j.delivery_date === date || j.collection_date === date)
     const runs = []
     for (const j of dayJobs) {
-      if (j.delivery_date === date) runs.push({ job: j, type: 'DEL', time: j.delivery_time })
-      if (j.collection_date === date) runs.push({ job: j, type: 'COL', time: j.collection_time })
+      if (j.delivery_date === date) runs.push({ job: j, type: 'DEL', time: j.delivery_time?.substring(0, 5) || null })
+      if (j.collection_date === date) runs.push({ job: j, type: 'COL', time: j.collection_time?.substring(0, 5) || null })
     }
     runs.sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99'))
 
