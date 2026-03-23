@@ -56,13 +56,23 @@ export default function DriverPortal({ token }) {
       .order('delivery_date', { ascending: true, nullsLast: true })
 
     if (data) {
-      // Filter client-side to avoid Supabase .or() quoting issues
+      console.log('All jobs:', data.length)
+      console.log('Driver name looking for:', driverName)
+      console.log('Sample job driver fields:', data.slice(0,3).map(j => ({
+        event: j.event_name,
+        d1: j.assigned_driver_name,
+        d2: j.assigned_driver_name_2,
+        col1: j.col_driver_name,
+        col2: j.col_driver_name_2,
+      })))
+
       const myJobs = data.filter(j =>
         j.assigned_driver_name === driverName ||
         j.assigned_driver_name_2 === driverName ||
         j.col_driver_name === driverName ||
         j.col_driver_name_2 === driverName
       )
+      console.log('My jobs found:', myJobs.length)
       setJobs(myJobs)
     }
     setLoading(false)
