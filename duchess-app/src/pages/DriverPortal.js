@@ -1,5 +1,17 @@
 import { useEffect, useState, useRef } from 'react'
-import { supabasePublic, supabasePublic as supabase } from '../lib/supabase'
+import { createClient } from '@supabase/supabase-js'
+
+const supabase = createClient(
+  'https://ecosxamjvxveawaeluma.supabase.co',
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdXBhYmFzZSIsInJlZiI6ImVjb3N4YW1qdnh2ZWF3YWVsdW1hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMyNDY2MjIsImV4cCI6MjA4ODgyMjYyMn0.UkMQcQGovE5aX9znOeG1MtJ1_5FWA7kc5WNAE6HeBOw',
+  {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  }
+)
 
 const RUN_TYPES = [
   { value: 'after_del', label: 'After DEL', bg: '#FCEBEB', color: '#A32D2D', border: '#FCA5A5' },
@@ -49,7 +61,7 @@ export default function DriverPortal({ token }) {
   }
 
   async function fetchJobs(driverName) {
-    const { data } = await supabasePublic
+    const { data } = await supabase
       .from('crms_jobs')
       .select('*')
       .not('status', 'eq', 'cancelled')
