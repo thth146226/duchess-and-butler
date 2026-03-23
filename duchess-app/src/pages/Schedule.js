@@ -250,27 +250,47 @@ export default function Schedule() {
     try {
       const table = run.crmsId ? 'crms_jobs' : 'orders'
 
-      const delD1 = delDriver1 === 'self_collection' ? null : drivers.find(d => d.id === delDriver1)
-      const delD2 = drivers.find(d => d.id === delDriver2)
-      const colD1 = drivers.find(d => d.id === colDriver1)
-      const colD2 = drivers.find(d => d.id === colDriver2)
+      const delD1 = delDriver1 === 'self_collection' 
+        ? { name: 'Self Collection', id: null, colour: null }
+        : drivers.find(d => d.id === delDriver1) || null
+      const delD2 = drivers.find(d => d.id === delDriver2) || null
+      const colD1 = drivers.find(d => d.id === colDriver1) || null
+      const colD2 = drivers.find(d => d.id === colDriver2) || null
 
-      // Determine primary driver (DEL takes priority, fallback to COL)
-      const primaryDriver = delD1 || colD1
-      const secondDriver = delD1 ? delD2 : colD2
+      // Are DEL and COL drivers different?
+      const splitDrivers = colD1 && delD1 && colD1.id !== delD1?.id
 
-      const isSelfCol = delDriver1 === 'self_collection'
+      let updatePayload = {}
 
-      await supabase.from(table).update({
-        assigned_driver_id:     primaryDriver?.id || null,
-        assigned_driver_name:   isSelfCol ? 'Self Collection' : (primaryDriver?.name || null),
-        assigned_driver_id_2:   secondDriver?.id || null,
-        assigned_driver_name_2: secondDriver?.name || null,
-        driver_1_runs:          delD1 && colD1 && delD1.id !== colD1.id ? 'del' : 'both',
-        driver_2_runs:          secondDriver ? 'both' : null,
-        col_driver_name:        colD1 && delD1 && colD1.id !== delD1.id ? colD1.name : null,
-        col_driver_name_2:      colD2?.name || null,
-      }).eq('id', run.jobId)
+      if (splitDrivers) {
+        // Different drivers for DEL and COL
+        updatePayload = {
+          assigned_driver_id:     delD1?.id || null,
+          assigned_driver_name:   delD1?.name || null,
+          assigned_driver_id_2:   delD2?.id || null,
+          assigned_driver_name_2: delD2?.name || null,
+          driver_1_runs:          'del',
+          driver_2_runs:          delD2 ? 'del' : null,
+          col_driver_name:        colD1?.name || null,
+          col_driver_name_2:      colD2?.name || null,
+        }
+      } else {
+        // Same driver for both DEL and COL
+        const primaryDriver = delD1 || colD1
+        const secondDriver = delD2 || colD2
+        updatePayload = {
+          assigned_driver_id:     primaryDriver?.id || null,
+          assigned_driver_name:   delDriver1 === 'self_collection' ? 'Self Collection' : (primaryDriver?.name || null),
+          assigned_driver_id_2:   secondDriver?.id || null,
+          assigned_driver_name_2: secondDriver?.name || null,
+          driver_1_runs:          'both',
+          driver_2_runs:          secondDriver ? 'both' : null,
+          col_driver_name:        null,
+          col_driver_name_2:      null,
+        }
+      }
+
+      await supabase.from(table).update(updatePayload).eq('id', run.jobId)
 
       showToast('Assignment saved')
       setDelDriver1(null); setDelDriver2(null)
