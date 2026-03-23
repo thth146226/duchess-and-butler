@@ -32,13 +32,15 @@ export default function DriverPortal({ token }) {
   useEffect(() => { if (token) fetchDriver() }, [token])
 
   async function fetchDriver() {
+    console.log('Token received:', token)
     const { data, error } = await supabase
       .from('drivers')
       .select('*')
       .eq('access_token', token)
       .single()
+    console.log('Driver found:', data, 'Error:', error)
     if (error || !data) { 
-      setError('Invalid or expired link.') 
+      setError('Invalid or expired link. Token: ' + token) 
       setLoading(false)
       return 
     }
