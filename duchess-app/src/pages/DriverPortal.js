@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
-import { supabase } from '../lib/supabase'
+import { supabasePublic as supabase } from '../lib/supabase'
 
 const RUN_TYPES = [
   { value: 'after_del', label: 'After DEL', bg: '#FCEBEB', color: '#A32D2D', border: '#FCA5A5' },
@@ -37,7 +37,11 @@ export default function DriverPortal({ token }) {
       .select('*')
       .eq('access_token', token)
       .single()
-    if (error || !data) { setError('Invalid or expired link.'); setLoading(false); return }
+    if (error || !data) { 
+      setError('Invalid or expired link.') 
+      setLoading(false)
+      return 
+    }
     setDriver(data)
     fetchJobs(data.name)
   }
@@ -47,7 +51,7 @@ export default function DriverPortal({ token }) {
       .from('crms_jobs')
       .select('*')
       .not('status', 'eq', 'cancelled')
-      .or(`assigned_driver_name.eq.${driverName},assigned_driver_name_2.eq.${driverName}`)
+      .or(`assigned_driver_name.eq."${driverName}",assigned_driver_name_2.eq."${driverName}"`)
       .order('delivery_date', { ascending: true, nullsLast: true })
     if (data) setJobs(data)
     setLoading(false)
