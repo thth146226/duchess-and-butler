@@ -296,6 +296,8 @@ export default function Schedule() {
       setDelDriver1(null); setDelDriver2(null)
       setColDriver1(null); setColDriver2(null)
       fetchJobs()
+      setSelectedRun(null)
+      setTimeout(() => fetchJobs(), 500)
     } catch(e) {
       showToast('Error saving', 'error')
     }
