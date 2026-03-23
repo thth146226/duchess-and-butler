@@ -71,6 +71,15 @@ export default function Paperwork() {
   }
 
   async function printDocument(job, type) {
+    // Open window IMMEDIATELY on click (before any async work)
+    // This is required for mobile browsers to allow popup
+    const win = window.open('', '_blank')
+    if (!win) {
+      alert('Please allow popups for this site to open documents.')
+      return
+    }
+    win.document.write('<html><body><p style="font-family:sans-serif;padding:40px;color:#666">Loading document…</p></body></html>')
+
     const logoBase64 = await getLogoBase64()
     const logoHTML = logoBase64
       ? `<img src="${logoBase64}" alt="Duchess & Butler" style="height:80px" />`
@@ -229,12 +238,20 @@ export default function Paperwork() {
 </body>
 </html>`
 
-    const win = window.open('', '_blank')
+    win.document.open()
     win.document.write(html)
     win.document.close()
   }
 
   async function printRunSheet(date) {
+    // Open window IMMEDIATELY on click
+    const win = window.open('', '_blank')
+    if (!win) {
+      alert('Please allow popups for this site to open documents.')
+      return
+    }
+    win.document.write('<html><body><p style="font-family:sans-serif;padding:40px;color:#666">Loading run sheet…</p></body></html>')
+
     const logoBase64 = await getLogoBase64()
     const logoHTML = logoBase64
       ? `<img src="${logoBase64}" alt="Duchess & Butler" style="height:60px" />`
@@ -328,7 +345,7 @@ export default function Paperwork() {
 </body>
 </html>`
 
-    const win = window.open('', '_blank')
+    win.document.open()
     win.document.write(html)
     win.document.close()
   }
