@@ -104,10 +104,10 @@ export default function Schedule() {
   const [groupByDriver, setGroup]   = useState(false)
   const [toast, setToast]           = useState(null)   // { msg, type }
   const [assigningId, setAssigning] = useState(null)   // run.id being saved
-  const [assigningDriver1, setAssigningDriver1] = useState(null)
-  const [assigningDriver2, setAssigningDriver2] = useState(null)
-  const [driver1Runs, setDriver1Runs]           = useState('both')
-  const [driver2Runs, setDriver2Runs]           = useState('both')
+  const [delDriver1, setDelDriver1] = useState(null)
+  const [delDriver2, setDelDriver2] = useState(null)
+  const [colDriver1, setColDriver1] = useState(null)
+  const [colDriver2, setColDriver2] = useState(null)
   const [jobNotes, setJobNotes]                 = useState({})
 
   function showToast(msg, type = 'success') {
@@ -126,6 +126,33 @@ export default function Schedule() {
       .subscribe()
     return () => supabase.removeChannel(channel)
   }, [])
+
+  useEffect(() => {
+    if (selectedRun?.job) {
+      const j = selectedRun.job
+      // Reset so we don't carry over values from a previously selected run
+      setDelDriver1(null)
+      setDelDriver2(null)
+      setColDriver1(null)
+      setColDriver2(null)
+      // Pre-fill DEL
+      const d1 = drivers.find(d => d.name === j.assigned_driver_name)
+      const d2 = drivers.find(d => d.name === j.assigned_driver_name_2)
+      if (j.driver_1_runs === 'del' || j.driver_1_runs === 'both') {
+        setDelDriver1(j.assigned_driver_name === 'Self Collection' ? 'self_collection' : d1?.id || null)
+        setDelDriver2(d2?.id || null)
+      }
+      if (j.driver_1_runs === 'col' || j.driver_1_runs === 'both') {
+        setColDriver1(d1?.id || null)
+        setColDriver2(d2?.id || null)
+      }
+      // If separate col driver stored
+      if (j.col_driver_name) {
+        const cd1 = drivers.find(d => d.name === j.col_driver_name)
+        setColDriver1(cd1?.id || null)
+      }
+    }
+  }, [selectedRun])
 
   async function fetchJobs() {
     // Fetch both CRMS jobs and manual orders
@@ -219,30 +246,37 @@ export default function Schedule() {
   }
 
   async function saveAssignment(run) {
-    if (!assigningDriver1) return
     setAssigning(run.id)
     try {
-      const isSelfCollection = assigningDriver1 === 'self_collection'
-      const driver1 = isSelfCollection ? null : drivers.find(d => d.id === assigningDriver1)
-      const driver2 = assigningDriver2 ? drivers.find(d => d.id === assigningDriver2) : null
       const table = run.crmsId ? 'crms_jobs' : 'orders'
 
+      const delD1 = delDriver1 === 'self_collection' ? null : drivers.find(d => d.id === delDriver1)
+      const delD2 = drivers.find(d => d.id === delDriver2)
+      const colD1 = drivers.find(d => d.id === colDriver1)
+      const colD2 = drivers.find(d => d.id === colDriver2)
+
+      // Determine primary driver (DEL takes priority, fallback to COL)
+      const primaryDriver = delD1 || colD1
+      const secondDriver = delD1 ? delD2 : colD2
+
+      const isSelfCol = delDriver1 === 'self_collection'
+
       await supabase.from(table).update({
-        assigned_driver_id:     isSelfCollection ? null : driver1?.id || null,
-        assigned_driver_name:   isSelfCollection ? 'Self Collection' : driver1?.name || null,
-        assigned_driver_id_2:   driver2?.id || null,
-        assigned_driver_name_2: driver2?.name || null,
-        driver_1_runs:          isSelfCollection ? 'col' : driver1Runs,
-        driver_2_runs:          driver2 ? driver2Runs : null,
+        assigned_driver_id:     primaryDriver?.id || null,
+        assigned_driver_name:   isSelfCol ? 'Self Collection' : (primaryDriver?.name || null),
+        assigned_driver_id_2:   secondDriver?.id || null,
+        assigned_driver_name_2: secondDriver?.name || null,
+        driver_1_runs:          delD1 && colD1 && delD1.id !== colD1.id ? 'del' : 'both',
+        driver_2_runs:          secondDriver ? 'both' : null,
+        col_driver_name:        colD1 && delD1 && colD1.id !== delD1.id ? colD1.name : null,
+        col_driver_name_2:      colD2?.name || null,
       }).eq('id', run.jobId)
 
       showToast('Assignment saved')
-      setAssigningDriver1(null)
-      setAssigningDriver2(null)
-      setDriver1Runs('both')
-      setDriver2Runs('both')
+      setDelDriver1(null); setDelDriver2(null)
+      setColDriver1(null); setColDriver2(null)
       fetchJobs()
-    } catch (e) {
+    } catch(e) {
       showToast('Error saving', 'error')
     }
     setAssigning(null)
@@ -395,14 +429,14 @@ export default function Schedule() {
           drivers={drivers}
           assigningId={assigningId}
           onClose={() => setSelectedRun(null)}
-          assigningDriver1={assigningDriver1}
-          setAssigningDriver1={setAssigningDriver1}
-          assigningDriver2={assigningDriver2}
-          setAssigningDriver2={setAssigningDriver2}
-          driver1Runs={driver1Runs}
-          setDriver1Runs={setDriver1Runs}
-          driver2Runs={driver2Runs}
-          setDriver2Runs={setDriver2Runs}
+          delDriver1={delDriver1}
+          setDelDriver1={setDelDriver1}
+          delDriver2={delDriver2}
+          setDelDriver2={setDelDriver2}
+          colDriver1={colDriver1}
+          setColDriver1={setColDriver1}
+          colDriver2={colDriver2}
+          setColDriver2={setColDriver2}
           saveAssignment={saveAssignment}
           jobNotes={jobNotes}
         />
@@ -852,21 +886,19 @@ function RunDetailPanel({
   drivers,
   onClose,
   assigningId,
-  assigningDriver1,
-  setAssigningDriver1,
-  assigningDriver2,
-  setAssigningDriver2,
-  driver1Runs,
-  setDriver1Runs,
-  driver2Runs,
-  setDriver2Runs,
+  delDriver1,
+  setDelDriver1,
+  delDriver2,
+  setDelDriver2,
+  colDriver1,
+  setColDriver1,
+  colDriver2,
+  setColDriver2,
   saveAssignment,
   jobNotes,
 }) {
   const [tab, setTab] = useState('details')
   useEffect(() => { setTab('details') }, [run.id])
-
-  const isSaving = assigningId === run.id
   const colors = run.runType === 'DEL'
     ? { border: '#EF4444', badge: '#EF4444', bg: '#FEF2F2' }
     : { border: '#22C55E', badge: '#22C55E', bg: '#F0FDF4' }
@@ -944,168 +976,84 @@ function RunDetailPanel({
           <div style={{ marginTop: '8px' }}>
             <div style={S.sectionLabel}>Driver Assignment</div>
 
-            {/* Driver 1 */}
-            <div style={{ border: '1px solid #DDD8CF', borderRadius: '8px', padding: '12px 14px', marginBottom: '10px' }}>
-              <div style={{ fontSize: '11px', fontWeight: '500', color: '#6B6860', marginBottom: '10px' }}>
-                Driver 1 — required
-              </div>
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
-                {drivers.map(d => (
-                  <button
-                    key={d.id}
-                    type="button"
-                    style={{
-                      fontSize: '12px', fontWeight: '500', padding: '6px 14px',
-                      borderRadius: '20px', cursor: 'pointer',
-                      fontFamily: "'DM Sans', sans-serif",
-                      background: assigningDriver1 === d.id ? (d.colour || '#1C1C1E') : 'transparent',
-                      color: assigningDriver1 === d.id ? '#fff' : '#1C1C1E',
-                      border: `1.5px solid ${assigningDriver1 === d.id ? (d.colour || '#1C1C1E') : '#DDD8CF'}`,
-                    }}
-                    onClick={() => setAssigningDriver1(d.id)}
-                  >
-                    {d.name}
-                  </button>
-                ))}
-                {/* Self Collection */}
-                <button
-                  type="button"
-                  style={{
-                    fontSize: '12px', fontWeight: '500', padding: '6px 14px',
-                    borderRadius: '20px', cursor: 'pointer',
-                    fontFamily: "'DM Sans', sans-serif",
-                    background: assigningDriver1 === 'self_collection' ? '#F1F5F9' : 'transparent',
-                    color: assigningDriver1 === 'self_collection' ? '#475569' : '#6B6860',
-                    border: `1.5px solid ${assigningDriver1 === 'self_collection' ? '#94A3B8' : '#DDD8CF'}`,
-                  }}
-                  onClick={() => { setAssigningDriver1('self_collection'); setAssigningDriver2(null); setDriver2Runs('both') }}
-                >
-                  Self Collection
-                </button>
-              </div>
-              {/* Run type for driver 1 */}
-              {assigningDriver1 && assigningDriver1 !== 'self_collection' && (
-                <div style={{ display: 'flex', gap: '6px' }}>
-                  {[['both','DEL + COL'],['del','DEL only'],['col','COL only']].map(([val, label]) => (
-                    <button
-                      key={val}
-                      type="button"
-                      onClick={() => setDriver1Runs(val)}
-                      style={{
-                        fontSize: '11px', fontWeight: '500', padding: '4px 12px',
-                        borderRadius: '4px', cursor: 'pointer',
-                        fontFamily: "'DM Sans', sans-serif",
-                        background: driver1Runs === val ? '#1C1C1E' : 'transparent',
-                        color: driver1Runs === val ? '#fff' : '#6B6860',
-                        border: `1px solid ${driver1Runs === val ? '#1C1C1E' : '#DDD8CF'}`,
-                      }}
-                    >{label}</button>
-                  ))}
+            {/* DEL Assignment */}
+            {run?.job?.delivery_date && (
+              <div style={{ border: '1px solid #FCA5A5', borderRadius: '8px', padding: '12px 14px', marginBottom: '10px', background: '#FFF8F8' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                  <span style={{ background: '#FCEBEB', color: '#A32D2D', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '4px' }}>DEL</span>
+                  <span style={{ fontSize: '12px', color: '#6B6860' }}>{run.job.delivery_date} {run.job.delivery_time?.substring(0,5) || ''}</span>
                 </div>
-              )}
-            </div>
-
-            {/* Driver 2 — only if not Self Collection */}
-            {assigningDriver1 !== 'self_collection' && (
-              <div style={{ border: '1px solid #DDD8CF', borderRadius: '8px', padding: '12px 14px', marginBottom: '12px' }}>
-                <div style={{ fontSize: '11px', fontWeight: '500', color: '#6B6860', marginBottom: '10px' }}>
-                  Driver 2 — optional
-                </div>
-                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
                   <button
-                    type="button"
-                    style={{
-                      fontSize: '12px', padding: '6px 14px', borderRadius: '20px',
-                      cursor: 'pointer', fontFamily: "'DM Sans', sans-serif",
-                      background: !assigningDriver2 ? '#F7F3EE' : 'transparent',
-                      color: !assigningDriver2 ? '#B8965A' : '#6B6860',
-                      border: `1.5px dashed ${!assigningDriver2 ? '#B8965A' : '#DDD8CF'}`,
-                    }}
-                    onClick={() => setAssigningDriver2(null)}
+                    onClick={() => setDelDriver1(null)}
+                    style={{ fontSize: '11px', padding: '5px 12px', borderRadius: '20px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", background: !delDriver1 ? '#F7F3EE' : 'transparent', color: !delDriver1 ? '#B8965A' : '#6B6860', border: `1.5px dashed ${!delDriver1 ? '#B8965A' : '#DDD8CF'}` }}
                   >None</button>
-                  {drivers.filter(d => d.id !== assigningDriver1).map(d => (
+                  {drivers.map(d => (
                     <button
                       key={d.id}
-                      type="button"
-                      style={{
-                        fontSize: '12px', fontWeight: '500', padding: '6px 14px',
-                        borderRadius: '20px', cursor: 'pointer',
-                        fontFamily: "'DM Sans', sans-serif",
-                        background: assigningDriver2 === d.id ? (d.colour || '#1C1C1E') : 'transparent',
-                        color: assigningDriver2 === d.id ? '#fff' : '#1C1C1E',
-                        border: `1.5px solid ${assigningDriver2 === d.id ? (d.colour || '#1C1C1E') : '#DDD8CF'}`,
-                      }}
-                      onClick={() => setAssigningDriver2(d.id)}
-                    >{d.name}</button>
+                      onClick={() => setDelDriver1(d.id)}
+                      style={{ fontSize: '11px', fontWeight: '500', padding: '5px 12px', borderRadius: '20px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", background: delDriver1 === d.id ? (d.colour || '#1C1C1E') : 'transparent', color: delDriver1 === d.id ? '#fff' : '#1C1C1E', border: `1.5px solid ${delDriver1 === d.id ? (d.colour || '#1C1C1E') : '#DDD8CF'}` }}>{d.name}</button>
                   ))}
+                  <button
+                    onClick={() => setDelDriver1('self_collection')}
+                    style={{ fontSize: '11px', fontWeight: '500', padding: '5px 12px', borderRadius: '20px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", background: delDriver1 === 'self_collection' ? '#F1F5F9' : 'transparent', color: delDriver1 === 'self_collection' ? '#475569' : '#6B6860', border: `1.5px solid ${delDriver1 === 'self_collection' ? '#94A3B8' : '#DDD8CF'}` }}
+                  >Self Collection</button>
                 </div>
-                {assigningDriver2 && (
-                  <div style={{ display: 'flex', gap: '6px' }}>
-                    {[['both','DEL + COL'],['del','DEL only'],['col','COL only']].map(([val, label]) => (
-                      <button
-                        key={val}
-                        type="button"
-                        onClick={() => setDriver2Runs(val)}
-                        style={{
-                          fontSize: '11px', fontWeight: '500', padding: '4px 12px',
-                          borderRadius: '4px', cursor: 'pointer',
-                          fontFamily: "'DM Sans', sans-serif",
-                          background: driver2Runs === val ? '#1C1C1E' : 'transparent',
-                          color: driver2Runs === val ? '#fff' : '#6B6860',
-                          border: `1px solid ${driver2Runs === val ? '#1C1C1E' : '#DDD8CF'}`,
-                        }}
-                      >{label}</button>
-                    ))}
+
+                {/* Driver 2 for DEL */}
+                {delDriver1 && delDriver1 !== 'self_collection' && (
+                  <div>
+                    <div style={{ fontSize: '10px', color: '#6B6860', marginBottom: '6px' }}>+ Second driver (optional)</div>
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                      <button onClick={() => setDelDriver2(null)} style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '20px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", background: !delDriver2 ? '#F7F3EE' : 'transparent', color: '#6B6860', border: `1.5px dashed ${!delDriver2 ? '#B8965A' : '#DDD8CF'}` }}>None</button>
+                      {drivers.filter(d => d.id !== delDriver1).map(d => (
+                        <button key={d.id} onClick={() => setDelDriver2(d.id)} style={{ fontSize: '11px', fontWeight: '500', padding: '4px 10px', borderRadius: '20px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", background: delDriver2 === d.id ? (d.colour || '#1C1C1E') : 'transparent', color: delDriver2 === d.id ? '#fff' : '#1C1C1E', border: `1.5px solid ${delDriver2 === d.id ? (d.colour || '#1C1C1E') : '#DDD8CF'}` }}>{d.name}</button>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
             )}
 
-            {/* Preview */}
-            {assigningDriver1 && (
-              <div style={{ background: '#F7F3EE', borderRadius: '8px', padding: '12px 14px', marginBottom: '12px' }}>
-                <div style={{ fontSize: '10px', fontWeight: '500', letterSpacing: '0.08em', textTransform: 'uppercase', color: '#6B6860', marginBottom: '8px' }}>Preview</div>
-                {['del','col'].map(type => {
-                  const d1Shows = assigningDriver1 === 'self_collection'
-                    ? type === 'col'
-                    : driver1Runs === 'both' || driver1Runs === type
-                  const d2Shows = assigningDriver2 && (driver2Runs === 'both' || driver2Runs === type)
-                  if (!d1Shows && !d2Shows) return null
-                  const driver1Preview = assigningDriver1 === 'self_collection'
-                    ? { name: 'Self Collection', colour: '#94A3B8' }
-                    : drivers.find(d => d.id === assigningDriver1)
-                  const driver2Preview = drivers.find(d => d.id === assigningDriver2)
-                  return (
-                    <div key={type} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                      <span style={{
-                        fontSize: '10px', fontWeight: '600', padding: '2px 7px', borderRadius: '4px',
-                        background: type === 'del' ? '#FCEBEB' : '#EAF3DE',
-                        color: type === 'del' ? '#A32D2D' : '#3B6D11',
-                      }}>{type.toUpperCase()}</span>
-                      {d1Shows && driver1Preview && (
-                        <span style={{ fontSize: '11px', fontWeight: '500', padding: '3px 10px', borderRadius: '10px', background: driver1Preview.colour || '#1C1C1E', color: '#fff' }}>
-                          {driver1Preview.name}
-                        </span>
-                      )}
-                      {d2Shows && driver2Preview && (
-                        <span style={{ fontSize: '11px', fontWeight: '500', padding: '3px 10px', borderRadius: '10px', background: driver2Preview.colour || '#1C1C1E', color: '#fff' }}>
-                          {driver2Preview.name}
-                        </span>
-                      )}
+            {/* COL Assignment */}
+            {run?.job?.collection_date && (
+              <div style={{ border: '1px solid #86EFAC', borderRadius: '8px', padding: '12px 14px', marginBottom: '12px', background: '#F8FFF8' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                  <span style={{ background: '#EAF3DE', color: '#3B6D11', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '4px' }}>COL</span>
+                  <span style={{ fontSize: '12px', color: '#6B6860' }}>{run.job.collection_date} {run.job.collection_time?.substring(0,5) || ''}</span>
+                </div>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                  <button
+                    onClick={() => setColDriver1(null)}
+                    style={{ fontSize: '11px', padding: '5px 12px', borderRadius: '20px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", background: !colDriver1 ? '#F7F3EE' : 'transparent', color: !colDriver1 ? '#B8965A' : '#6B6860', border: `1.5px dashed ${!colDriver1 ? '#B8965A' : '#DDD8CF'}` }}
+                  >None</button>
+                  {drivers.map(d => (
+                    <button key={d.id} onClick={() => setColDriver1(d.id)} style={{ fontSize: '11px', fontWeight: '500', padding: '5px 12px', borderRadius: '20px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", background: colDriver1 === d.id ? (d.colour || '#1C1C1E') : 'transparent', color: colDriver1 === d.id ? '#fff' : '#1C1C1E', border: `1.5px solid ${colDriver1 === d.id ? (d.colour || '#1C1C1E') : '#DDD8CF'}` }}>{d.name}</button>
+                  ))}
+                </div>
+
+                {/* Driver 2 for COL */}
+                {colDriver1 && (
+                  <div>
+                    <div style={{ fontSize: '10px', color: '#6B6860', marginBottom: '6px' }}>+ Second driver (optional)</div>
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                      <button onClick={() => setColDriver2(null)} style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '20px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", background: !colDriver2 ? '#F7F3EE' : 'transparent', color: '#6B6860', border: `1.5px dashed ${!colDriver2 ? '#B8965A' : '#DDD8CF'}` }}>None</button>
+                      {drivers.filter(d => d.id !== colDriver1).map(d => (
+                        <button key={d.id} onClick={() => setColDriver2(d.id)} style={{ fontSize: '11px', fontWeight: '500', padding: '4px 10px', borderRadius: '20px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", background: colDriver2 === d.id ? (d.colour || '#1C1C1E') : 'transparent', color: colDriver2 === d.id ? '#fff' : '#1C1C1E', border: `1.5px solid ${colDriver2 === d.id ? (d.colour || '#1C1C1E') : '#DDD8CF'}` }}>{d.name}</button>
+                      ))}
                     </div>
-                  )
-                })}
+                  </div>
+                )}
               </div>
             )}
 
             {/* Save button */}
             <button
-              type="button"
-              style={{ width: '100%', padding: '11px', background: '#1C1C1E', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '13px', fontWeight: '500', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", opacity: isSaving ? 0.7 : 1 }}
-              disabled={isSaving || !assigningDriver1}
+              disabled={!!assigningId}
               onClick={() => saveAssignment(run)}
+              style={{ width: '100%', padding: '11px', background: '#1C1C1E', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '13px', fontWeight: '500', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", opacity: assigningId ? 0.7 : 1 }}
             >
-              {isSaving ? 'Saving…' : 'Save assignment'}
+              {assigningId ? 'Saving…' : 'Save assignment'}
             </button>
           </div>
 
