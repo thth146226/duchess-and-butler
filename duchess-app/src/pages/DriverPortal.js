@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
-import { supabasePublic as supabase } from '../lib/supabase'
+import { supabasePublic, supabasePublic as supabase } from '../lib/supabase'
 
 const RUN_TYPES = [
   { value: 'after_del', label: 'After DEL', bg: '#FCEBEB', color: '#A32D2D', border: '#FCA5A5' },
@@ -49,13 +49,22 @@ export default function DriverPortal({ token }) {
   }
 
   async function fetchJobs(driverName) {
-    const { data } = await supabase
+    const { data } = await supabasePublic
       .from('crms_jobs')
       .select('*')
       .not('status', 'eq', 'cancelled')
-      .or(`assigned_driver_name.eq."${driverName}",assigned_driver_name_2.eq."${driverName}"`)
       .order('delivery_date', { ascending: true, nullsLast: true })
-    if (data) setJobs(data)
+
+    if (data) {
+      // Filter client-side to avoid Supabase .or() quoting issues
+      const myJobs = data.filter(j =>
+        j.assigned_driver_name === driverName ||
+        j.assigned_driver_name_2 === driverName ||
+        j.col_driver_name === driverName ||
+        j.col_driver_name_2 === driverName
+      )
+      setJobs(myJobs)
+    }
     setLoading(false)
   }
 
