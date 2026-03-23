@@ -52,15 +52,31 @@ function buildRuns(jobs) {
       isAmended:          job.is_amended,
       isUrgent:           job.is_urgent,
       notes:              job.notes,
-      driverName:         job.assigned_driver_name || null,
-      driverName2:        job.assigned_driver_name_2 || null,
       driverColour:       null,   // filled below from drivers list
       driverColour2:      null,
       assignedDriverId:   job.assigned_driver_id   || null,
       assignedDriverId2:  job.assigned_driver_id_2 || null,
     }
-    if (job.delivery_date) runs.push({ ...base, id: `${job.id}-DEL`, runType: 'DEL', runDate: job.delivery_date, runTime: job.delivery_time, missingTime: !job.delivery_time })
-    if (job.collection_date) runs.push({ ...base, id: `${job.id}-COL`, runType: 'COL', runDate: job.collection_date, runTime: job.collection_time, missingTime: !job.collection_time })
+    if (job.delivery_date) runs.push({
+      ...base,
+      id: `${job.id}-DEL`,
+      runType: 'DEL',
+      runDate: job.delivery_date,
+      runTime: job.delivery_time,
+      missingTime: !job.delivery_time,
+      driverName: job.assigned_driver_name || null,
+      driverName2: job.assigned_driver_name_2 || null,
+    })
+    if (job.collection_date) runs.push({
+      ...base,
+      id: `${job.id}-COL`,
+      runType: 'COL',
+      runDate: job.collection_date,
+      runTime: job.collection_time,
+      missingTime: !job.collection_time,
+      driverName: job.col_driver_name || job.assigned_driver_name || null,
+      driverName2: job.col_driver_name_2 || job.assigned_driver_name_2 || null,
+    })
   }
   return runs.sort((a, b) => {
     const d = (a.runDate || '').localeCompare(b.runDate || '')
@@ -305,12 +321,17 @@ export default function Schedule() {
   }
 
   // ── Build run list enriched with driver colour ─────────────────────────────
-  const driverMap = drivers.reduce((m, d) => ({ ...m, [d.id]: d }), {})
-  const allRuns = buildRuns(jobs).map(r => ({
-    ...r,
-    driverColour: r.assignedDriverId ? (driverMap[r.assignedDriverId]?.colour || '#3D5A73') : null,
-    driverColour2: r.assignedDriverId2 ? (driverMap[r.assignedDriverId2]?.colour || '#5F5E5A') : null,
-  }))
+  const allRuns = buildRuns(jobs).map(r => {
+    const d1 = drivers.find(d => d.name === r.driverName)
+    const d2 = drivers.find(d => d.name === r.driverName2)
+    return {
+      ...r,
+      driverColour: d1?.colour || null,
+      driverColour2: d2?.colour || null,
+      assignedDriverId: d1?.id || null,
+      assignedDriverId2: d2?.id || null,
+    }
+  })
 
   const filtered = applyFilter(
     allRuns.filter(r =>
