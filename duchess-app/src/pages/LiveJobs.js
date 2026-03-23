@@ -216,10 +216,10 @@ export default function LiveJobs() {
                   <td style={{ ...S.td, fontSize: '12px', color: '#6B6860', maxWidth: '130px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{job.venue || '—'}</td>
                   <td style={S.td}>{fmt(job.event_date)}</td>
                   <td style={S.td}>
-                    {job.delivery_date ? (<><span style={{ background: '#FEF2F2', color: '#991B1B', fontSize: '10px', fontWeight: '700', padding: '2px 6px', borderRadius: '3px', marginRight: '4px' }}>DEL</span>{fmt(job.delivery_date)}{job.delivery_time && <div style={{ fontSize: '11px', color: '#6B6860' }}>{job.delivery_time}</div>}</>) : '—'}
+                    {job.delivery_date ? (<><span style={{ background: '#FEF2F2', color: '#991B1B', fontSize: '10px', fontWeight: '700', padding: '2px 6px', borderRadius: '3px', marginRight: '4px' }}>DEL</span>{fmt(job.delivery_date)}{job.delivery_time && <div style={{ fontSize: '11px', color: '#6B6860' }}>{job.delivery_time.substring(0, 5)}</div>}</>) : '—'}
                   </td>
                   <td style={S.td}>
-                    {job.collection_date ? (<><span style={{ background: '#F0FDF4', color: '#166534', fontSize: '10px', fontWeight: '700', padding: '2px 6px', borderRadius: '3px', marginRight: '4px' }}>COL</span>{fmt(job.collection_date)}{job.collection_time && <div style={{ fontSize: '11px', color: '#6B6860' }}>{job.collection_time}</div>}</>) : '—'}
+                    {job.collection_date ? (<><span style={{ background: '#F0FDF4', color: '#166534', fontSize: '10px', fontWeight: '700', padding: '2px 6px', borderRadius: '3px', marginRight: '4px' }}>COL</span>{fmt(job.collection_date)}{job.collection_time && <div style={{ fontSize: '11px', color: '#6B6860' }}>{job.collection_time.substring(0, 5)}</div>}</>) : '—'}
                   </td>
                   <td style={S.td}>
                     {job.assigned_driver_name
@@ -370,7 +370,7 @@ function JobDetailPanel({ job, changes, tab, setTab, onClose, onAcknowledge }) {
                   <div style={{ fontSize: '16px', fontFamily: "'Cormorant Garamond', serif", fontWeight: '600' }}>
                     {job.delivery_date ? fmt(job.delivery_date) : '—'}
                   </div>
-                  {job.delivery_time && <div style={{ fontSize: '14px', color: '#991B1B', marginTop: '4px' }}>🕐 {job.delivery_time}</div>}
+                  {job.delivery_time && <div style={{ fontSize: '14px', color: '#991B1B', marginTop: '4px' }}>🕐 {job.delivery_time.substring(0, 5)}</div>}
                   {job.delivery_end_time && <div style={{ fontSize: '12px', color: '#991B1B', opacity: 0.7 }}>until {job.delivery_end_time}</div>}
                 </div>
                 <div style={{ background: '#F0FDF4', border: '1.5px solid #22C55E', borderRadius: '8px', padding: '16px' }}>
@@ -378,7 +378,7 @@ function JobDetailPanel({ job, changes, tab, setTab, onClose, onAcknowledge }) {
                   <div style={{ fontSize: '16px', fontFamily: "'Cormorant Garamond', serif", fontWeight: '600' }}>
                     {job.collection_date ? fmt(job.collection_date) : '—'}
                   </div>
-                  {job.collection_time && <div style={{ fontSize: '14px', color: '#166534', marginTop: '4px' }}>🕐 {job.collection_time}</div>}
+                  {job.collection_time && <div style={{ fontSize: '14px', color: '#166534', marginTop: '4px' }}>🕐 {job.collection_time.substring(0, 5)}</div>}
                   {job.collection_end_time && <div style={{ fontSize: '12px', color: '#166534', opacity: 0.7 }}>until {job.collection_end_time}</div>}
                 </div>
               </div>

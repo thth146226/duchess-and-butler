@@ -83,11 +83,12 @@ export default function Paperwork() {
     const groups = groupItems(job.crms_job_items)
     const isDelivery = type === 'DEL'
     const typeLabel = isDelivery ? 'DELIVERY NOTE' : 'COLLECTION NOTE'
-    const dateLabel = isDelivery ? 'Delivery Date' : 'Collection Date'
     const cleanTime = (t) => t ? t.substring(0, 5) : null
+    const deliveryTimeStr = cleanTime(job.delivery_time)
+    const collectionTimeStr = cleanTime(job.collection_time)
     const dateValue = isDelivery
-      ? fmtDate(job.delivery_date, cleanTime(job.delivery_time) ? `${cleanTime(job.delivery_time)} - 17:00` : null)
-      : fmtDate(job.collection_date, cleanTime(job.collection_time) ? `${cleanTime(job.collection_time)} - 17:00` : null)
+      ? fmtDate(job.delivery_date, deliveryTimeStr ? `${deliveryTimeStr} - 17:00` : null)
+      : fmtDate(job.collection_date, collectionTimeStr ? `${collectionTimeStr} - 17:00` : null)
 
     const specialNotes = notes.map(n => n.note_text).join(' | ')
     const drivers = [job.assigned_driver_name, job.assigned_driver_name_2].filter(Boolean).join(' + ')
@@ -151,7 +152,8 @@ export default function Paperwork() {
         <table style="width:100%;border:none">
           <tr><td class="label" style="border:none;padding:4px 0;width:140px">Order Date:</td><td style="border:none;padding:4px 0">${job.ordered_at ? fmtDate(job.ordered_at.split('T')[0]) : fmtDate(job.event_date)}</td></tr>
           <tr><td class="label" style="border:none;padding:4px 0">Our Reference:</td><td style="border:none;padding:4px 0">${job.crms_ref || '—'}</td></tr>
-          <tr><td class="label" style="border:none;padding:4px 0">${dateLabel}:</td><td style="border:none;padding:4px 0">${dateValue}</td></tr>
+          <tr><td class="label" style="border:none;padding:4px 0">Delivery Date:</td><td style="border:none;padding:4px 0">${fmtDate(job.delivery_date, deliveryTimeStr ? `${deliveryTimeStr} - 17:00` : null)}</td></tr>
+          <tr><td class="label" style="border:none;padding:4px 0">Collection Date:</td><td style="border:none;padding:4px 0">${fmtDate(job.collection_date, collectionTimeStr ? `${collectionTimeStr} - 17:00` : null)}</td></tr>
           <tr><td class="label" style="border:none;padding:4px 0">Event Date:</td><td style="border:none;padding:4px 0">${fmtDate(job.event_date)}</td></tr>
           ${drivers ? `<tr><td class="label" style="border:none;padding:4px 0">Driver:</td><td style="border:none;padding:4px 0">${drivers}</td></tr>` : ''}
         </table>
