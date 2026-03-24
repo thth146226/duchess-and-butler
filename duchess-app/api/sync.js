@@ -472,12 +472,14 @@ export default async function handler(req, res) {
     })
 
   } catch (err) {
-    await supabase.from('sync_runs').insert({
-      started_at:    startedAt,
-      completed_at:  new Date().toISOString(),
-      status:        'failed',
-      error_message: err.message,
-    }).catch(() => {})
+    try {
+      await supabase.from('sync_runs').insert({
+        started_at:    startedAt,
+        completed_at:  new Date().toISOString(),
+        status:        'failed',
+        error_message: err.message,
+      })
+    } catch (e) {}
 
     return res.status(500).json({ error: err.message, stats })
   }
