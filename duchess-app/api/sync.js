@@ -303,7 +303,7 @@ export default async function handler(req, res) {
 
   try {
     // ── 1. Fetch ALL opportunities from Current RMS ──────────────────────────
-    // Fetch all confirmed Orders (state=3) from 2026 onwards
+    // Fetch by starts_at window; confirm Orders client-side via shouldImport()
     // Use starts_at filter — deliver_starts_at is not supported as query param
     const until = new Date()
     until.setFullYear(until.getFullYear() + 2)
@@ -311,12 +311,10 @@ export default async function handler(req, res) {
     const allOpportunities = await fetchAllPages('/opportunities', 'opportunities', {
       'q[starts_at_gteq]': '2026-01-01',
       'q[starts_at_lteq]': until.toISOString().split('T')[0],
-      'q[state_eq]': '3',
       'q[s]': 'starts_at asc',
     })
 
-    // Remove any existing Supabase records that are NOT in the
-    // current API results (state=3 Orders only)
+    // Remove any existing Supabase records that are NOT in the current API results
     const validCrmsIds = allOpportunities.map(o => String(o.id))
     if (validCrmsIds.length > 0) {
       await supabase
