@@ -13,6 +13,7 @@ module.exports = async function handler(req, res) {
       .eq('crms_ref', 'QDB7474')
       .single()
 
+    
     // Count all jobs in Supabase
     const { count } = await supabase
       .from('crms_jobs')
@@ -33,3 +34,4 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: err.message })
   }
 }
+Debug QDB7371 date fields
