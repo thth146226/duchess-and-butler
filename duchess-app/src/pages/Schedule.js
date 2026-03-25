@@ -170,7 +170,7 @@ export default function Schedule() {
     setSavingOverride(false)
     setOverrideJob(null)
     showToast('Override saved — sync will not revert this')
-    fetchJobs()
+    setTimeout(() => fetchJobs(), 800)
   }
 
   async function clearManualOverride(jobId) {
@@ -183,7 +183,7 @@ export default function Schedule() {
       has_manual_override:    false,
     }).eq('id', jobId)
     showToast('Override cleared — RMS dates restored')
-    fetchJobs()
+    setTimeout(() => fetchJobs(), 800)
   }
 
   async function saveDraggedDate(run, newDate) {
@@ -199,7 +199,7 @@ export default function Schedule() {
     showToast(`${run.runType} moved to ${newDate}`)
     setDragRun(null)
     setDragOverDate(null)
-    fetchJobs()
+    setTimeout(() => fetchJobs(), 800)
   }
 
   async function saveRunOrder() {
@@ -217,7 +217,7 @@ export default function Schedule() {
     setSavingOrder(false)
     setPendingOrder(null)
     showToast('Run order saved')
-    fetchJobs()
+    setTimeout(() => fetchJobs(), 800)
   }
 
   function discardOrder() {
