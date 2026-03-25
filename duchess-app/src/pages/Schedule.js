@@ -141,9 +141,62 @@ export default function Schedule() {
   const [colDriver2, setColDriver2] = useState(null)
   const [jobNotes, setJobNotes]                 = useState({})
 
+  const [overrideJob, setOverrideJob]   = useState(null)
+  const [overrideForm, setOverrideForm] = useState({})
+  const [savingOverride, setSavingOverride] = useState(false)
+  const [dragRun, setDragRun]           = useState(null)
+  const [dragOverDate, setDragOverDate] = useState(null)
+  const [unsavedOrder, setUnsavedOrder] = useState({})
+
   function showToast(msg, type = 'success') {
     setToast({ msg, type })
     setTimeout(() => setToast(null), 3000)
+  }
+
+  async function saveManualOverride(job = overrideJob) {
+    if (!job) return
+    setSavingOverride(true)
+    await supabase.from('crms_jobs').update({
+      manual_delivery_date:   overrideForm.delivery_date || null,
+      manual_delivery_time:   overrideForm.delivery_time || null,
+      manual_collection_date: overrideForm.collection_date || null,
+      manual_collection_time: overrideForm.collection_time || null,
+      manual_venue:           overrideForm.venue || null,
+      has_manual_override:    true,
+    }).eq('id', job.id)
+    setSavingOverride(false)
+    setOverrideJob(null)
+    showToast('Override saved — sync will not revert this')
+    fetchJobs()
+  }
+
+  async function clearManualOverride(jobId) {
+    await supabase.from('crms_jobs').update({
+      manual_delivery_date:   null,
+      manual_delivery_time:   null,
+      manual_collection_date: null,
+      manual_collection_time: null,
+      manual_venue:           null,
+      has_manual_override:    false,
+    }).eq('id', jobId)
+    showToast('Override cleared — RMS dates restored')
+    fetchJobs()
+  }
+
+  async function saveDraggedDate(run, newDate) {
+    const isCol = run.runType === 'COL'
+    await supabase.from('crms_jobs').update({
+      ...(isCol ? {
+        manual_collection_date: newDate,
+      } : {
+        manual_delivery_date: newDate,
+      }),
+      has_manual_override: true,
+    }).eq('id', run.jobId)
+    showToast(`${run.runType} moved to ${newDate}`)
+    setDragRun(null)
+    setDragOverDate(null)
+    fetchJobs()
   }
 
   useEffect(() => {
@@ -182,6 +235,20 @@ export default function Schedule() {
         const cd1 = drivers.find(d => d.name === j.col_driver_name)
         setColDriver1(cd1?.id || null)
       }
+
+      // Manual override form pre-fill (so saving without editing doesn't wipe fields)
+      setOverrideJob(j)
+      setOverrideForm({
+        delivery_date:   j.manual_delivery_date || '',
+        delivery_time:   j.manual_delivery_time || j.delivery_time?.substring(0, 5) || '',
+        collection_date: j.manual_collection_date || '',
+        collection_time: j.manual_collection_time || j.collection_time?.substring(0, 5) || '',
+        venue:            j.manual_venue || j.venue || '',
+      })
+    }
+    else {
+      setOverrideJob(null)
+      setOverrideForm({})
     }
   }, [selectedRun])
 
@@ -475,7 +542,19 @@ export default function Schedule() {
       {view === 'week' && <WeekView allRuns={allRuns} weekOffset={weekOffset} setWeekOffset={setWeekOffset} onSelect={setSelectedRun} />}
 
       {/* ── MONTH VIEW ── */}
-      {view === 'month' && <MonthView allRuns={allRuns} monthDate={monthDate} setMonthDate={setMonthDate} onSelect={setSelectedRun} />}
+      {view === 'month' && (
+        <MonthView
+          allRuns={allRuns}
+          monthDate={monthDate}
+          setMonthDate={setMonthDate}
+          onSelect={setSelectedRun}
+          dragRun={dragRun}
+          dragOverDate={dragOverDate}
+          setDragRun={setDragRun}
+          setDragOverDate={setDragOverDate}
+          saveDraggedDate={saveDraggedDate}
+        />
+      )}
 
       {/* ── YEAR VIEW ── */}
       {view === 'year' && <YearView allRuns={allRuns} yearDate={yearDate} setYearDate={setYearDate} setMonthDate={setMonthDate} setView={setView} />}
@@ -497,6 +576,11 @@ export default function Schedule() {
           setColDriver2={setColDriver2}
           saveAssignment={saveAssignment}
           jobNotes={jobNotes}
+          setOverrideJob={setOverrideJob}
+          setOverrideForm={setOverrideForm}
+          savingOverride={savingOverride}
+          saveManualOverride={saveManualOverride}
+          clearManualOverride={clearManualOverride}
         />
       )}
 
@@ -593,6 +677,11 @@ function RunRow({ run, onSelect, jobNotes }) {
       onClick={() => onSelect(run)}>
       <td style={S.td}>
         <span style={{ background: colors.badge, color: 'white', fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '3px' }}>{run.runType}</span>
+        {run.isManualOverride && (
+          <span style={{ background: '#EFF6FF', color: '#1D4ED8', fontSize: '9px', fontWeight: '600', padding: '1px 5px', borderRadius: '3px', marginLeft: '4px' }}>
+            MANUAL
+          </span>
+        )}
       </td>
       <td style={{ ...S.td, fontWeight: '600', fontFamily: "'Cormorant Garamond', serif", fontSize: '16px', color: run.missingTime ? '#9CA3AF' : '#1C1C1E' }}>
         {run.runTime?.substring(0, 5) || <span style={{ fontSize: '11px', color: '#F59E0B' }}>⚠ No time</span>}
@@ -695,7 +784,14 @@ function GroupedByDriverView({ runs, drivers, onSelect }) {
                     const colors = run.runType === 'DEL' ? { badge: '#EF4444' } : { badge: '#22C55E' }
                     return (
                       <tr key={i} style={{ cursor: 'pointer' }} onClick={() => onSelect(run)}>
-                        <td style={S.td}><span style={{ background: colors.badge, color: 'white', fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '3px' }}>{run.runType}</span></td>
+                        <td style={S.td}>
+                          <span style={{ background: colors.badge, color: 'white', fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '3px' }}>{run.runType}</span>
+                          {run.isManualOverride && (
+                            <span style={{ background: '#EFF6FF', color: '#1D4ED8', fontSize: '9px', fontWeight: '600', padding: '1px 5px', borderRadius: '3px', marginLeft: '4px' }}>
+                              MANUAL
+                            </span>
+                          )}
+                        </td>
                         <td style={S.td}>{fmt(run.runDate)}</td>
                         <td style={{ ...S.td, fontFamily: "'Cormorant Garamond', serif", fontSize: '15px' }}>{run.runTime?.substring(0, 5) || <span style={{ fontSize: '11px', color: '#F59E0B' }}>⚠ No time</span>}</td>
                         <td style={S.td}><div style={{ fontWeight: 500 }}>{run.event || run.client}</div><div style={{ fontSize: '11px', color: '#6B6860' }}>{run.client}</div></td>
@@ -954,6 +1050,11 @@ function RunDetailPanel({
   setColDriver2,
   saveAssignment,
   jobNotes,
+  setOverrideJob,
+  setOverrideForm,
+  savingOverride,
+  saveManualOverride,
+  clearManualOverride,
 }) {
   const [tab, setTab] = useState('details')
   useEffect(() => { setTab('details') }, [run.id])
@@ -1029,6 +1130,68 @@ function RunDetailPanel({
           )}
 
           <hr style={S.divider} />
+          <div style={S.sectionLabel}>Manual Override</div>
+          {run.job.has_manual_override && (
+            <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: '6px', padding: '10px 12px', marginBottom: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ fontSize: '12px', color: '#1D4ED8' }}>
+                Manual override active — sync will not change these dates
+              </div>
+              <button
+                onClick={() => clearManualOverride(run.jobId)}
+                style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '4px', border: '1px solid #BFDBFE', background: 'transparent', color: '#1D4ED8', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
+              >Clear override</button>
+            </div>
+          )}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
+            <div>
+              <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '4px' }}>DEL date</div>
+              <input type="date"
+                defaultValue={run.job.manual_delivery_date || run.job.delivery_date || ''}
+                onChange={e => setOverrideForm(f => ({ ...f, delivery_date: e.target.value }))}
+                style={{ width: '100%', padding: '7px 10px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '12px', fontFamily: "'DM Sans', sans-serif" }}
+              />
+            </div>
+            <div>
+              <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '4px' }}>DEL time</div>
+              <input type="time"
+                defaultValue={run.job.manual_delivery_time || run.job.delivery_time?.substring(0,5) || ''}
+                onChange={e => setOverrideForm(f => ({ ...f, delivery_time: e.target.value }))}
+                style={{ width: '100%', padding: '7px 10px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '12px', fontFamily: "'DM Sans', sans-serif" }}
+              />
+            </div>
+            <div>
+              <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '4px' }}>COL date</div>
+              <input type="date"
+                defaultValue={run.job.manual_collection_date || run.job.collection_date || ''}
+                onChange={e => setOverrideForm(f => ({ ...f, collection_date: e.target.value }))}
+                style={{ width: '100%', padding: '7px 10px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '12px', fontFamily: "'DM Sans', sans-serif" }}
+              />
+            </div>
+            <div>
+              <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '4px' }}>COL time</div>
+              <input type="time"
+                defaultValue={run.job.manual_collection_time || run.job.collection_time?.substring(0,5) || ''}
+                onChange={e => setOverrideForm(f => ({ ...f, collection_time: e.target.value }))}
+                style={{ width: '100%', padding: '7px 10px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '12px', fontFamily: "'DM Sans', sans-serif" }}
+              />
+            </div>
+          </div>
+          <div style={{ marginBottom: '10px' }}>
+            <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '4px' }}>Venue override</div>
+            <input type="text"
+              defaultValue={run.job.manual_venue || run.job.venue || ''}
+              placeholder="Override venue name..."
+              onChange={e => setOverrideForm(f => ({ ...f, venue: e.target.value }))}
+              style={{ width: '100%', padding: '7px 10px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '12px', fontFamily: "'DM Sans', sans-serif", boxSizing: 'border-box' }}
+            />
+          </div>
+          <button
+            onClick={() => { setOverrideJob(run.job); saveManualOverride(run.job) }}
+            disabled={savingOverride}
+            style={{ width: '100%', padding: '10px', background: '#1C1C1E', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '13px', fontWeight: '500', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
+          >
+            {savingOverride ? 'Saving…' : 'Save override'}
+          </button>
 
           {/* ── DRIVER ASSIGNMENT ── */}
           <div style={{ marginTop: '8px' }}>
@@ -1203,7 +1366,7 @@ function WeekView({ allRuns, weekOffset, setWeekOffset, onSelect }) {
 }
 
 // ── MONTH VIEW ────────────────────────────────────────────────────────────────
-function MonthView({ allRuns, monthDate, setMonthDate, onSelect }) {
+function MonthView({ allRuns, monthDate, setMonthDate, onSelect, dragRun, dragOverDate, setDragRun, setDragOverDate, saveDraggedDate }) {
   const year = monthDate.getFullYear()
   const month = monthDate.getMonth()
   const first = new Date(year, month, 1)
@@ -1239,9 +1402,32 @@ function MonthView({ allRuns, monthDate, setMonthDate, onSelect }) {
             const dayRuns = allRuns.filter(r => r.runDate === ds)
             const isToday = ds === today
             return (
-              <div key={i} style={{ minHeight: '80px', padding: '6px', borderRight: '1px solid #EDE8E0', borderBottom: '1px solid #EDE8E0', background: isToday ? '#FFF8F0' : 'white' }}>
+              <div
+                key={i}
+                style={{
+                  minHeight: '80px',
+                  padding: '6px',
+                  borderRight: '1px solid #EDE8E0',
+                  borderBottom: '1px solid #EDE8E0',
+                  background: dragOverDate === ds ? '#F0FDF4' : (isToday ? '#FFF8F0' : 'white'),
+                  border: dragOverDate === ds ? '1.5px dashed #1D9E75' : 'none',
+                }}
+                onDragOver={(e) => { e.preventDefault(); setDragOverDate(ds) }}
+                onDragLeave={() => setDragOverDate(null)}
+                onDrop={(e) => { e.preventDefault(); if (dragRun) saveDraggedDate(dragRun, ds) }}
+              >
                 <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '16px', fontWeight: isToday ? '700' : '400', color: isToday ? '#B8965A' : '#1C1C1E', marginBottom: '4px' }}>{date.getDate()}</div>
-                {dayRuns.map((run, j) => <MiniRunCard key={j} run={run} onClick={() => onSelect(run)} compact />)}
+                {dayRuns.map((run, j) => (
+                  <MiniRunCard
+                    key={j}
+                    run={run}
+                    onClick={() => onSelect(run)}
+                    compact
+                    draggable={true}
+                    onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; setDragRun(run) }}
+                    onDragEnd={() => { setDragRun(null); setDragOverDate(null) }}
+                  />
+                ))}
               </div>
             )
           })}
@@ -1390,12 +1576,18 @@ function YearView({ allRuns, yearDate, setYearDate, setMonthDate, setView }) {
 }
 
 // ── MINI RUN CARD ─────────────────────────────────────────────────────────────
-function MiniRunCard({ run, onClick, compact = false }) {
+function MiniRunCard({ run, onClick, compact = false, draggable = false, onDragStart, onDragEnd }) {
   const colors = run.runType === 'DEL'
     ? { bg: '#FEF2F2', border: '#EF4444', text: '#991B1B', badge: '#EF4444' }
     : { bg: '#F0FDF4', border: '#22C55E', text: '#166534', badge: '#22C55E' }
   if (compact) return (
-    <div onClick={onClick} style={{ background: colors.bg, border: `1.5px solid ${colors.border}`, borderRadius: '3px', padding: '2px 5px', marginBottom: '2px', cursor: 'pointer', fontSize: '10px' }}>
+    <div
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onClick={onClick}
+      style={{ background: colors.bg, border: `1.5px solid ${colors.border}`, borderRadius: '3px', padding: '2px 5px', marginBottom: '2px', cursor: 'pointer', fontSize: '10px' }}
+    >
       <div>
         <span style={{ background: colors.badge, color: 'white', fontSize: '8px', fontWeight: '700', padding: '1px 3px', borderRadius: '2px', marginRight: '3px' }}>{run.runType}</span>
         <span style={{ color: colors.text, fontWeight: '600' }}>{run.event || run.client}</span>
@@ -1418,7 +1610,13 @@ function MiniRunCard({ run, onClick, compact = false }) {
     </div>
   )
   return (
-    <div onClick={onClick} style={{ background: colors.bg, border: `1.5px solid ${colors.border}`, borderRadius: '5px', padding: '7px 9px', marginBottom: '5px', cursor: 'pointer' }}>
+    <div
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onClick={onClick}
+      style={{ background: colors.bg, border: `1.5px solid ${colors.border}`, borderRadius: '5px', padding: '7px 9px', marginBottom: '5px', cursor: 'pointer' }}
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '3px' }}>
         <span style={{ background: colors.badge, color: 'white', fontSize: '9px', fontWeight: '700', padding: '2px 5px', borderRadius: '2px' }}>{run.runType}</span>
         <span style={{ fontSize: '11.5px', fontWeight: '600', color: colors.text, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{run.event || run.client}</span>
