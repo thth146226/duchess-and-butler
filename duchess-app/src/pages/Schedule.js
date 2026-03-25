@@ -3,23 +3,6 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import JobNotes from '../components/JobNotes'
 import EvidenceUpload from '../components/EvidenceUpload'
-import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  DragOverlay,
-} from '@dnd-kit/core'
-import {
-  arrayMove,
-  SortableContext,
-  sortableKeyboardCoordinates,
-  useSortable,
-  verticalListSortingStrategy,
-} from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
 const today    = new Date().toISOString().split('T')[0]
@@ -164,8 +147,6 @@ export default function Schedule() {
   const [dragRun, setDragRun]           = useState(null)
   const [dragOverDate, setDragOverDate] = useState(null)
   const [unsavedOrder, setUnsavedOrder] = useState({})
-
-  const [activeRun, setActiveRun] = useState(null)
   const [pendingOrder, setPendingOrder] = useState(null)
   const [savingOrder, setSavingOrder] = useState(false)
 
@@ -218,36 +199,6 @@ export default function Schedule() {
     setDragRun(null)
     setDragOverDate(null)
     fetchJobs()
-  }
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
-  )
-
-  function getRunsForDate(date) {
-    return allRuns
-      .filter(r => r.runDate === date)
-      .sort((a, b) => (a.manualSortOrder || 0) - (b.manualSortOrder || 0))
-  }
-
-  function handleDragStart(event) {
-    const run = allRuns.find(r => r.id === event.active.id)
-    setActiveRun(run || null)
-  }
-
-  function handleDragEnd(event, date) {
-    const { active, over } = event
-    setActiveRun(null)
-    if (!over || active.id === over.id) return
-
-    const dateRuns = getRunsForDate(date)
-    const oldIndex = dateRuns.findIndex(r => r.id === active.id)
-    const newIndex = dateRuns.findIndex(r => r.id === over.id)
-    if (oldIndex === -1 || newIndex === -1) return
-
-    const reordered = arrayMove(dateRuns, oldIndex, newIndex)
-    setPendingOrder({ date, runs: reordered })
   }
 
   async function saveRunOrder() {
@@ -603,14 +554,12 @@ export default function Schedule() {
           today={today}
           tomorrow={tomorrow}
           jobNotes={jobNotes}
-          sensors={sensors}
-          activeRun={activeRun}
           pendingOrder={pendingOrder}
           savingOrder={savingOrder}
-          handleDragStart={handleDragStart}
-          handleDragEnd={handleDragEnd}
           discardOrder={discardOrder}
           saveRunOrder={saveRunOrder}
+          setSelectedRun={setSelectedRun}
+          setPendingOrder={setPendingOrder}
         />
       )}
 
@@ -695,14 +644,12 @@ function ListView({
   today,
   tomorrow,
   jobNotes,
-  sensors,
-  activeRun,
   pendingOrder,
   savingOrder,
-  handleDragStart,
-  handleDragEnd,
   discardOrder,
   saveRunOrder,
+  setSelectedRun,
+  setPendingOrder,
 }) {
   if (filteredRuns.length === 0) return (
     <div style={{ textAlign: 'center', padding: '48px', color: '#9CA3AF', fontSize: '14px' }}>
@@ -720,76 +667,158 @@ function ListView({
       {groupByDriver
         ? <GroupedByDriverView runs={filteredRuns} drivers={drivers} onSelect={onSelect} />
         : (() => {
-            const dates = [...new Set(filteredRuns.map(r => r.runDate))].sort()
-            return dates.map(date => {
-              const dateRuns = (pendingOrder?.date === date ? pendingOrder.runs : filteredRuns.filter(r => r.runDate === date))
-              const dateLabel = new Date(date + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })
-              return (
-                <div key={date} style={{ marginBottom: '24px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                    <div style={{ fontSize: '12px', fontWeight: '600', color: '#B8965A', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-                      {dateLabel} · {dateRuns.length} run{dateRuns.length !== 1 ? 's' : ''}
-                    </div>
-                    {pendingOrder?.date === date && (
-                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                        <span style={{ fontSize: '11px', color: '#92400E' }}>Unsaved order changes</span>
-                        <button
-                          onClick={discardOrder}
-                          style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '4px', border: '1px solid #DDD8CF', background: 'transparent', color: '#6B6860', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
-                        >Discard</button>
-                        <button
-                          onClick={saveRunOrder}
-                          disabled={savingOrder}
-                          style={{ fontSize: '11px', padding: '4px 12px', borderRadius: '4px', border: 'none', background: '#1C1C1E', color: '#fff', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", fontWeight: '500' }}
-                        >
-                          {savingOrder ? 'Saving…' : 'Save order'}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                  <div style={S.card}>
-                    <DndContext
-                      sensors={sensors}
-                      collisionDetection={closestCenter}
-                      onDragStart={handleDragStart}
-                      onDragEnd={(e) => handleDragEnd(e, date)}
-                    >
-                      <SortableContext items={dateRuns.map(r => r.id)} strategy={verticalListSortingStrategy}>
-                        <table style={S.table}>
-                          <thead>
-                            <tr>
-                              <th style={{ ...S.th, width: '32px' }}></th>
-                              {['D/C','Date','Time','Event / Client','Venue','Driver',''].map(h => (
-                                <th key={h} style={S.th}>{h}</th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {dateRuns.map(run => (
-                              <SortableRunRow
-                                key={run.id}
-                                run={run}
-                                onSelect={onSelect}
-                                S={S}
-                                jobNotes={jobNotes}
-                              />
-                            ))}
-                          </tbody>
-                        </table>
-                      </SortableContext>
-                      <DragOverlay>
-                        {activeRun ? (
-                          <div style={{ background: '#F0F9FF', border: '1.5px solid #378ADD', borderRadius: '6px', padding: '10px 14px', fontSize: '13px', fontWeight: '500', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }}>
-                            {activeRun.runType} · {activeRun.event || activeRun.client}
-                          </div>
-                        ) : null}
-                      </DragOverlay>
-                    </DndContext>
-                  </div>
-                </div>
-              )
+          const dates = [...new Set(filteredRuns.map(r => r.runDate))].sort()
+          return dates.map(date => {
+            const dateRuns = pendingOrder?.date === date 
+              ? pendingOrder.runs 
+              : filteredRuns
+                  .filter(r => r.runDate === date)
+                  .sort((a, b) => (a.manualSortOrder || 0) - (b.manualSortOrder || 0))
+            
+            const dateLabel = new Date(date + 'T12:00:00').toLocaleDateString('en-GB', { 
+              weekday: 'long', day: 'numeric', month: 'long' 
             })
-          })()
+
+            function moveRun(index, direction) {
+              const newRuns = [...dateRuns]
+              const swapIndex = index + direction
+              if (swapIndex < 0 || swapIndex >= newRuns.length) return
+              ;[newRuns[index], newRuns[swapIndex]] = [newRuns[swapIndex], newRuns[index]]
+              setPendingOrder({ date, runs: newRuns })
+            }
+
+            return (
+              <div key={date} style={{ marginBottom: '24px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: '600', color: '#B8965A', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+                    {dateLabel} · {dateRuns.length} run{dateRuns.length !== 1 ? 's' : ''}
+                  </div>
+                  {pendingOrder?.date === date && (
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <span style={{ fontSize: '11px', color: '#92400E', fontWeight: '500' }}>
+                        Unsaved order changes
+                      </span>
+                      <button 
+                        onClick={discardOrder} 
+                        style={{ fontSize: '11px', padding: '5px 12px', borderRadius: '4px', border: '1px solid #DDD8CF', background: 'transparent', color: '#6B6860', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
+                      >Discard</button>
+                      <button 
+                        onClick={saveRunOrder} 
+                        disabled={savingOrder} 
+                        style={{ fontSize: '11px', padding: '5px 12px', borderRadius: '4px', border: 'none', background: '#1C1C1E', color: '#fff', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", fontWeight: '500' }}
+                      >{savingOrder ? 'Saving…' : 'Save order'}</button>
+                    </div>
+                  )}
+                </div>
+
+                <div style={S.card}>
+                  <table style={S.table}>
+                    <thead>
+                      <tr>
+                        <th style={{ ...S.th, width: '70px' }}>Order</th>
+                        <th style={S.th}>D/C</th>
+                        <th style={S.th}>Time</th>
+                        <th style={S.th}>Event / Client</th>
+                        <th style={S.th}>Venue</th>
+                        <th style={S.th}>Driver</th>
+                        <th style={S.th}></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {dateRuns.map((run, index) => {
+                        const isDel = run.runType === 'DEL'
+                        const badgeBg = isDel ? '#EF4444' : '#22C55E'
+                        return (
+                          <tr key={run.id} style={{ cursor: 'pointer' }}>
+                            <td style={S.td}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <span style={{ 
+                                  width: '22px', height: '22px', borderRadius: '50%', 
+                                  background: '#F7F3EE', border: '1px solid #DDD8CF',
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  fontSize: '11px', fontWeight: '600', color: '#6B6860',
+                                  flexShrink: 0
+                                }}>{index + 1}</span>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); moveRun(index, -1) }}
+                                    disabled={index === 0}
+                                    style={{ 
+                                      width: '18px', height: '18px', border: '1px solid #DDD8CF',
+                                      borderRadius: '3px', background: index === 0 ? '#F7F3EE' : '#fff',
+                                      cursor: index === 0 ? 'default' : 'pointer',
+                                      color: index === 0 ? '#DDD8CF' : '#6B6860',
+                                      fontSize: '10px', display: 'flex', alignItems: 'center',
+                                      justifyContent: 'center', padding: 0, lineHeight: 1
+                                    }}
+                                  >▲</button>
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); moveRun(index, 1) }}
+                                    disabled={index === dateRuns.length - 1}
+                                    style={{ 
+                                      width: '18px', height: '18px', border: '1px solid #DDD8CF',
+                                      borderRadius: '3px', background: index === dateRuns.length - 1 ? '#F7F3EE' : '#fff',
+                                      cursor: index === dateRuns.length - 1 ? 'default' : 'pointer',
+                                      color: index === dateRuns.length - 1 ? '#DDD8CF' : '#6B6860',
+                                      fontSize: '10px', display: 'flex', alignItems: 'center',
+                                      justifyContent: 'center', padding: 0, lineHeight: 1
+                                    }}
+                                  >▼</button>
+                                </div>
+                              </div>
+                            </td>
+                            <td style={S.td} onClick={() => setSelectedRun(run)}>
+                              <span style={{ background: badgeBg, color: 'white', fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '3px' }}>
+                                {run.runType}
+                              </span>
+                              {run.isManualOverride && (
+                                <span style={{ background: '#EFF6FF', color: '#1D4ED8', fontSize: '9px', fontWeight: '600', padding: '1px 5px', borderRadius: '3px', marginLeft: '4px' }}>
+                                  MANUAL
+                                </span>
+                              )}
+                            </td>
+                            <td style={S.td} onClick={() => setSelectedRun(run)}>
+                              {run.runTime || '—'}
+                            </td>
+                            <td style={S.td} onClick={() => setSelectedRun(run)}>
+                              <div style={{ fontWeight: 500, fontSize: '13px' }}>{run.event || run.client}</div>
+                              <div style={{ fontSize: '11px', color: '#6B6860' }}>{run.client}</div>
+                            </td>
+                            <td style={S.td} onClick={() => setSelectedRun(run)}>
+                              {run.venue || '—'}
+                            </td>
+                            <td style={S.td} onClick={() => setSelectedRun(run)}>
+                              <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                                {run.driverName && (
+                                  <span style={{ background: run.driverColour || '#3D5A73', color: 'white', fontSize: '11px', fontWeight: '600', padding: '3px 10px', borderRadius: '10px' }}>
+                                    {run.driverName}
+                                  </span>
+                                )}
+                                {run.driverName2 && (
+                                  <span style={{ background: run.driverColour2 || '#5F5E5A', color: 'white', fontSize: '11px', fontWeight: '600', padding: '3px 10px', borderRadius: '10px' }}>
+                                    {run.driverName2}
+                                  </span>
+                                )}
+                                {!run.driverName && (
+                                  <span style={{ background: '#FEF3C7', color: '#92400E', fontSize: '11px', fontWeight: '500', padding: '3px 10px', borderRadius: '10px' }}>
+                                    Unassigned
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td style={S.td} onClick={() => setSelectedRun(run)}>
+                              <span style={{ fontSize: '12px', color: '#B8965A' }}>View →</span>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )
+          })
+        })()
       }
     </div>
   )
@@ -1808,83 +1837,6 @@ function MiniRunCard({ run, onClick, compact = false, draggable = false, onDragS
       )}
       {run.isUrgent && <div style={{ fontSize: '9px', background: '#EF4444', color: 'white', padding: '1px 4px', borderRadius: '2px', display: 'inline-block', marginTop: '3px' }}>URGENT</div>}
     </div>
-  )
-}
-
-function SortableRunRow({ run, onSelect, S, colors, jobNotes }) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: run.id })
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.4 : 1,
-    background: isDragging ? '#F0F9FF' : 'white',
-  }
-
-  const badge = run.runType === 'DEL'
-    ? { bg: '#EF4444', text: 'white' }
-    : { bg: '#22C55E', text: 'white' }
-
-  return (
-    <tr ref={setNodeRef} style={{ ...style, cursor: 'pointer' }}>
-      <td
-        style={{ ...S.td, width: '32px', cursor: 'grab', color: '#9CA3AF', fontSize: '16px', userSelect: 'none' }}
-        {...attributes}
-        {...listeners}
-      >
-        ⠿
-      </td>
-      <td style={S.td} onClick={() => onSelect(run)}>
-        <span style={{ background: badge.bg, color: badge.text, fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '3px' }}>
-          {run.runType}
-        </span>
-        {run.isManualOverride && (
-          <span style={{ background: '#EFF6FF', color: '#1D4ED8', fontSize: '9px', fontWeight: '600', padding: '1px 5px', borderRadius: '3px', marginLeft: '4px' }}>
-            MANUAL
-          </span>
-        )}
-      </td>
-      <td style={S.td} onClick={() => onSelect(run)}>{run.runDate}</td>
-      <td style={S.td} onClick={() => onSelect(run)}>{run.runTime || '—'}</td>
-      <td style={S.td} onClick={() => onSelect(run)}>
-        <div style={{ fontWeight: 500 }}>{run.event || run.client}</div>
-        <div style={{ fontSize: '11.5px', color: '#6B6860' }}>{run.client}</div>
-      </td>
-      <td style={S.td} onClick={() => onSelect(run)}>{run.venue || '—'}</td>
-      <td style={S.td} onClick={() => onSelect(run)}>
-        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-          {run.driverName && (
-            <span style={{ background: run.driverColour || '#3D5A73', color: 'white', fontSize: '11px', fontWeight: '600', padding: '3px 10px', borderRadius: '10px' }}>
-              {run.driverName}
-            </span>
-          )}
-          {run.driverName2 && (
-            <span style={{ background: run.driverColour2 || '#5F5E5A', color: 'white', fontSize: '11px', fontWeight: '600', padding: '3px 10px', borderRadius: '10px' }}>
-              {run.driverName2}
-            </span>
-          )}
-          {!run.driverName && (
-            <span style={{ background: '#FEF3C7', color: '#92400E', fontSize: '11px', fontWeight: '500', padding: '3px 10px', borderRadius: '10px' }}>
-              Unassigned
-            </span>
-          )}
-        </div>
-      </td>
-      <td style={S.td} onClick={() => onSelect(run)}>
-        {jobNotes[run.jobId]?.total > 0 ? (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '10px', fontWeight: '500', padding: '2px 7px', borderRadius: '10px', background: jobNotes[run.jobId]?.hasUrgent ? '#FCEBEB' : '#F7F3EE', color: jobNotes[run.jobId]?.hasUrgent ? '#A32D2D' : '#B8965A' }}>
-            {jobNotes[run.jobId]?.hasUrgent ? '⚠' : '📋'} {jobNotes[run.jobId]?.total}
-          </span>
-        ) : null}
-      </td>
-    </tr>
   )
 }
 
