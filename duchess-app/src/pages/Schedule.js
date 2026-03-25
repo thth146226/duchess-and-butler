@@ -40,11 +40,17 @@ function buildRuns(jobs) {
       // Manual orders: only show confirmed
       if (job.status === 'pending') continue
     }
+    const deliveryDate = job.manual_delivery_date || job.delivery_date
+    const deliveryTime = job.manual_delivery_time || job.delivery_time
+    const collectionDate = job.manual_collection_date || job.collection_date
+    const collectionTime = job.manual_collection_time || job.collection_time
+    const venue = job.manual_venue || job.venue
+
     const base = {
       job,
       client:             job.client_name,
       event:              job.event_name,
-      venue:              job.venue,
+      venue:              venue,
       ref:                job.crms_ref || job.ref,
       jobId:              job.id,
       crmsId:             job.crms_id,
@@ -57,30 +63,39 @@ function buildRuns(jobs) {
       assignedDriverId:   job.assigned_driver_id   || null,
       assignedDriverId2:  job.assigned_driver_id_2 || null,
     }
-    if (job.delivery_date) runs.push({
+
+    if (deliveryDate) runs.push({
       ...base,
       id: `${job.id}-DEL`,
       runType: 'DEL',
-      runDate: job.delivery_date,
-      runTime: job.delivery_time?.substring(0, 5) || null,
-      missingTime: !job.delivery_time,
+      runDate: deliveryDate,
+      runTime: deliveryTime?.substring(0, 5) || null,
+      missingTime: !deliveryTime,
+      isManualOverride: !!job.has_manual_override,
+      manualSortOrder: job.manual_sort_order || 0,
       driverName: job.assigned_driver_name || null,
       driverName2: job.assigned_driver_name_2 || null,
     })
-    if (job.collection_date) runs.push({
+
+    if (collectionDate) runs.push({
       ...base,
       id: `${job.id}-COL`,
       runType: 'COL',
-      runDate: job.collection_date,
-      runTime: job.collection_time?.substring(0, 5) || null,
-      missingTime: !job.collection_time,
+      runDate: collectionDate,
+      runTime: collectionTime?.substring(0, 5) || null,
+      missingTime: !collectionTime,
+      isManualOverride: !!job.has_manual_override,
+      manualSortOrder: job.manual_sort_order || 0,
       driverName: job.col_driver_name || job.assigned_driver_name || null,
       driverName2: job.col_driver_name_2 || job.assigned_driver_name_2 || null,
     })
   }
   return runs.sort((a, b) => {
     const d = (a.runDate || '').localeCompare(b.runDate || '')
-    return d !== 0 ? d : (a.runTime || '99:99').localeCompare(b.runTime || '99:99')
+    if (d !== 0) return d
+    const t = (a.runTime || '99:99').localeCompare(b.runTime || '99:99')
+    if (t !== 0) return t
+    return (a.manualSortOrder || 0) - (b.manualSortOrder || 0)
   })
 }
 
