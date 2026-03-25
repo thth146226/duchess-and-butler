@@ -205,13 +205,13 @@ export default function Schedule() {
   async function saveRunOrder() {
     if (!pendingOrder) return
     setSavingOrder(true)
-  
-    const date = pendingOrder.date.replace(/-/g, '')
-  
+
+    const dateNum = parseInt(pendingOrder.date.replace(/-/g, ''))
+
     for (let i = 0; i < pendingOrder.runs.length; i++) {
       const run = pendingOrder.runs[i]
       const table = run.crmsId ? 'crms_jobs' : 'orders'
-      const sortValue = parseInt(date + String(i).padStart(3, '0'))
+      const sortValue = dateNum * 1000 + i
   
       await supabase.from(table).update({
         manual_sort_order: sortValue,
