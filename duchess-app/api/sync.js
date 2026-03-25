@@ -379,8 +379,18 @@ export default async function handler(req, res) {
           const changes = detectChanges(existing, mapped)
 
           if (changes.length > 0) {
+            // Preserve manual overrides — never overwrite them with RMS data
+            const overrideFields = {}
+            if (existing.has_manual_override) {
+              if (existing.manual_delivery_date) overrideFields.delivery_date = existing.manual_delivery_date
+              if (existing.manual_delivery_time) overrideFields.delivery_time = existing.manual_delivery_time
+              if (existing.manual_collection_date) overrideFields.collection_date = existing.manual_collection_date
+              if (existing.manual_collection_time) overrideFields.collection_time = existing.manual_collection_time
+              if (existing.manual_venue) overrideFields.venue = existing.manual_venue
+            }
             const updatePayload = {
               ...mapped,
+              ...overrideFields,
               // Explicitly pin classification fields to avoid accidental omissions
               crms_state: mapped.crms_state,
               crms_state_name: mapped.crms_state_name,
