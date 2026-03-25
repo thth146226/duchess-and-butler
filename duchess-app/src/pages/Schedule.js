@@ -593,6 +593,7 @@ export default function Schedule() {
           setDragRun={setDragRun}
           setDragOverDate={setDragOverDate}
           saveDraggedDate={saveDraggedDate}
+          showToast={showToast}
         />
       )}
 
@@ -1568,7 +1569,7 @@ function WeekView({ allRuns, weekOffset, setWeekOffset, onSelect }) {
 }
 
 // ── MONTH VIEW ────────────────────────────────────────────────────────────────
-function MonthView({ allRuns, monthDate, setMonthDate, onSelect, dragRun, dragOverDate, setDragRun, setDragOverDate, saveDraggedDate }) {
+function MonthView({ allRuns, monthDate, setMonthDate, onSelect, dragRun, dragOverDate, setDragRun, setDragOverDate, saveDraggedDate, showToast }) {
   const year = monthDate.getFullYear()
   const month = monthDate.getMonth()
   const first = new Date(year, month, 1)
@@ -1616,7 +1617,18 @@ function MonthView({ allRuns, monthDate, setMonthDate, onSelect, dragRun, dragOv
                 }}
                 onDragOver={(e) => { e.preventDefault(); setDragOverDate(ds) }}
                 onDragLeave={() => setDragOverDate(null)}
-                onDrop={(e) => { e.preventDefault(); if (dragRun) saveDraggedDate(dragRun, ds) }}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  if (!dragRun) return
+                  if (dragRun.runDate === ds) {
+                    // Same day — do nothing, use list view arrows instead
+                    setDragRun(null)
+                    setDragOverDate(null)
+                    showToast('Use the List view to reorder runs on the same day')
+                  } else {
+                    saveDraggedDate(dragRun, ds)
+                  }
+                }}
               >
                 <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '16px', fontWeight: isToday ? '700' : '400', color: isToday ? '#B8965A' : '#1C1C1E', marginBottom: '4px' }}>{date.getDate()}</div>
                 {dayRuns.map((run, j) => (
@@ -1626,8 +1638,15 @@ function MonthView({ allRuns, monthDate, setMonthDate, onSelect, dragRun, dragOv
                     onClick={() => onSelect(run)}
                     compact
                     draggable={true}
-                    onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; setDragRun(run) }}
-                    onDragEnd={() => { setDragRun(null); setDragOverDate(null) }}
+                    onDragStart={(e) => {
+                      e.stopPropagation()
+                      e.dataTransfer.effectAllowed = 'move'
+                      setDragRun(run)
+                    }}
+                    onDragEnd={() => {
+                      setDragRun(null)
+                      setDragOverDate(null)
+                    }}
                   />
                 ))}
               </div>
@@ -1782,13 +1801,14 @@ function MiniRunCard({ run, onClick, compact = false, draggable = false, onDragS
   const colors = run.runType === 'DEL'
     ? { bg: '#FEF2F2', border: '#EF4444', text: '#991B1B', badge: '#EF4444' }
     : { bg: '#F0FDF4', border: '#22C55E', text: '#166534', badge: '#22C55E' }
+  const dragStyle = draggable ? { cursor: 'grab', userSelect: 'none' } : { cursor: 'pointer' }
   if (compact) return (
     <div
       draggable={draggable}
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
+      onDragStart={draggable ? onDragStart : undefined}
+      onDragEnd={draggable ? onDragEnd : undefined}
       onClick={onClick}
-      style={{ background: colors.bg, border: `1.5px solid ${colors.border}`, borderRadius: '3px', padding: '2px 5px', marginBottom: '2px', cursor: 'pointer', fontSize: '10px' }}
+      style={{ background: colors.bg, border: `1.5px solid ${colors.border}`, borderRadius: '3px', padding: '2px 5px', marginBottom: '2px', fontSize: '10px', ...dragStyle }}
     >
       <div>
         <span style={{ background: colors.badge, color: 'white', fontSize: '8px', fontWeight: '700', padding: '1px 3px', borderRadius: '2px', marginRight: '3px' }}>{run.runType}</span>
@@ -1814,10 +1834,10 @@ function MiniRunCard({ run, onClick, compact = false, draggable = false, onDragS
   return (
     <div
       draggable={draggable}
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
+      onDragStart={draggable ? onDragStart : undefined}
+      onDragEnd={draggable ? onDragEnd : undefined}
       onClick={onClick}
-      style={{ background: colors.bg, border: `1.5px solid ${colors.border}`, borderRadius: '5px', padding: '7px 9px', marginBottom: '5px', cursor: 'pointer' }}
+      style={{ background: colors.bg, border: `1.5px solid ${colors.border}`, borderRadius: '5px', padding: '7px 9px', marginBottom: '5px', ...dragStyle }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '3px' }}>
         <span style={{ background: colors.badge, color: 'white', fontSize: '9px', fontWeight: '700', padding: '2px 5px', borderRadius: '2px' }}>{run.runType}</span>
