@@ -86,7 +86,7 @@ function buildRuns(jobs) {
       runTime: collectionTime?.substring(0, 5) || null,
       missingTime: !collectionTime,
       isManualOverride: !!job.has_manual_override,
-      manualSortOrder: job.manual_sort_order || 0,
+      manualSortOrder: (job.manual_sort_order || 0) + 0.5,
       driverName: job.col_driver_name || job.assigned_driver_name || null,
       driverName2: job.col_driver_name_2 || job.assigned_driver_name_2 || null,
     })
@@ -205,19 +205,14 @@ export default function Schedule() {
   async function saveRunOrder() {
     if (!pendingOrder) return
     setSavingOrder(true)
-    console.log('Saving order for date:', pendingOrder.date)
-    console.log('Runs to save:', pendingOrder.runs.map(r => ({ 
-      id: r.id, jobId: r.jobId, crmsId: r.crmsId, event: r.event 
-    })))
     for (let i = 0; i < pendingOrder.runs.length; i++) {
       const run = pendingOrder.runs[i]
       const table = run.crmsId ? 'crms_jobs' : 'orders'
-      console.log(`Saving run ${i}:`, { table, jobId: run.jobId, order: i })
       const { error } = await supabase.from(table).update({
         manual_sort_order: i,
         has_manual_override: true,
       }).eq('id', run.jobId)
-      console.log('Update result:', JSON.stringify({ error, table, jobId: run.jobId, order: i }))
+      if (error) console.error('Error saving run:', error)
     }
     setSavingOrder(false)
     setPendingOrder(null)
