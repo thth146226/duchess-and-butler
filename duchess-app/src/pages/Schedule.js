@@ -94,9 +94,12 @@ function buildRuns(jobs) {
   return runs.sort((a, b) => {
     const d = (a.runDate || '').localeCompare(b.runDate || '')
     if (d !== 0) return d
-    const t = (a.runTime || '99:99').localeCompare(b.runTime || '99:99')
-    if (t !== 0) return t
-    return (a.manualSortOrder || 0) - (b.manualSortOrder || 0)
+    const aHasOrder = (a.manualSortOrder || 0) > 0
+    const bHasOrder = (b.manualSortOrder || 0) > 0
+    if (aHasOrder || bHasOrder) {
+      return (a.manualSortOrder || 0) - (b.manualSortOrder || 0)
+    }
+    return (a.runTime || '99:99').localeCompare(b.runTime || '99:99')
   })
 }
 
