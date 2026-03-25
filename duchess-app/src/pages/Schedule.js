@@ -153,6 +153,9 @@ export default function Schedule() {
   const [unsavedOrder, setUnsavedOrder] = useState({})
   const [pendingOrder, setPendingOrder] = useState(null)
   const [savingOrder, setSavingOrder] = useState(false)
+  const [reorderPopup, setReorderPopup] = useState(null)
+  const [reorderRuns, setReorderRuns]   = useState([])
+  const [savingReorder, setSavingReorder] = useState(false)
 
   function showToast(msg, type = 'success') {
     setToast({ msg, type })
@@ -449,6 +452,42 @@ export default function Schedule() {
     }
   })
 
+  function openReorderPopup(date) {
+    const dateRuns = allRuns
+      .filter(r => r.runDate === date)
+      .sort((a, b) => (a.manualSortOrder || 0) - (b.manualSortOrder || 0))
+    if (dateRuns.length < 2) return
+    setReorderRuns(dateRuns)
+    setReorderPopup(date)
+  }
+
+  function moveReorderRun(index, direction) {
+    const newRuns = [...reorderRuns]
+    const swapIndex = index + direction
+    if (swapIndex < 0 || swapIndex >= newRuns.length) return
+    ;[newRuns[index], newRuns[swapIndex]] = [newRuns[swapIndex], newRuns[index]]
+    setReorderRuns(newRuns)
+  }
+
+  async function saveReorderPopup() {
+    if (!reorderPopup) return
+    setSavingReorder(true)
+    const dateNum = parseInt(reorderPopup.replace(/-/g, ''))
+    for (let i = 0; i < reorderRuns.length; i++) {
+      const run = reorderRuns[i]
+      const table = run.crmsId ? 'crms_jobs' : 'orders'
+      await supabase.from(table).update({
+        manual_sort_order: dateNum * 1000 + i,
+        has_manual_override: true,
+      }).eq('id', run.jobId)
+    }
+    setSavingReorder(false)
+    setReorderPopup(null)
+    setReorderRuns([])
+    showToast('Run order saved')
+    setTimeout(() => fetchJobs(), 800)
+  }
+
   const filtered = applyFilter(
     allRuns.filter(r =>
       !search || [r.client, r.event, r.venue, r.ref].some(f => f?.toLowerCase().includes(search.toLowerCase()))
@@ -594,6 +633,7 @@ export default function Schedule() {
           setDragOverDate={setDragOverDate}
           saveDraggedDate={saveDraggedDate}
           showToast={showToast}
+          onReorder={openReorderPopup}
         />
       )}
 
@@ -623,6 +663,66 @@ export default function Schedule() {
           saveManualOverride={saveManualOverride}
           clearManualOverride={clearManualOverride}
         />
+      )}
+
+      {reorderPopup && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,28,30,0.5)', backdropFilter: 'blur(4px)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}
+          onClick={() => setReorderPopup(null)}>
+          <div style={{ background: '#fff', borderRadius: '10px', width: '100%', maxWidth: '360px', overflow: 'hidden', boxShadow: '0 12px 48px rgba(28,28,30,0.14)' }}
+            onClick={e => e.stopPropagation()}>
+
+            {/* Header */}
+            <div style={{ padding: '14px 16px', borderBottom: '1px solid #DDD8CF', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <div style={{ fontSize: '14px', fontWeight: '500' }}>
+                  {new Date(reorderPopup + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}
+                </div>
+                <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '2px' }}>
+                  {reorderRuns.length} runs · use arrows to reorder
+                </div>
+              </div>
+              <button onClick={() => setReorderPopup(null)} style={{ background: '#F7F3EE', border: 'none', width: '28px', height: '28px', borderRadius: '50%', cursor: 'pointer', fontSize: '13px', color: '#6B6860' }}>✕</button>
+            </div>
+
+            {/* Runs list */}
+            <div>
+              {reorderRuns.map((run, index) => (
+                <div key={run.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 16px', borderBottom: '0.5px solid #EDE8E0' }}>
+                  <div style={{ width: '20px', height: '20px', borderRadius: '50%', background: '#F7F3EE', border: '1px solid #DDD8CF', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: '600', color: '#6B6860', flexShrink: 0 }}>
+                    {index + 1}
+                  </div>
+                  <span style={{ background: run.runType === 'DEL' ? '#FCEBEB' : '#EAF3DE', color: run.runType === 'DEL' ? '#A32D2D' : '#3B6D11', fontSize: '10px', fontWeight: '700', padding: '2px 7px', borderRadius: '3px', flexShrink: 0 }}>
+                    {run.runType}
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '12px', fontWeight: '500', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{run.event || run.client}</div>
+                    <div style={{ fontSize: '10px', color: '#6B6860' }}>{run.runTime || '—'} {run.driverName ? `· ${run.driverName}` : ''}</div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', flexShrink: 0 }}>
+                    <button
+                      onClick={() => moveReorderRun(index, -1)}
+                      disabled={index === 0}
+                      style={{ width: '20px', height: '20px', border: '1px solid #DDD8CF', borderRadius: '3px', background: index === 0 ? '#F7F3EE' : '#fff', cursor: index === 0 ? 'default' : 'pointer', color: index === 0 ? '#DDD8CF' : '#6B6860', fontSize: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
+                    >▲</button>
+                    <button
+                      onClick={() => moveReorderRun(index, 1)}
+                      disabled={index === reorderRuns.length - 1}
+                      style={{ width: '20px', height: '20px', border: '1px solid #DDD8CF', borderRadius: '3px', background: index === reorderRuns.length - 1 ? '#F7F3EE' : '#fff', cursor: index === reorderRuns.length - 1 ? 'default' : 'pointer', color: index === reorderRuns.length - 1 ? '#DDD8CF' : '#6B6860', fontSize: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
+                    >▼</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Footer */}
+            <div style={{ padding: '12px 16px', borderTop: '1px solid #DDD8CF', display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button onClick={() => setReorderPopup(null)} style={{ fontSize: '12px', padding: '7px 16px', borderRadius: '6px', border: '1px solid #DDD8CF', background: 'transparent', color: '#6B6860', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>Discard</button>
+              <button onClick={saveReorderPopup} disabled={savingReorder} style={{ fontSize: '12px', padding: '7px 16px', borderRadius: '6px', border: 'none', background: '#1C1C1E', color: '#fff', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", fontWeight: '500' }}>
+                {savingReorder ? 'Saving…' : 'Save order'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Toast notification */}
@@ -1569,7 +1669,7 @@ function WeekView({ allRuns, weekOffset, setWeekOffset, onSelect }) {
 }
 
 // ── MONTH VIEW ────────────────────────────────────────────────────────────────
-function MonthView({ allRuns, monthDate, setMonthDate, onSelect, dragRun, dragOverDate, setDragRun, setDragOverDate, saveDraggedDate, showToast }) {
+function MonthView({ allRuns, monthDate, setMonthDate, onSelect, dragRun, dragOverDate, setDragRun, setDragOverDate, saveDraggedDate, showToast, onReorder }) {
   const year = monthDate.getFullYear()
   const month = monthDate.getMonth()
   const first = new Date(year, month, 1)
@@ -1608,6 +1708,7 @@ function MonthView({ allRuns, monthDate, setMonthDate, onSelect, dragRun, dragOv
               <div
                 key={i}
                 style={{
+                  position: 'relative',
                   minHeight: '80px',
                   padding: '6px',
                   borderRight: '1px solid #EDE8E0',
@@ -1631,6 +1732,19 @@ function MonthView({ allRuns, monthDate, setMonthDate, onSelect, dragRun, dragOv
                 }}
               >
                 <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '16px', fontWeight: isToday ? '700' : '400', color: isToday ? '#B8965A' : '#1C1C1E', marginBottom: '4px' }}>{date.getDate()}</div>
+                {dayRuns.length >= 2 && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onReorder(ds) }}
+                    style={{
+                      position: 'absolute', top: '4px', right: '4px',
+                      background: 'rgba(184,150,90,0.15)', border: 'none',
+                      borderRadius: '4px', padding: '2px 4px',
+                      cursor: 'pointer', fontSize: '10px', color: '#B8965A',
+                      fontWeight: '600', lineHeight: 1,
+                    }}
+                    title="Reorder runs"
+                  >⇅</button>
+                )}
                 {dayRuns.map((run, j) => (
                   <MiniRunCard
                     key={j}
