@@ -217,7 +217,7 @@ export default function Schedule() {
         manual_sort_order: i,
         has_manual_override: true,
       }).eq('id', run.jobId)
-      if (error) console.error('Error saving run:', error)
+      console.log('Update result:', JSON.stringify({ error, table, jobId: run.jobId, order: i }))
     }
     setSavingOrder(false)
     setPendingOrder(null)
