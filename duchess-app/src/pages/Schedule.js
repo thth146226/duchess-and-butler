@@ -204,13 +204,19 @@ export default function Schedule() {
   async function saveRunOrder() {
     if (!pendingOrder) return
     setSavingOrder(true)
+    console.log('Saving order for date:', pendingOrder.date)
+    console.log('Runs to save:', pendingOrder.runs.map(r => ({ 
+      id: r.id, jobId: r.jobId, crmsId: r.crmsId, event: r.event 
+    })))
     for (let i = 0; i < pendingOrder.runs.length; i++) {
       const run = pendingOrder.runs[i]
       const table = run.crmsId ? 'crms_jobs' : 'orders'
-      await supabase.from(table).update({
+      console.log(`Saving run ${i}:`, { table, jobId: run.jobId, order: i })
+      const { error } = await supabase.from(table).update({
         manual_sort_order: i,
         has_manual_override: true,
       }).eq('id', run.jobId)
+      if (error) console.error('Error saving run:', error)
     }
     setSavingOrder(false)
     setPendingOrder(null)
