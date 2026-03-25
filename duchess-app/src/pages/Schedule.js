@@ -709,7 +709,10 @@ function ListView({
                         style={{ fontSize: '11px', padding: '5px 12px', borderRadius: '4px', border: '1px solid #DDD8CF', background: 'transparent', color: '#6B6860', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
                       >Discard</button>
                       <button 
-                        onClick={saveRunOrder} 
+                        onClick={() => {
+                          console.log('Save order clicked, pendingOrder:', pendingOrder)
+                          saveRunOrder()
+                        }}
                         disabled={savingOrder} 
                         style={{ fontSize: '11px', padding: '5px 12px', borderRadius: '4px', border: 'none', background: '#1C1C1E', color: '#fff', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", fontWeight: '500' }}
                       >{savingOrder ? 'Saving…' : 'Save order'}</button>
