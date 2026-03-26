@@ -29,12 +29,33 @@ export function AuthProvider({ children }) {
   }, [])
 
   async function fetchProfile(userId) {
-    const { data } = await supabase
+    const { data: existingProfile } = await supabase
       .from('users')
       .select('*')
       .eq('id', userId)
       .single()
-    setProfile(data)
+
+    if (existingProfile) {
+      setProfile(existingProfile)
+      setLoading(false)
+      return
+    }
+
+    // Profile doesn't exist — create one for Google OAuth users
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) {
+      const { data: newProfile } = await supabase
+        .from('users')
+        .insert({
+          id: userId,
+          name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'User',
+          email: user.email,
+          role: 'driver',
+        })
+        .select()
+        .single()
+      setProfile(newProfile)
+    }
     setLoading(false)
   }
 
