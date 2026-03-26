@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { supabase } from './lib/supabase'
 import Login from './pages/Login'
 import DriverAccess from './pages/DriverAccess'
 import Sidebar from './components/Sidebar'
@@ -12,6 +13,8 @@ import Notes from './pages/Notes'
 import Evidences from './pages/Evidences'
 import Paperwork from './pages/Paperwork'
 import DriverLinks from './pages/DriverLinks'
+import TOTPSetup from './pages/TOTPSetup'
+import TOTPVerify from './pages/TOTPVerify'
 import { Inventory, Reports, Team } from './pages/Placeholders'
 
 const pageTitles = {
@@ -33,6 +36,7 @@ function AppInner() {
   const { user, profile, loading } = useAuth()
   const [page, setPage] = useState('dashboard')
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [totpVerified, setTotpVerified] = useState(false)
 
   // Public driver portal — no auth required
   const params = new URLSearchParams(window.location.search)
@@ -45,6 +49,31 @@ function AppInner() {
   )
 
   if (!user) return <Login />
+
+  if (user && profile) {
+    if (profile.totp_enabled && !totpVerified) {
+      return (
+        <TOTPVerify
+          userId={user.id}
+          onComplete={() => setTotpVerified(true)}
+          onSignOut={async () => {
+            setTotpVerified(false)
+            await supabase.auth.signOut()
+          }}
+        />
+      )
+    }
+    if (!profile.totp_enabled) {
+      return (
+        <TOTPSetup
+          onComplete={() => {
+            setTotpVerified(true)
+          }}
+          onSkip={() => setTotpVerified(true)}
+        />
+      )
+    }
+  }
 
   const pages = { dashboard: Dashboard, notifications: Notifications, notes: Notes, evidences: Evidences, livejobs: LiveJobs, orders: Orders, schedule: Schedule, inventory: Inventory, paperwork: Paperwork, reports: Reports, driverlinks: DriverLinks, team: Team }
   const PageComponent = pages[page] || Dashboard
