@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { supabase } from './lib/supabase'
 import Login from './pages/Login'
 import DriverAccess from './pages/DriverAccess'
 import Sidebar from './components/Sidebar'
@@ -12,6 +13,8 @@ import Notes from './pages/Notes'
 import Evidences from './pages/Evidences'
 import Paperwork from './pages/Paperwork'
 import DriverLinks from './pages/DriverLinks'
+import PINVerify from './pages/PINVerify'
+import PINSetup from './pages/PINSetup'
 import { Inventory, Reports, Team } from './pages/Placeholders'
 
 const pageTitles = {
@@ -26,6 +29,7 @@ const pageTitles = {
   paperwork: 'Paperwork',
   reports: 'Reports',
   driverlinks: 'Driver Links',
+  pinsetup: 'PIN Security',
   team: 'Team Access',
 }
 
@@ -33,6 +37,11 @@ function AppInner() {
   const { user, profile, loading } = useAuth()
   const [page, setPage] = useState('dashboard')
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [pinVerified, setPinVerified] = useState(false)
+
+  useEffect(() => {
+    if (!user) setPinVerified(false)
+  }, [user])
 
   if (loading) return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#F7F3EE', fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', color: '#1C1C1E' }}>
@@ -46,7 +55,20 @@ function AppInner() {
 
   if (!user) return <Login />
 
-  const pages = { dashboard: Dashboard, notifications: Notifications, notes: Notes, evidences: Evidences, livejobs: LiveJobs, orders: Orders, schedule: Schedule, inventory: Inventory, paperwork: Paperwork, reports: Reports, driverlinks: DriverLinks, team: Team }
+  if (user && profile && profile.pin_enabled && !pinVerified) {
+    return (
+      <PINVerify
+        userId={user.id}
+        onComplete={() => setPinVerified(true)}
+        onSignOut={async () => {
+          setPinVerified(false)
+          await supabase.auth.signOut()
+        }}
+      />
+    )
+  }
+
+  const pages = { dashboard: Dashboard, notifications: Notifications, notes: Notes, evidences: Evidences, livejobs: LiveJobs, orders: Orders, schedule: Schedule, inventory: Inventory, paperwork: Paperwork, reports: Reports, driverlinks: DriverLinks, pinsetup: PINSetup, team: Team }
   const PageComponent = pages[page] || Dashboard
 
   return (
