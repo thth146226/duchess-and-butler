@@ -53,7 +53,7 @@ module.exports = async function handler(req, res) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        from: 'Duchess & Butler <hello@duchessandbutler.com>',
+        from: 'Duchess & Butler <onboarding@resend.dev>',
         to: [to],
         subject: subject || `${jobName} — Evidence Photos`,
         html,
