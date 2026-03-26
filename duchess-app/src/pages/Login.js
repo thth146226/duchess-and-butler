@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useAuth } from '../contexts/AuthContext'
+import { supabase } from '../lib/supabase'
 
 export default function Login() {
   const { signIn } = useAuth()
@@ -7,6 +8,16 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  async function handleGoogleLogin() {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: window.location.origin,
+      }
+    })
+    if (error) setError('Google sign in failed. Please try again.')
+  }
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -47,6 +58,37 @@ export default function Login() {
             />
           </div>
           {error && <div style={styles.error}>{error}</div>}
+          <button 
+            type="button" 
+            onClick={handleGoogleLogin}
+            style={{
+              width: '100%',
+              padding: '11px',
+              background: '#fff',
+              color: '#1C1C1E',
+              border: '1.5px solid #DDD8CF',
+              borderRadius: '4px',
+              fontSize: '14px',
+              fontWeight: '500',
+              cursor: 'pointer',
+              fontFamily: "'DM Sans', sans-serif",
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '10px',
+              marginBottom: '12px',
+            }}
+          >
+            <img src="https://www.google.com/favicon.ico" alt="Google" style={{ width: '18px', height: '18px' }} />
+            Sign in with Google
+          </button>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+            <div style={{ flex: 1, height: '1px', background: '#DDD8CF' }} />
+            <span style={{ fontSize: '12px', color: '#9CA3AF' }}>or</span>
+            <div style={{ flex: 1, height: '1px', background: '#DDD8CF' }} />
+          </div>
+
           <button type="submit" style={styles.btn} disabled={loading}>
             {loading ? 'Signing in…' : 'Sign In'}
           </button>
