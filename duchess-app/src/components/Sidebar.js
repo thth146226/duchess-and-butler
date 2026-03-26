@@ -21,7 +21,6 @@ const navItems = [
   ]},
   { section: 'Settings', items: [
     { id: 'driverlinks', icon: '🔗', label: 'Driver Links', roles: ['admin'] },
-    { id: 'pinsetup', icon: '🔐', label: 'PIN Security', roles: ['admin','operations','driver'] },
     { id: 'team', icon: '👥', label: 'Team Access', roles: ['admin'] },
   ]},
 ]
