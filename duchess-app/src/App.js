@@ -39,27 +39,26 @@ function AppInner() {
   const [mfaState, setMfaState] = useState(null)
 
   useEffect(() => {
+    if (!user || loading) return
     async function checkMFA() {
-      if (!user) { setMfaState(null); return }
-      const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
-      if (!data) return
-      if (data.currentLevel === 'aal2') {
-        setMfaState(null)
-        return
-      }
-      if (data.nextLevel === 'aal2') {
-        setMfaState('verify')
-        return
-      }
-      const { data: factors } = await supabase.auth.mfa.listFactors()
-      if (!factors?.totp?.length || factors.totp[0].status !== 'verified') {
-        setMfaState('setup')
-      } else {
+      try {
+        const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+        if (!data) { setMfaState(null); return }
+        if (data.currentLevel === 'aal2') { setMfaState(null); return }
+        if (data.nextLevel === 'aal2') { setMfaState('verify'); return }
+        const { data: factors } = await supabase.auth.mfa.listFactors()
+        if (!factors?.totp?.length || factors.totp[0].status !== 'verified') {
+          setMfaState('setup')
+        } else {
+          setMfaState(null)
+        }
+      } catch(e) {
+        console.error('MFA check error:', e)
         setMfaState(null)
       }
     }
     checkMFA()
-  }, [user])
+  }, [user, loading])
 
   if (loading) return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#F7F3EE', fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', color: '#1C1C1E' }}>
