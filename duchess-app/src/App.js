@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { supabase } from './lib/supabase'
 import Login from './pages/Login'
 import DriverAccess from './pages/DriverAccess'
 import Sidebar from './components/Sidebar'
@@ -12,6 +13,8 @@ import Notes from './pages/Notes'
 import Evidences from './pages/Evidences'
 import Paperwork from './pages/Paperwork'
 import DriverLinks from './pages/DriverLinks'
+import MFASetup from './pages/MFASetup'
+import MFAVerify from './pages/MFAVerify'
 import { Inventory, Reports, Team } from './pages/Placeholders'
 
 const pageTitles = {
@@ -33,6 +36,24 @@ function AppInner() {
   const { user, profile, loading } = useAuth()
   const [page, setPage] = useState('dashboard')
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [mfaState, setMfaState] = useState(null)
+
+  useEffect(() => {
+    async function checkMFA() {
+      if (!user) return
+      const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+      if (!data) return
+      if (data.currentLevel === 'aal1' && data.nextLevel === 'aal2') {
+        setMfaState('verify')
+      } else if (data.nextLevel === 'aal1' && data.currentLevel === 'aal1') {
+        const { data: factors } = await supabase.auth.mfa.listFactors()
+        if (!factors?.totp?.length) {
+          setMfaState('setup')
+        }
+      }
+    }
+    checkMFA()
+  }, [user])
 
   if (loading) return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#F7F3EE', fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', color: '#1C1C1E' }}>
@@ -45,6 +66,17 @@ function AppInner() {
   if (params.get('token')) return <DriverAccess />
 
   if (!user) return <Login />
+
+  if (mfaState === 'setup') {
+    return <MFASetup onComplete={() => setMfaState(null)} />
+  }
+
+  if (mfaState === 'verify') {
+    return <MFAVerify
+      onComplete={() => setMfaState(null)}
+      onSignOut={async () => { await supabase.auth.signOut(); setMfaState(null) }}
+    />
+  }
 
   const pages = { dashboard: Dashboard, notifications: Notifications, notes: Notes, evidences: Evidences, livejobs: LiveJobs, orders: Orders, schedule: Schedule, inventory: Inventory, paperwork: Paperwork, reports: Reports, driverlinks: DriverLinks, team: Team }
   const PageComponent = pages[page] || Dashboard

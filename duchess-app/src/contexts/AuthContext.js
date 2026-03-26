@@ -15,10 +15,27 @@ export function AuthProvider({ children }) {
       else setLoading(false)
     })
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setUser(session?.user ?? null)
-      if (session?.user) fetchProfile(session.user.id)
-      else { setProfile(null); setLoading(false) }
+      if (session?.user) {
+        fetchProfile(session.user.id)
+
+        // Check MFA status
+        const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+        if (data) {
+          if (data.currentLevel === 'aal1' && data.nextLevel === 'aal2') {
+            // Has 2FA enrolled but not verified this session
+            // Signal App.js to show verify page
+            window.__mfaRequired = 'verify'
+          } else if (data.currentLevel === 'aal1' && data.nextLevel === 'aal1') {
+            // No 2FA enrolled yet — force setup
+            window.__mfaRequired = 'setup'
+          }
+        }
+      } else {
+        setProfile(null)
+        setLoading(false)
+      }
     })
 
     return () => subscription.unsubscribe()
