@@ -11,33 +11,30 @@ export default function MFAVerify({ onComplete, onSignOut }) {
     setVerifying(true)
     setError('')
 
-    const { data: factorsData } = await supabase.auth.mfa.listFactors()
-    const totpFactor = factorsData?.totp?.[0]
-    if (!totpFactor) { setError('No 2FA factor found.'); setVerifying(false); return }
+    try {
+      const { data: factorsData } = await supabase.auth.mfa.listFactors()
+      const totpFactor = factorsData?.totp?.[0]
+      if (!totpFactor) throw new Error('No 2FA factor found')
 
-    const { data: challengeData, error: challengeError } = await supabase.auth.mfa.challenge({
-      factorId: totpFactor.id
-    })
-    if (challengeError) { setError(challengeError.message); setVerifying(false); return }
+      const { data: challengeData, error: challengeError } =
+        await supabase.auth.mfa.challenge({ factorId: totpFactor.id })
+      if (challengeError) throw challengeError
 
-    const { error: verifyError } = await supabase.auth.mfa.verify({
-      factorId: totpFactor.id,
-      challengeId: challengeData.id,
-      code,
-    })
+      const { error: verifyError } = await supabase.auth.mfa.verify({
+        factorId: totpFactor.id,
+        challengeId: challengeData.id,
+        code: code.trim(),
+      })
+      if (verifyError) throw verifyError
 
-    if (verifyError) {
-      setError('Invalid code. Please try again.')
-      setVerifying(false)
+      onComplete()
+
+    } catch (err) {
+      console.error('MFA error:', err)
+      setError(err.message || 'Invalid code. Please try again.')
       setCode('')
-      return
+      setVerifying(false)
     }
-
-    setVerifying(false)
-    console.log('MFA verify success')
-    // Force refresh session to get aal2
-    await supabase.auth.refreshSession()
-    onComplete()
   }
 
   return (
