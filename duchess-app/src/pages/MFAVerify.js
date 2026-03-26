@@ -34,6 +34,9 @@ export default function MFAVerify({ onComplete, onSignOut }) {
     }
 
     setVerifying(false)
+    console.log('MFA verify success')
+    // Force refresh session to get aal2
+    await supabase.auth.refreshSession()
     onComplete()
   }
 

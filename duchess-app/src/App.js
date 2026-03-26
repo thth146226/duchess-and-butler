@@ -40,16 +40,22 @@ function AppInner() {
 
   useEffect(() => {
     async function checkMFA() {
-      if (!user) return
+      if (!user) { setMfaState(null); return }
       const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
       if (!data) return
-      if (data.currentLevel === 'aal1' && data.nextLevel === 'aal2') {
+      if (data.currentLevel === 'aal2') {
+        setMfaState(null)
+        return
+      }
+      if (data.nextLevel === 'aal2') {
         setMfaState('verify')
-      } else if (data.nextLevel === 'aal1' && data.currentLevel === 'aal1') {
-        const { data: factors } = await supabase.auth.mfa.listFactors()
-        if (!factors?.totp?.length) {
-          setMfaState('setup')
-        }
+        return
+      }
+      const { data: factors } = await supabase.auth.mfa.listFactors()
+      if (!factors?.totp?.length || factors.totp[0].status !== 'verified') {
+        setMfaState('setup')
+      } else {
+        setMfaState(null)
       }
     }
     checkMFA()
