@@ -13,14 +13,35 @@ export default function MFASetup({ onComplete }) {
   useEffect(() => { enrollMFA() }, [])
 
   async function enrollMFA() {
-    const { data, error } = await supabase.auth.mfa.enroll({
-      factorType: 'totp',
-      friendlyName: 'Duchess & Butler',
-    })
-    if (error) { setError(error.message); setLoading(false); return }
-    setQrCode(data.totp.qr_code)
-    setSecret(data.totp.secret)
-    setFactorId(data.id)
+    try {
+      // Check if factor already exists
+      const { data: existing } = await supabase.auth.mfa.listFactors()
+      const existingFactor = existing?.totp?.[0]
+      
+      if (existingFactor && existingFactor.status === 'verified') {
+        // Already verified — go straight to app
+        onComplete()
+        return
+      }
+
+      if (existingFactor && existingFactor.status === 'unverified') {
+        // Factor exists but not verified — unenroll and re-enroll
+        await supabase.auth.mfa.unenroll({ factorId: existingFactor.id })
+      }
+
+      // Enroll new factor
+      const { data, error } = await supabase.auth.mfa.enroll({
+        factorType: 'totp',
+        friendlyName: 'Duchess & Butler',
+      })
+      if (error) throw error
+      
+      setQrCode(data.totp.qr_code)
+      setSecret(data.totp.secret)
+      setFactorId(data.id)
+    } catch (err) {
+      setError(err.message)
+    }
     setLoading(false)
   }
 
