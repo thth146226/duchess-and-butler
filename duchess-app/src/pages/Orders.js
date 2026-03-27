@@ -49,11 +49,12 @@ export default function Orders() {
   useEffect(() => { fetchOrders(); fetchDrivers() }, [])
 
   async function fetchOrders() {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('orders')
       .select('*, users(name)')
       .eq('deleted', false)
       .order('event_date', { ascending: true })
+    console.log('Orders fetched:', data?.length, 'Error:', error)
     if (data) setOrders(data)
     setLoading(false)
   }
