@@ -12,11 +12,11 @@ import LiveJobs from './pages/LiveJobs'
 import Notes from './pages/Notes'
 import Evidences from './pages/Evidences'
 import Paperwork from './pages/Paperwork'
-import Fleet from './pages/Fleet'
 import DriverLinks from './pages/DriverLinks'
 import TOTPSetup from './pages/TOTPSetup'
 import TOTPVerify from './pages/TOTPVerify'
 import { Inventory, Reports, Team } from './pages/Placeholders'
+import Fleet from './pages/Fleet'
 
 const pageTitles = {
   dashboard: 'Dashboard',
