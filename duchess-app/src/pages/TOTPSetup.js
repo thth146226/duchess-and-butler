@@ -15,15 +15,16 @@ export default function TOTPSetup({ onComplete, onSkip }) {
   useEffect(() => { generateSecret() }, [])
 
   function generateSecret() {
+    const secret = new OTPAuth.Secret({ size: 20 })
     const totp = new OTPAuth.TOTP({
       issuer: 'Duchess & Butler',
       label: profile?.email || profile?.name || 'user',
       algorithm: 'SHA1',
       digits: 6,
       period: 30,
-      secret: OTPAuth.Secret.fromRandom(20),
+      secret: secret,
     })
-    setSecret(totp.secret.base32)
+    setSecret(secret.base32)
     setQrUrl(totp.toString())
     setLoading(false)
   }
