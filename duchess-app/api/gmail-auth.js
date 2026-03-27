@@ -1,10 +1,16 @@
 module.exports = async function handler(req, res) {
   const clientId = process.env.GOOGLE_CLIENT_ID
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET
+  const redirectUri = 'https://duchess-and-butler-59qr.vercel.app/api/gmail-callback'
   
-  return res.status(200).json({ 
-    hasClientId: !!clientId,
-    hasClientSecret: !!clientSecret,
-    clientIdPrefix: clientId ? clientId.substring(0, 20) + '...' : 'MISSING',
-  })
+  const scope = 'https://www.googleapis.com/auth/gmail.send'
+
+  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
+    `client_id=${encodeURIComponent(clientId)}&` +
+    `redirect_uri=${encodeURIComponent(redirectUri)}&` +
+    `response_type=code&` +
+    `scope=${encodeURIComponent(scope)}&` +
+    `access_type=offline&` +
+    `prompt=consent`
+
+  return res.redirect(302, authUrl)
 }
