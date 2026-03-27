@@ -16,6 +16,7 @@ const navItems = [
     { id: 'inventory', icon: '📦', label: 'Inventory', roles: ['admin','operations'] },
   ]},
   { section: 'Documents', items: [
+    { id: 'fleet', icon: '🚐', label: 'Fleet', roles: ['admin', 'operations'] },
     { id: 'paperwork', icon: '📄', label: 'Paperwork', roles: ['admin','operations'] },
     { id: 'reports', icon: '📊', label: 'Reports', roles: ['admin'] },
   ]},

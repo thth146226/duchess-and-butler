@@ -12,6 +12,7 @@ import LiveJobs from './pages/LiveJobs'
 import Notes from './pages/Notes'
 import Evidences from './pages/Evidences'
 import Paperwork from './pages/Paperwork'
+import Fleet from './pages/Fleet'
 import DriverLinks from './pages/DriverLinks'
 import TOTPSetup from './pages/TOTPSetup'
 import TOTPVerify from './pages/TOTPVerify'
@@ -27,6 +28,7 @@ const pageTitles = {
   schedule: 'Schedule',
   inventory: 'Inventory',
   paperwork: 'Paperwork',
+  fleet: 'Fleet Management',
   reports: 'Reports',
   driverlinks: 'Driver Links',
   team: 'Team Access',
@@ -75,7 +77,7 @@ function AppInner() {
     }
   }
 
-  const pages = { dashboard: Dashboard, notifications: Notifications, notes: Notes, evidences: Evidences, livejobs: LiveJobs, orders: Orders, schedule: Schedule, inventory: Inventory, paperwork: Paperwork, reports: Reports, driverlinks: DriverLinks, team: Team }
+  const pages = { dashboard: Dashboard, notifications: Notifications, notes: Notes, evidences: Evidences, livejobs: LiveJobs, orders: Orders, schedule: Schedule, inventory: Inventory, paperwork: Paperwork, fleet: Fleet, reports: Reports, driverlinks: DriverLinks, team: Team }
   const PageComponent = pages[page] || Dashboard
 
   return (
