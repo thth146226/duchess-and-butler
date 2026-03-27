@@ -194,18 +194,36 @@ export default function Schedule() {
 
   async function saveDraggedDate(run, newDate) {
     const isCol = run.runType === 'COL'
-    await supabase.from('crms_jobs').update({
+    const table = run.crmsId ? 'crms_jobs' : 'orders'
+
+    console.log('saveDraggedDate:', { table, jobId: run.jobId, crmsId: run.crmsId, newDate, isCol })
+
+    const updatePayload = {
+      has_manual_override: true,
       ...(isCol ? {
         manual_collection_date: newDate,
+        collection_date: newDate,
       } : {
         manual_delivery_date: newDate,
+        delivery_date: newDate,
       }),
-      has_manual_override: true,
-    }).eq('id', run.jobId)
-    showToast(`${run.runType} moved to ${newDate}`)
+    }
+
+    const { error } = await supabase
+      .from(table)
+      .update(updatePayload)
+      .eq('id', run.jobId)
+
+    if (error) {
+      console.error('saveDraggedDate error:', error)
+      showToast('Error saving date change', 'error')
+    } else {
+      showToast(`${run.runType} moved to ${newDate}`)
+    }
+
     setDragRun(null)
     setDragOverDate(null)
-    setTimeout(() => fetchJobs(), 800)
+    setTimeout(() => fetchJobs(), 500)
   }
 
   async function saveRunOrder() {
