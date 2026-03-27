@@ -76,7 +76,7 @@ export default function Fleet() {
   async function fetchVehicles() {
     setListError(null)
     const q = supabase
-      .from('fleet_vehicles')
+      .from('fleet_vans')
       .select('*')
       .order('registration', { ascending: true })
     const { data, error } = await q
@@ -112,7 +112,7 @@ export default function Fleet() {
     fetchVehicles()
     const ch = supabase
       .channel('fleet-live')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'fleet_vehicles' }, fetchVehicles)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'fleet_vans' }, fetchVehicles)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'fleet_events' }, () => {
         const id = selectedIdRef.current
         if (id) fetchEvents(id)
@@ -135,7 +135,7 @@ export default function Fleet() {
     }
     setSavingVehicle(true)
     const { data, error } = await supabase
-      .from('fleet_vehicles')
+      .from('fleet_vans')
       .insert({
         registration: reg,
         nickname: newVehicle.nickname.trim() || null,
@@ -158,7 +158,7 @@ export default function Fleet() {
   }
 
   async function updateVehicleField(id, patch) {
-    const { error } = await supabase.from('fleet_vehicles').update(patch).eq('id', id)
+    const { error } = await supabase.from('fleet_vans').update(patch).eq('id', id)
     if (error) showToast(error.message, 'error')
     else fetchVehicles()
   }
@@ -244,7 +244,7 @@ export default function Fleet() {
           Could not load fleet data: {listError}
         </p>
         <p style={{ color: '#6B6860', fontSize: '13px', lineHeight: 1.6, marginTop: '12px' }}>
-          Create the <code style={{ fontSize: '12px' }}>fleet_vehicles</code> and <code style={{ fontSize: '12px' }}>fleet_events</code> tables in Supabase (with RLS for authenticated users), then refresh.
+          Create the <code style={{ fontSize: '12px' }}>fleet_vans</code> and <code style={{ fontSize: '12px' }}>fleet_events</code> tables in Supabase (with RLS for authenticated users), then refresh.
         </p>
       </div>
     )
