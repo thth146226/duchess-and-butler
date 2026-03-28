@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -73,22 +73,26 @@ export default function Fleet() {
     setTimeout(() => setToast(null), 3200)
   }
 
-  async function fetchVehicles() {
+  const fetchVehicles = useCallback(async () => {
     setListError(null)
-    const q = supabase
+    let q = supabase
       .from('fleet_vans')
       .select('*')
       .order('registration', { ascending: true })
+    if (!showInactive) q = q.eq('active', true)
     const { data, error } = await q
     if (error) {
       setListError(error.message)
       setVehicles([])
     } else {
       setVehicles(data || [])
-      if (selectedId && !(data || []).some(v => v.id === selectedId)) setSelectedId(null)
+      setSelectedId(current => {
+        if (current && !(data || []).some(v => v.id === current)) return null
+        return current
+      })
     }
     setLoading(false)
-  }
+  }, [showInactive])
 
   async function fetchEvents(vehicleId) {
     if (!vehicleId) {
@@ -119,7 +123,7 @@ export default function Fleet() {
       })
       .subscribe()
     return () => supabase.removeChannel(ch)
-  }, [])
+  }, [fetchVehicles])
 
   useEffect(() => {
     if (selectedId) fetchEvents(selectedId)
@@ -161,6 +165,20 @@ export default function Fleet() {
     const { error } = await supabase.from('fleet_vans').update(patch).eq('id', id)
     if (error) showToast(error.message, 'error')
     else fetchVehicles()
+  }
+
+  async function deleteVehicle(id, name) {
+    if (!window.confirm(`Remove ${name || 'this van'} from fleet?`)) return
+    const { error } = await supabase
+      .from('fleet_vans')
+      .update({ active: false })
+      .eq('id', id)
+    if (error) showToast(error.message, 'error')
+    else {
+      showToast('Vehicle removed from fleet')
+      if (selectedId === id) setSelectedId(null)
+      fetchVehicles()
+    }
   }
 
   async function addEvent(e) {
@@ -226,7 +244,7 @@ export default function Fleet() {
     )
   }
 
-  const visibleVehicles = showInactive ? vehicles : vehicles.filter(v => v.active !== false)
+  const visibleVehicles = vehicles
 
   if (loading) {
     return (
@@ -336,23 +354,45 @@ export default function Fleet() {
               const active = v.id === selectedId
               const muted = v.active === false
               return (
-                <button
-                  key={v.id}
-                  type="button"
-                  onClick={() => setSelectedId(v.id)}
-                  style={{
-                    ...S.listItem,
-                    borderColor: active ? '#3D5A73' : '#DDD8CF',
-                    background: active ? '#F0F4F7' : '#fff',
-                    opacity: muted ? 0.65 : 1,
-                  }}
-                >
-                  <div style={{ fontWeight: '600', fontSize: '14px' }}>{v.registration}</div>
-                  <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '2px' }}>
-                    {[v.nickname, v.make, v.model].filter(Boolean).join(' · ') || '—'}
-                  </div>
-                  {muted && <div style={{ fontSize: '10px', color: '#9CA3AF', marginTop: '4px' }}>Archived</div>}
-                </button>
+                <div key={v.id} style={{ display: 'flex', gap: '6px', alignItems: 'stretch' }}>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedId(v.id)}
+                    style={{
+                      ...S.listItem,
+                      flex: 1,
+                      minWidth: 0,
+                      borderColor: active ? '#3D5A73' : '#DDD8CF',
+                      background: active ? '#F0F4F7' : '#fff',
+                      opacity: muted ? 0.65 : 1,
+                    }}
+                  >
+                    <div style={{ fontWeight: '600', fontSize: '14px' }}>{v.registration}</div>
+                    <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '2px' }}>
+                      {[v.nickname, v.make, v.model].filter(Boolean).join(' · ') || '—'}
+                    </div>
+                    {muted && <div style={{ fontSize: '10px', color: '#9CA3AF', marginTop: '4px' }}>Archived</div>}
+                  </button>
+                  {v.active !== false && (
+                    <button
+                      type="button"
+                      onClick={e => { e.stopPropagation(); deleteVehicle(v.id, v.nickname || v.registration) }}
+                      style={{
+                        fontSize: '11px',
+                        padding: '5px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #FECACA',
+                        background: '#FEF2F2',
+                        color: '#DC2626',
+                        cursor: 'pointer',
+                        fontFamily: "'DM Sans', sans-serif",
+                        fontWeight: '500',
+                        alignSelf: 'center',
+                        flexShrink: 0,
+                      }}
+                    >Remove</button>
+                  )}
+                </div>
               )
             })}
           </div>
