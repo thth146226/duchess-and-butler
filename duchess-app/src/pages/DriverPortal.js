@@ -232,37 +232,46 @@ export default function DriverPortal({ token }) {
   }
 
   // Signature canvas functions
+  function getPos(e, canvas) {
+    const rect = canvas.getBoundingClientRect()
+    const scaleX = canvas.width / rect.width
+    const scaleY = canvas.height / rect.height
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY
+    return {
+      x: (clientX - rect.left) * scaleX,
+      y: (clientY - rect.top) * scaleY,
+    }
+  }
+
   function startDrawing(e) {
-    setIsDrawing(true)
+    e.preventDefault()
     const canvas = sigCanvas
     if (!canvas) return
+    setIsDrawing(true)
     const ctx = canvas.getContext('2d')
-    const rect = canvas.getBoundingClientRect()
-    const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left
-    const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top
+    const { x, y } = getPos(e, canvas)
     ctx.beginPath()
     ctx.moveTo(x, y)
   }
 
   function draw(e) {
-    if (!isDrawing || !sigCanvas) return
     e.preventDefault()
+    if (!isDrawing || !sigCanvas) return
     const ctx = sigCanvas.getContext('2d')
-    const rect = sigCanvas.getBoundingClientRect()
-    const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left
-    const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top
+    const { x, y } = getPos(e, sigCanvas)
     ctx.lineTo(x, y)
     ctx.strokeStyle = '#1C1C1E'
-    ctx.lineWidth = 2
+    ctx.lineWidth = 2.5
     ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
     ctx.stroke()
   }
 
-  function stopDrawing() {
+  function stopDrawing(e) {
+    if (e) e.preventDefault()
     setIsDrawing(false)
-    if (sigCanvas) {
-      setSignature(sigCanvas.toDataURL('image/png'))
-    }
+    if (sigCanvas) setSignature(sigCanvas.toDataURL('image/png'))
   }
 
   function clearSignature() {
@@ -636,15 +645,24 @@ export default function DriverPortal({ token }) {
               <div style={{ fontSize: '12px', color: '#6B6860', marginBottom: '8px' }}>Ask the client to sign below:</div>
               <canvas
                 ref={el => setSigCanvas(el)}
-                width={500}
-                height={150}
+                width={800}
+                height={200}
                 onMouseDown={startDrawing}
                 onMouseMove={draw}
                 onMouseUp={stopDrawing}
                 onTouchStart={startDrawing}
                 onTouchMove={draw}
                 onTouchEnd={stopDrawing}
-                style={{ width: '100%', height: '150px', border: '1.5px dashed #DDD8CF', borderRadius: '8px', background: '#FAFAF8', cursor: 'crosshair', touchAction: 'none' }}
+                style={{
+                  width: '100%',
+                  height: '150px',
+                  border: '1.5px dashed #DDD8CF',
+                  borderRadius: '8px',
+                  background: '#FAFAF8',
+                  cursor: 'crosshair',
+                  touchAction: 'none',
+                  display: 'block',
+                }}
               />
               {signature && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
