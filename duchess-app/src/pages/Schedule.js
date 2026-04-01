@@ -6,8 +6,8 @@ import JobNotes from '../components/JobNotes'
 import EvidenceUpload from '../components/EvidenceUpload'
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
-const today    = new Date().toISOString().split('T')[0]
-const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0]
+const today    = new Date().toLocaleDateString('en-CA')
+const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('en-CA')
 
 function fmt(dateStr) {
   if (!dateStr) return '—'
@@ -21,7 +21,7 @@ function getWeekRange(offset = 0) {
   mon.setDate(now.getDate() - (day === 0 ? 6 : day - 1) + offset * 7)
   const sun = new Date(mon)
   sun.setDate(mon.getDate() + 6)
-  return { from: mon.toISOString().split('T')[0], to: sun.toISOString().split('T')[0] }
+  return { from: mon.toLocaleDateString('en-CA'), to: sun.toLocaleDateString('en-CA') }
 }
 
 // ── Build runs from jobs (include driver fields) ───────────────────────────────
@@ -1139,7 +1139,7 @@ function DispatchView({ allRuns, drivers, today, tomorrow, onSelect, onAssign, a
   const [dayOffset, setDayOffset] = useState(0)
   const targetDate = (() => {
     const d = new Date(); d.setDate(d.getDate() + dayOffset)
-    return d.toISOString().split('T')[0]
+    return d.toLocaleDateString('en-CA')
   })()
 
   const dayRuns = allRuns.filter(r => r.runDate === targetDate)
@@ -1665,7 +1665,7 @@ function WeekView({ allRuns, weekOffset, setWeekOffset, onSelect }) {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '8px' }}>
         {weekDates.map((date, i) => {
-          const ds = date.toISOString().split('T')[0]
+          const ds = date.toLocaleDateString('en-CA')
           const runs = allRuns.filter(r => r.runDate === ds)
           const isToday = ds === today
           return (
@@ -1698,7 +1698,7 @@ function MonthView({ allRuns, monthDate, setMonthDate, onSelect, dragRun, dragOv
   for (let d = 1; d <= last.getDate(); d++) dates.push(new Date(year, month, d))
 
   const monthRuns = allRuns.filter(r => {
-    const d = new Date(r.runDate)
+    const d = new Date(r.runDate + 'T12:00:00')
     return d.getFullYear() === year && d.getMonth() === month
   }).sort((a, b) => a.runDate.localeCompare(b.runDate))
 
@@ -1719,7 +1719,7 @@ function MonthView({ allRuns, monthDate, setMonthDate, onSelect, dragRun, dragOv
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)' }}>
           {dates.map((date, i) => {
             if (!date) return <div key={i} style={{ minHeight: '80px', borderRight: '1px solid #EDE8E0', borderBottom: '1px solid #EDE8E0' }} />
-            const ds = date.toISOString().split('T')[0]
+            const ds = date.toLocaleDateString('en-CA')
             const dayRuns = allRuns.filter(r => r.runDate === ds)
             const isToday = ds === today
             return (
@@ -1863,7 +1863,7 @@ function YearView({ allRuns, yearDate, setYearDate, setMonthDate, setView }) {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
         {MONTHS.map((monthName, monthIdx) => {
-          const monthRuns = allRuns.filter(r => { const d = new Date(r.runDate); return d.getFullYear() === yearDate.getFullYear() && d.getMonth() === monthIdx })
+          const monthRuns = allRuns.filter(r => { const d = new Date(r.runDate + 'T12:00:00'); return d.getFullYear() === yearDate.getFullYear() && d.getMonth() === monthIdx })
           const delCount = monthRuns.filter(r => r.runType === 'DEL').length
           const colCount = monthRuns.filter(r => r.runType === 'COL').length
           const isCurrentMonth = new Date().getFullYear() === yearDate.getFullYear() && new Date().getMonth() === monthIdx
@@ -1890,7 +1890,7 @@ function YearView({ allRuns, yearDate, setYearDate, setMonthDate, setView }) {
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '1px' }}>
                   {calDates.map((date, i) => {
                     if (!date) return <div key={i} />
-                    const ds = date.toISOString().split('T')[0]
+                    const ds = date.toLocaleDateString('en-CA')
                     const dayRuns = allRuns.filter(r => r.runDate === ds)
                     const hasDel = dayRuns.some(r => r.runType === 'DEL')
                     const hasCol = dayRuns.some(r => r.runType === 'COL')
