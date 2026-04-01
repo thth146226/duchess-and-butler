@@ -692,18 +692,10 @@ function RunCard({ run, onOpen, onReport }) {
 
       <div style={{ padding: '0 14px 12px' }}>
         <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
-          {run.job.delivery_date && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onReport && onReport(run.job, 'DEL') }}
-              style={{ fontSize: '11px', fontWeight: '500', padding: '6px 14px', borderRadius: '6px', border: 'none', background: '#FCEBEB', color: '#A32D2D', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
-            >+ DEL Report</button>
-          )}
-          {run.job.collection_date && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onReport && onReport(run.job, 'COL') }}
-              style={{ fontSize: '11px', fontWeight: '500', padding: '6px 14px', borderRadius: '6px', border: 'none', background: '#EAF3DE', color: '#3B6D11', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
-            >+ COL Report</button>
-          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); onReport && onReport(run.job, run.type) }}
+            style={{ fontSize: '11px', fontWeight: '500', padding: '6px 14px', borderRadius: '6px', border: 'none', background: run.type === 'DEL' ? '#FCEBEB' : '#EAF3DE', color: run.type === 'DEL' ? '#A32D2D' : '#3B6D11', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
+          >+ {run.type} Report</button>
         </div>
       </div>
     </div>
