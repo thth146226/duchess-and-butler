@@ -57,6 +57,21 @@ export default function Reports() {
     if (data) setReportItems(data)
   }
 
+  async function deleteReport(reportId) {
+    if (!window.confirm('Delete this report? This cannot be undone.')) return
+    const { error } = await supabase
+      .from('job_reports')
+      .delete()
+      .eq('id', reportId)
+    if (error) {
+      showToast('Error deleting report', 'error')
+    } else {
+      showToast('Report deleted')
+      if (selected?.id === reportId) setSelected(null)
+      fetchReports()
+    }
+  }
+
   function showToast(msg, type = 'success') {
     setToast({ msg, type })
     setTimeout(() => setToast(null), 3500)
@@ -399,7 +414,23 @@ export default function Reports() {
                   <span style={{ background: r.run_type === 'DEL' ? '#FCEBEB' : '#EAF3DE', color: r.run_type === 'DEL' ? '#A32D2D' : '#3B6D11', fontSize: '10px', fontWeight: '700', padding: '2px 7px', borderRadius: '3px' }}>{r.run_type}</span>
                   <span style={{ fontSize: '13px', fontWeight: '500' }}>{r.event_name || '—'}</span>
                 </div>
-                <span style={{ background: ss.bg, color: ss.color, fontSize: '10px', fontWeight: '600', padding: '2px 8px', borderRadius: '10px' }}>{r.status}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ background: ss.bg, color: ss.color, fontSize: '10px', fontWeight: '600', padding: '2px 8px', borderRadius: '10px' }}>{r.status}</span>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); deleteReport(r.id) }}
+                    style={{
+                      fontSize: '10px',
+                      padding: '3px 8px',
+                      borderRadius: '4px',
+                      border: '1px solid #FECACA',
+                      background: '#FEF2F2',
+                      color: '#DC2626',
+                      cursor: 'pointer',
+                      fontFamily: "'DM Sans', sans-serif",
+                      flexShrink: 0,
+                    }}
+                  >Delete</button>
+                </div>
               </div>
               <div style={{ fontSize: '11px', color: '#6B6860' }}>
                 {r.crms_ref && `${r.crms_ref} · `}{r.driver_name} · {fmtDate(r.created_at)}
@@ -431,6 +462,20 @@ export default function Reports() {
                   style={{ fontSize: '12px', fontWeight: '500', padding: '7px 16px', borderRadius: '6px', border: 'none', background: '#B8965A', color: '#fff', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
                 >✉ Email client</button>
               )}
+              <button
+                onClick={() => deleteReport(selected.id)}
+                style={{
+                  fontSize: '11px',
+                  fontWeight: '500',
+                  padding: '6px 14px',
+                  borderRadius: '6px',
+                  border: '1px solid #FECACA',
+                  background: '#FEF2F2',
+                  color: '#DC2626',
+                  cursor: 'pointer',
+                  fontFamily: "'DM Sans', sans-serif",
+                }}
+              >Delete</button>
               <button onClick={() => setSelected(null)} style={{ background: '#F7F3EE', border: 'none', width: '28px', height: '28px', borderRadius: '50%', cursor: 'pointer', fontSize: '13px' }}>✕</button>
             </div>
           </div>
