@@ -46,6 +46,18 @@ export default function DriverPortal({ token }) {
   const fileRef = useRef()
   const galleryRef = useRef()
 
+  const [reportMode, setReportMode]     = useState(false)
+  const [reportJob, setReportJob]       = useState(null)
+  const [reportRunType, setReportRunType] = useState('DEL')
+  const [reportItems, setReportItems]   = useState([])
+  const [driverNotes, setDriverNotes]   = useState('')
+  const [clientName, setClientName]     = useState('')
+  const [signature, setSignature]       = useState(null)
+  const [savingReport, setSavingReport] = useState(false)
+  const [reportToast, setReportToast]   = useState(null)
+  const [sigCanvas, setSigCanvas]       = useState(null)
+  const [isDrawing, setIsDrawing]       = useState(false)
+
   const today = new Date().toISOString().split('T')[0]
 
   useEffect(() => { if (token) fetchDriver() }, [token])
@@ -162,6 +174,154 @@ export default function DriverPortal({ token }) {
     window.open(`https://maps.google.com/?q=${query}`, '_blank')
   }
 
+  function showReportToast(msg, type = 'success') {
+    setReportToast({ msg, type })
+    setTimeout(() => setReportToast(null), 3000)
+  }
+
+  async function openReport(job, runType) {
+    setReportJob(job)
+    setReportRunType(runType)
+    setDriverNotes('')
+    setClientName('')
+    setSignature(null)
+
+    // Check if report already exists
+    const { data: existing } = await supabase
+      .from('job_reports')
+      .select('id')
+      .eq('job_id', job.id)
+      .eq('run_type', runType)
+      .maybeSingle()
+
+    if (existing) {
+      showReportToast('Report already submitted for this run')
+      return
+    }
+
+    // Load items for this job
+    const { data: items } = await supabase
+      .from('crms_items')
+      .select('*')
+      .eq('job_id', job.id)
+
+    if (items?.length) {
+      setReportItems(items.map(i => ({
+        item_name: i.description || i.name || 'Item',
+        category: i.category || 'other',
+        quantity: i.quantity || 1,
+        condition: 'good',
+        notes: '',
+      })))
+    } else {
+      setReportItems([{ item_name: 'General items', category: 'other', quantity: 1, condition: 'good', notes: '' }])
+    }
+    setReportMode(true)
+  }
+
+  function updateItemCondition(index, condition) {
+    const updated = [...reportItems]
+    updated[index].condition = condition
+    setReportItems(updated)
+  }
+
+  function updateItemNote(index, notes) {
+    const updated = [...reportItems]
+    updated[index].notes = notes
+    setReportItems(updated)
+  }
+
+  // Signature canvas functions
+  function startDrawing(e) {
+    setIsDrawing(true)
+    const canvas = sigCanvas
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    const rect = canvas.getBoundingClientRect()
+    const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left
+    const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top
+    ctx.beginPath()
+    ctx.moveTo(x, y)
+  }
+
+  function draw(e) {
+    if (!isDrawing || !sigCanvas) return
+    e.preventDefault()
+    const ctx = sigCanvas.getContext('2d')
+    const rect = sigCanvas.getBoundingClientRect()
+    const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left
+    const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top
+    ctx.lineTo(x, y)
+    ctx.strokeStyle = '#1C1C1E'
+    ctx.lineWidth = 2
+    ctx.lineCap = 'round'
+    ctx.stroke()
+  }
+
+  function stopDrawing() {
+    setIsDrawing(false)
+    if (sigCanvas) {
+      setSignature(sigCanvas.toDataURL('image/png'))
+    }
+  }
+
+  function clearSignature() {
+    if (sigCanvas) {
+      const ctx = sigCanvas.getContext('2d')
+      ctx.clearRect(0, 0, sigCanvas.width, sigCanvas.height)
+    }
+    setSignature(null)
+  }
+
+  async function submitReport() {
+    if (!reportJob) return
+    setSavingReport(true)
+
+    try {
+      const { data: report, error } = await supabase
+        .from('job_reports')
+        .insert({
+          job_id:           reportJob.id,
+          job_table:        reportJob.crms_id ? 'crms_jobs' : 'orders',
+          crms_ref:         reportJob.crms_ref || null,
+          event_name:       reportJob.event_name || reportJob.title || '',
+          run_type:         reportRunType,
+          driver_id:        driver?.id || null,
+          driver_name:      driver?.name || null,
+          status:           'submitted',
+          driver_notes:     driverNotes || null,
+          client_signature: signature || null,
+          client_name:      clientName || null,
+          signed_at:        signature ? new Date().toISOString() : null,
+          submitted_at:     new Date().toISOString(),
+        })
+        .select()
+        .single()
+
+      if (error) throw error
+
+      if (reportItems.length > 0) {
+        await supabase.from('job_report_items').insert(
+          reportItems.map(item => ({
+            report_id:  report.id,
+            item_name:  item.item_name,
+            category:   item.category,
+            quantity:   item.quantity,
+            condition:  item.condition,
+            notes:      item.notes || null,
+          }))
+        )
+      }
+
+      showReportToast('Report submitted successfully')
+      setReportMode(false)
+      setReportJob(null)
+    } catch(e) {
+      showReportToast('Error submitting report: ' + e.message, 'error')
+    }
+    setSavingReport(false)
+  }
+
   const CAT_NOTE = {
     urgent:    { bg: '#FCEBEB', border: '#A32D2D', badgeBg: '#FCA5A5', badgeColor: '#7F1D1D' },
     equipment: { bg: '#FEF3C7', border: '#BA7517', badgeBg: '#FDE68A', badgeColor: '#633806' },
@@ -230,7 +390,7 @@ export default function DriverPortal({ token }) {
             <div style={{ fontSize: '11px', fontWeight: '600', letterSpacing: '0.08em', textTransform: 'uppercase', color: '#B8965A', marginBottom: '10px' }}>
               Today — {fmt(today)} · {todayRuns.length} run{todayRuns.length !== 1 ? 's' : ''}
             </div>
-            {todayRuns.map((r, i) => <RunCard key={i} run={r} onOpen={() => openJob(r.job)} />)}
+            {todayRuns.map((r, i) => <RunCard key={i} run={r} onOpen={() => openJob(r.job)} onReport={openReport} />)}
           </div>
         )}
 
@@ -246,7 +406,7 @@ export default function DriverPortal({ token }) {
             <div style={{ fontSize: '11px', fontWeight: '600', letterSpacing: '0.08em', textTransform: 'uppercase', color: '#6B6860', marginBottom: '10px' }}>
               Upcoming — {upcomingRuns.length} run{upcomingRuns.length !== 1 ? 's' : ''}
             </div>
-            {upcomingRuns.map((r, i) => <RunCard key={i} run={r} onOpen={() => openJob(r.job)} />)}
+            {upcomingRuns.map((r, i) => <RunCard key={i} run={r} onOpen={() => openJob(r.job)} onReport={openReport} />)}
           </div>
         )}
       </div>
@@ -399,11 +559,121 @@ export default function DriverPortal({ token }) {
           </div>
         </div>
       )}
+
+      {reportMode && reportJob && (
+        <div style={{ position: 'fixed', inset: 0, background: '#F7F3EE', zIndex: 300, overflowY: 'auto', fontFamily: "'DM Sans', sans-serif" }}>
+          <div style={{ maxWidth: '600px', margin: '0 auto', padding: '20px 16px' }}>
+
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
+              <button onClick={() => setReportMode(false)} style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '6px', padding: '6px 12px', cursor: 'pointer', fontSize: '12px', fontFamily: "'DM Sans', sans-serif" }}>← Back</button>
+              <div>
+                <div style={{ fontSize: '15px', fontWeight: '500' }}>{reportRunType} Report</div>
+                <div style={{ fontSize: '11px', color: '#6B6860' }}>{reportJob.event_name || reportJob.title}</div>
+              </div>
+            </div>
+
+            {/* Item conditions */}
+            <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', overflow: 'hidden', marginBottom: '16px' }}>
+              <div style={{ padding: '12px 16px', borderBottom: '1px solid #DDD8CF', fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B8965A' }}>
+                Item condition at {reportRunType === 'DEL' ? 'delivery' : 'collection'}
+              </div>
+              {reportItems.map((item, i) => (
+                <div key={i} style={{ padding: '12px 16px', borderBottom: i < reportItems.length - 1 ? '1px solid #EDE8E0' : 'none' }}>
+                  <div style={{ fontSize: '13px', fontWeight: '500', marginBottom: '8px' }}>
+                    {item.item_name} {item.quantity ? `(${item.quantity})` : ''}
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                    {['good', 'damaged', 'missing'].map(c => (
+                      <button key={c} onClick={() => updateItemCondition(i, c)}
+                        style={{
+                          fontSize: '11px', fontWeight: '600', padding: '5px 14px', borderRadius: '20px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif",
+                          background: item.condition === c
+                            ? c === 'good' ? '#EAF3DE' : c === 'damaged' ? '#FCEBEB' : '#FEF3C7'
+                            : 'transparent',
+                          color: item.condition === c
+                            ? c === 'good' ? '#3B6D11' : c === 'damaged' ? '#A32D2D' : '#854F0B'
+                            : '#6B6860',
+                          border: `1px solid ${item.condition === c
+                            ? c === 'good' ? '#86EFAC' : c === 'damaged' ? '#FCA5A5' : '#FDE68A'
+                            : '#DDD8CF'}`,
+                        }}
+                      >{c.charAt(0).toUpperCase() + c.slice(1)}</button>
+                    ))}
+                  </div>
+                  {item.condition !== 'good' && (
+                    <input
+                      value={item.notes}
+                      onChange={e => updateItemNote(i, e.target.value)}
+                      placeholder="Add note (e.g. 2 plates broken)..."
+                      style={{ width: '100%', padding: '8px 10px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '12px', fontFamily: "'DM Sans', sans-serif", boxSizing: 'border-box' }}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* Driver notes */}
+            <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '14px 16px', marginBottom: '16px' }}>
+              <div style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B8965A', marginBottom: '10px' }}>Driver notes</div>
+              <textarea
+                value={driverNotes}
+                onChange={e => setDriverNotes(e.target.value)}
+                placeholder="Any observations about the delivery/collection, items, venue access, etc..."
+                style={{ width: '100%', padding: '10px 12px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", minHeight: '100px', resize: 'vertical', boxSizing: 'border-box' }}
+              />
+            </div>
+
+            {/* Client signature */}
+            <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '14px 16px', marginBottom: '20px' }}>
+              <div style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B8965A', marginBottom: '10px' }}>Client signature</div>
+              <input
+                value={clientName}
+                onChange={e => setClientName(e.target.value)}
+                placeholder="Client name..."
+                style={{ width: '100%', padding: '9px 12px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", marginBottom: '10px', boxSizing: 'border-box' }}
+              />
+              <div style={{ fontSize: '12px', color: '#6B6860', marginBottom: '8px' }}>Ask the client to sign below:</div>
+              <canvas
+                ref={el => setSigCanvas(el)}
+                width={500}
+                height={150}
+                onMouseDown={startDrawing}
+                onMouseMove={draw}
+                onMouseUp={stopDrawing}
+                onTouchStart={startDrawing}
+                onTouchMove={draw}
+                onTouchEnd={stopDrawing}
+                style={{ width: '100%', height: '150px', border: '1.5px dashed #DDD8CF', borderRadius: '8px', background: '#FAFAF8', cursor: 'crosshair', touchAction: 'none' }}
+              />
+              {signature && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
+                  <span style={{ fontSize: '12px', color: '#3B6D11' }}>✓ Signature captured</span>
+                  <button onClick={clearSignature} style={{ fontSize: '11px', color: '#6B6860', background: 'none', border: 'none', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>Clear</button>
+                </div>
+              )}
+            </div>
+
+            {/* Submit */}
+            <button
+              onClick={submitReport}
+              disabled={savingReport}
+              style={{ width: '100%', padding: '14px', background: '#1C1C1E', color: '#fff', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: '500', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
+            >{savingReport ? 'Submitting…' : 'Submit Report'}</button>
+          </div>
+
+          {reportToast && (
+            <div style={{ position: 'fixed', bottom: '24px', right: '16px', left: '16px', background: '#1C1C1E', color: '#fff', padding: '12px 16px', borderRadius: '8px', fontSize: '13px', borderLeft: `3px solid ${reportToast.type === 'error' ? '#EF4444' : '#10B981'}`, zIndex: 999, textAlign: 'center' }}>
+              {reportToast.msg}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
 
-function RunCard({ run, onOpen }) {
+function RunCard({ run, onOpen, onReport }) {
   const isToday = run.date === new Date().toISOString().split('T')[0]
   const isDel = run.type === 'DEL'
   return (
@@ -418,6 +688,23 @@ function RunCard({ run, onOpen }) {
           {isToday ? 'Today' : new Date(run.date + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })} · {run.job.venue || '—'}
         </div>
         <span style={{ fontSize: '11px', color: '#B8965A', fontWeight: '500' }}>View →</span>
+      </div>
+
+      <div style={{ padding: '0 14px 12px' }}>
+        <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
+          {run.job.delivery_date && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onReport && onReport(run.job, 'DEL') }}
+              style={{ fontSize: '11px', fontWeight: '500', padding: '6px 14px', borderRadius: '6px', border: 'none', background: '#FCEBEB', color: '#A32D2D', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
+            >+ DEL Report</button>
+          )}
+          {run.job.collection_date && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onReport && onReport(run.job, 'COL') }}
+              style={{ fontSize: '11px', fontWeight: '500', padding: '6px 14px', borderRadius: '6px', border: 'none', background: '#EAF3DE', color: '#3B6D11', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
+            >+ COL Report</button>
+          )}
+        </div>
       </div>
     </div>
   )
