@@ -21,6 +21,22 @@ export default function Reports() {
   const [emailForm, setEmailForm]   = useState({ to: '', subject: '', message: '' })
   const [emailPanel, setEmailPanel] = useState(false)
 
+  // New report creation (admin)
+  const [createOpen, setCreateOpen]       = useState(false)
+  const [createRunType, setCreateRunType] = useState('DEL')
+  const [jobSearch, setJobSearch]         = useState('')
+  const [jobResults, setJobResults]       = useState([])
+  const [jobLoading, setJobLoading]       = useState(false)
+  const [createJob, setCreateJob]         = useState(null)
+  const [createItems, setCreateItems]     = useState([])
+  const [createDriverNotes, setCreateDriverNotes] = useState('')
+  const [createClientName, setCreateClientName]   = useState('')
+  const [createSignature, setCreateSignature]     = useState(null)
+  const [savingCreate, setSavingCreate]   = useState(false)
+  const [createToast, setCreateToast]     = useState(null)
+  const [sigCanvas, setSigCanvas]         = useState(null)
+  const [isDrawing, setIsDrawing]         = useState(false)
+
   useEffect(() => { fetchReports() }, [])
 
   async function fetchReports() {
@@ -44,6 +60,198 @@ export default function Reports() {
   function showToast(msg, type = 'success') {
     setToast({ msg, type })
     setTimeout(() => setToast(null), 3500)
+  }
+
+  function showCreateToast(msg, type = 'success') {
+    setCreateToast({ msg, type })
+    setTimeout(() => setCreateToast(null), 3000)
+  }
+
+  function updateCreateItemCondition(index, condition) {
+    const updated = [...createItems]
+    updated[index].condition = condition
+    setCreateItems(updated)
+  }
+
+  function updateCreateItemNote(index, notes) {
+    const updated = [...createItems]
+    updated[index].notes = notes
+    setCreateItems(updated)
+  }
+
+  // Signature canvas (create modal)
+  function startDrawing(e) {
+    setIsDrawing(true)
+    const canvas = sigCanvas
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    const rect = canvas.getBoundingClientRect()
+    const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left
+    const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top
+    ctx.beginPath()
+    ctx.moveTo(x, y)
+  }
+
+  function draw(e) {
+    if (!isDrawing || !sigCanvas) return
+    e.preventDefault()
+    const ctx = sigCanvas.getContext('2d')
+    const rect = sigCanvas.getBoundingClientRect()
+    const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left
+    const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top
+    ctx.lineTo(x, y)
+    ctx.strokeStyle = '#1C1C1E'
+    ctx.lineWidth = 2
+    ctx.lineCap = 'round'
+    ctx.stroke()
+  }
+
+  function stopDrawing() {
+    setIsDrawing(false)
+    if (sigCanvas) {
+      setCreateSignature(sigCanvas.toDataURL('image/png'))
+    }
+  }
+
+  function clearSignature() {
+    if (sigCanvas) {
+      const ctx = sigCanvas.getContext('2d')
+      ctx.clearRect(0, 0, sigCanvas.width, sigCanvas.height)
+    }
+    setCreateSignature(null)
+  }
+
+  async function openCreateModal() {
+    setCreateOpen(true)
+    setCreateRunType('DEL')
+    setJobSearch('')
+    setJobResults([])
+    setCreateJob(null)
+    setCreateItems([])
+    setCreateDriverNotes('')
+    setCreateClientName('')
+    setCreateSignature(null)
+    setCreateToast(null)
+  }
+
+  async function searchJobs(q) {
+    const term = (q || '').trim()
+    if (!term) {
+      setJobResults([])
+      return
+    }
+    setJobLoading(true)
+    const { data, error } = await supabase
+      .from('crms_jobs')
+      .select('id, crms_ref, event_name, client_name, delivery_date, collection_date, assigned_driver_name, col_driver_name')
+      .or(`event_name.ilike.%${term}%,crms_ref.ilike.%${term}%,client_name.ilike.%${term}%`)
+      .order('delivery_date', { ascending: true, nullsLast: true })
+      .limit(20)
+    setJobLoading(false)
+    if (error) {
+      showCreateToast(error.message, 'error')
+      setJobResults([])
+      return
+    }
+    setJobResults(data || [])
+  }
+
+  useEffect(() => {
+    if (!createOpen) return
+    const t = setTimeout(() => searchJobs(jobSearch), 250)
+    return () => clearTimeout(t)
+  }, [jobSearch, createOpen])
+
+  async function selectJob(job) {
+    setCreateJob(job)
+
+    const { data: existing } = await supabase
+      .from('job_reports')
+      .select('id')
+      .eq('job_id', job.id)
+      .eq('run_type', createRunType)
+      .maybeSingle()
+
+    if (existing) {
+      showCreateToast('Report already exists for this run', 'error')
+      return
+    }
+
+    const { data: items } = await supabase
+      .from('crms_job_items')
+      .select('*')
+      .eq('job_id', job.id)
+
+    if (items?.length) {
+      setCreateItems(items
+        .filter(i => parseInt(i.quantity) > 0)
+        .map(i => ({
+          item_name: i.item_name || i.description || 'Item',
+          category: i.category || 'other',
+          quantity: i.quantity || 1,
+          condition: 'good',
+          notes: '',
+        }))
+      )
+    } else {
+      setCreateItems([{ item_name: 'General items', category: 'other', quantity: 1, condition: 'good', notes: '' }])
+    }
+  }
+
+  async function submitNewReport() {
+    if (!createJob) {
+      showCreateToast('Please select a job', 'error')
+      return
+    }
+    setSavingCreate(true)
+    try {
+      const driverName = createRunType === 'DEL'
+        ? (createJob.assigned_driver_name || null)
+        : (createJob.col_driver_name || createJob.assigned_driver_name || null)
+
+      const { data: report, error } = await supabase
+        .from('job_reports')
+        .insert({
+          job_id:           createJob.id,
+          job_table:        'crms_jobs',
+          crms_ref:         createJob.crms_ref || null,
+          event_name:       createJob.event_name || '',
+          run_type:         createRunType,
+          driver_id:        null,
+          driver_name:      driverName,
+          status:           'submitted',
+          driver_notes:     createDriverNotes || null,
+          client_signature: createSignature || null,
+          client_name:      createClientName || null,
+          signed_at:        createSignature ? new Date().toISOString() : null,
+          submitted_at:     new Date().toISOString(),
+        })
+        .select()
+        .single()
+
+      if (error) throw error
+
+      if (createItems.length > 0) {
+        await supabase.from('job_report_items').insert(
+          createItems.map(item => ({
+            report_id: report.id,
+            item_name: item.item_name,
+            category: item.category,
+            quantity: item.quantity,
+            condition: item.condition,
+            notes: item.notes || null,
+          }))
+        )
+      }
+
+      showToast('Report created')
+      setCreateOpen(false)
+      fetchReports()
+      openReport(report)
+    } catch (e) {
+      showCreateToast('Error submitting report: ' + e.message, 'error')
+    }
+    setSavingCreate(false)
   }
 
   async function sendReportEmail() {
@@ -158,6 +366,10 @@ export default function Reports() {
       <div style={{ flex: selected ? '0 0 380px' : '1', minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
           <div style={{ fontSize: '13px', color: '#6B6860' }}>{reports.length} report{reports.length !== 1 ? 's' : ''}</div>
+          <button
+            onClick={openCreateModal}
+            style={{ fontSize: '12px', fontWeight: '500', padding: '8px 14px', borderRadius: '6px', border: 'none', background: '#1C1C1E', color: '#fff', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
+          >+ New Report</button>
         </div>
 
         {reports.length === 0 ? (
@@ -308,6 +520,178 @@ export default function Reports() {
       {toast && (
         <div style={{ position: 'fixed', bottom: '24px', right: '24px', background: '#1C1C1E', color: '#fff', padding: '12px 20px', borderRadius: '8px', fontSize: '13px', borderLeft: `3px solid ${toast.type === 'error' ? '#EF4444' : '#10B981'}`, zIndex: 999 }}>
           {toast.msg}
+        </div>
+      )}
+
+      {/* Create report modal */}
+      {createOpen && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(28,28,30,0.6)', backdropFilter: 'blur(4px)', zIndex: 220, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}
+          onClick={e => e.target === e.currentTarget && setCreateOpen(false)}
+        >
+          <div style={{ background: '#fff', borderRadius: '12px', width: '100%', maxWidth: '640px', padding: '22px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+              <div style={{ fontSize: '16px', fontWeight: '500' }}>Create report</div>
+              <button onClick={() => setCreateOpen(false)} style={{ background: '#F7F3EE', border: 'none', width: '28px', height: '28px', borderRadius: '50%', cursor: 'pointer', fontSize: '13px' }}>✕</button>
+            </div>
+
+            {/* Run type selector */}
+            <div style={{ marginBottom: '14px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {['DEL', 'COL'].map(rt => (
+                <button
+                  key={rt}
+                  onClick={() => { setCreateRunType(rt); setCreateJob(null); setCreateItems([]) }}
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: '700',
+                    padding: '6px 14px',
+                    borderRadius: '999px',
+                    cursor: 'pointer',
+                    fontFamily: "'DM Sans', sans-serif",
+                    background: createRunType === rt ? (rt === 'DEL' ? '#FCEBEB' : '#EAF3DE') : 'transparent',
+                    color: createRunType === rt ? (rt === 'DEL' ? '#A32D2D' : '#3B6D11') : '#6B6860',
+                    border: `1.5px solid ${createRunType === rt ? (rt === 'DEL' ? '#FCA5A5' : '#86EFAC') : '#DDD8CF'}`,
+                  }}
+                >{rt}</button>
+              ))}
+            </div>
+
+            {/* Job search */}
+            <div style={{ marginBottom: '14px' }}>
+              <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#6B6860', marginBottom: '6px' }}>Job</div>
+              <input
+                value={jobSearch}
+                onChange={e => setJobSearch(e.target.value)}
+                placeholder="Search event name, ref, client..."
+                style={{ width: '100%', padding: '10px 12px', border: '1px solid #DDD8CF', borderRadius: '8px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", boxSizing: 'border-box' }}
+              />
+              {jobLoading && <div style={{ fontSize: '12px', color: '#9CA3AF', marginTop: '8px' }}>Searching…</div>}
+              {jobResults.length > 0 && !createJob && (
+                <div style={{ marginTop: '8px', border: '1px solid #DDD8CF', borderRadius: '8px', overflow: 'hidden', maxHeight: '220px', overflowY: 'auto' }}>
+                  {jobResults.map(j => (
+                    <div
+                      key={j.id}
+                      onClick={() => selectJob(j)}
+                      style={{ padding: '10px 12px', borderBottom: '1px solid #EDE8E0', cursor: 'pointer' }}
+                    >
+                      <div style={{ fontSize: '13px', fontWeight: '500' }}>{j.event_name || '—'}</div>
+                      <div style={{ fontSize: '11px', color: '#6B6860' }}>{j.crms_ref || '—'} · {j.client_name || '—'}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {createJob && (
+                <div style={{ marginTop: '10px', background: '#F7F3EE', borderRadius: '8px', padding: '12px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: '13px', fontWeight: '500', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{createJob.event_name}</div>
+                    <div style={{ fontSize: '11px', color: '#6B6860' }}>{createJob.crms_ref || '—'} · {createJob.client_name || '—'}</div>
+                  </div>
+                  <button
+                    onClick={() => { setCreateJob(null); setCreateItems([]) }}
+                    style={{ fontSize: '11px', color: '#6B6860', background: 'none', border: 'none', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
+                  >Change</button>
+                </div>
+              )}
+            </div>
+
+            {/* Item conditions */}
+            {createJob && (
+              <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '10px', overflow: 'hidden', marginBottom: '14px' }}>
+                <div style={{ padding: '12px 14px', borderBottom: '1px solid #DDD8CF', fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B8965A' }}>
+                  Item condition ({createRunType})
+                </div>
+                {createItems.map((item, i) => (
+                  <div key={i} style={{ padding: '12px 14px', borderBottom: i < createItems.length - 1 ? '1px solid #EDE8E0' : 'none' }}>
+                    <div style={{ fontSize: '13px', fontWeight: '500', marginBottom: '8px' }}>
+                      {item.item_name} {item.quantity ? `(${item.quantity})` : ''}
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', flexWrap: 'wrap' }}>
+                      {['good', 'damaged', 'missing'].map(c => (
+                        <button
+                          key={c}
+                          onClick={() => updateCreateItemCondition(i, c)}
+                          style={{
+                            fontSize: '11px', fontWeight: '600', padding: '5px 14px', borderRadius: '20px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif",
+                            background: item.condition === c
+                              ? c === 'good' ? '#EAF3DE' : c === 'damaged' ? '#FCEBEB' : '#FEF3C7'
+                              : 'transparent',
+                            color: item.condition === c
+                              ? c === 'good' ? '#3B6D11' : c === 'damaged' ? '#A32D2D' : '#854F0B'
+                              : '#6B6860',
+                            border: `1px solid ${item.condition === c
+                              ? c === 'good' ? '#86EFAC' : c === 'damaged' ? '#FCA5A5' : '#FDE68A'
+                              : '#DDD8CF'}`,
+                          }}
+                        >{c.charAt(0).toUpperCase() + c.slice(1)}</button>
+                      ))}
+                    </div>
+                    {item.condition !== 'good' && (
+                      <input
+                        value={item.notes}
+                        onChange={e => updateCreateItemNote(i, e.target.value)}
+                        placeholder="Add note (e.g. 2 plates broken)..."
+                        style={{ width: '100%', padding: '8px 10px', border: '1px solid #DDD8CF', borderRadius: '8px', fontSize: '12px', fontFamily: "'DM Sans', sans-serif", boxSizing: 'border-box' }}
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Driver notes */}
+            <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '10px', padding: '12px 14px', marginBottom: '14px' }}>
+              <div style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B8965A', marginBottom: '8px' }}>Driver notes</div>
+              <textarea
+                value={createDriverNotes}
+                onChange={e => setCreateDriverNotes(e.target.value)}
+                placeholder="Any observations…"
+                style={{ width: '100%', padding: '10px 12px', border: '1px solid #DDD8CF', borderRadius: '8px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", minHeight: '84px', resize: 'vertical', boxSizing: 'border-box' }}
+              />
+            </div>
+
+            {/* Client signature */}
+            <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '10px', padding: '12px 14px', marginBottom: '16px' }}>
+              <div style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B8965A', marginBottom: '8px' }}>Client signature</div>
+              <input
+                value={createClientName}
+                onChange={e => setCreateClientName(e.target.value)}
+                placeholder="Client name…"
+                style={{ width: '100%', padding: '10px 12px', border: '1px solid #DDD8CF', borderRadius: '8px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", boxSizing: 'border-box', marginBottom: '10px' }}
+              />
+              <div style={{ fontSize: '12px', color: '#6B6860', marginBottom: '8px' }}>Signature:</div>
+              <canvas
+                ref={el => setSigCanvas(el)}
+                width={500}
+                height={150}
+                onMouseDown={startDrawing}
+                onMouseMove={draw}
+                onMouseUp={stopDrawing}
+                onMouseLeave={stopDrawing}
+                onTouchStart={startDrawing}
+                onTouchMove={draw}
+                onTouchEnd={stopDrawing}
+                style={{ width: '100%', height: '150px', border: '1.5px dashed #DDD8CF', borderRadius: '10px', background: '#FAFAF8', cursor: 'crosshair', touchAction: 'none' }}
+              />
+              {createSignature && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px' }}>
+                  <span style={{ fontSize: '12px', color: '#3B6D11' }}>✓ Signature captured</span>
+                  <button onClick={clearSignature} style={{ fontSize: '11px', color: '#6B6860', background: 'none', border: 'none', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>Clear</button>
+                </div>
+              )}
+            </div>
+
+            <button
+              onClick={submitNewReport}
+              disabled={savingCreate}
+              style={{ width: '100%', padding: '12px', background: '#1C1C1E', color: '#fff', border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: '500', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", opacity: savingCreate ? 0.7 : 1 }}
+            >{savingCreate ? 'Submitting…' : 'Submit Report'}</button>
+
+            {createToast && (
+              <div style={{ marginTop: '12px', background: '#1C1C1E', color: '#fff', padding: '10px 12px', borderRadius: '8px', fontSize: '12px', borderLeft: `3px solid ${createToast.type === 'error' ? '#EF4444' : '#10B981'}` }}>
+                {createToast.msg}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
