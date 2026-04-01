@@ -32,7 +32,7 @@ function makeEmail({ to, subject, html, from }) {
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
-  const { to, subject, message, photos, jobName, crmsRef } = req.body
+  const { to, subject, message, photos, jobName, crmsRef, customHtml } = req.body
   if (!to || !photos?.length) return res.status(400).json({ error: 'Missing required fields' })
 
   try {
@@ -65,7 +65,7 @@ module.exports = async function handler(req, res) {
       </tr>
     `).join('')
 
-    const html = `
+    const html = customHtml || `
       <!DOCTYPE html>
       <html>
       <head><meta charset="utf-8"></head>

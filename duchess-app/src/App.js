@@ -16,7 +16,8 @@ import Paperwork from './pages/Paperwork'
 import DriverLinks from './pages/DriverLinks'
 import TOTPSetup from './pages/TOTPSetup'
 import TOTPVerify from './pages/TOTPVerify'
-import { Inventory, Reports, Team } from './pages/Placeholders'
+import { Inventory, Team } from './pages/Placeholders'
+import Reports from './pages/Reports'
 import Fleet from './pages/Fleet'
 
 const pageTitles = {
