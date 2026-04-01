@@ -19,6 +19,7 @@ import TOTPVerify from './pages/TOTPVerify'
 import { Inventory, Team } from './pages/Placeholders'
 import Reports from './pages/Reports'
 import Fleet from './pages/Fleet'
+import ATACarnet from './pages/ATACarnet'
 
 const pageTitles = {
   dashboard: 'Dashboard',
@@ -31,6 +32,7 @@ const pageTitles = {
   inventory: 'Inventory',
   paperwork: 'Paperwork',
   fleet: 'Fleet Management',
+  atacarnet: 'ATA Carnet',
   reports: 'Reports',
   driverlinks: 'Driver Links',
   team: 'Team Access',
@@ -79,7 +81,7 @@ function AppInner() {
     }
   }
 
-  const pages = { dashboard: Dashboard, notifications: Notifications, notes: Notes, evidences: Evidences, livejobs: LiveJobs, orders: Orders, schedule: Schedule, inventory: Inventory, paperwork: Paperwork, fleet: Fleet, reports: Reports, driverlinks: DriverLinks, team: Team }
+  const pages = { dashboard: Dashboard, notifications: Notifications, notes: Notes, evidences: Evidences, livejobs: LiveJobs, orders: Orders, schedule: Schedule, inventory: Inventory, paperwork: Paperwork, fleet: Fleet, atacarnet: ATACarnet, reports: Reports, driverlinks: DriverLinks, team: Team }
   const PageComponent = pages[page] || Dashboard
 
   return (
