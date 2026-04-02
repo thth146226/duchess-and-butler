@@ -385,6 +385,26 @@ export default function Reports() {
           </p>
           <img src="${selected.client_signature}" alt="Client Signature" style="border:1px solid #DDD8CF;border-radius:6px;max-width:300px;display:block;margin-bottom:24px" />
         ` : ''}
+        ${reportPhotos.length > 0 ? `
+          <h3 style="font-size:15px;font-weight:600;margin-bottom:12px">Collection Photos</h3>
+          <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
+            <tbody>
+              ${reportPhotos.map((p, i) => `
+                <tr>
+                  <td style="padding:8px 0;border-bottom:1px solid #f0ebe3">
+                    <a href="${p.photo_url}" 
+                       style="display:inline-block;background:#EAF3DE;color:#3B6D11;font-size:13px;padding:8px 16px;border-radius:6px;text-decoration:none;font-weight:500">
+                      View Photo ${i + 1}
+                    </a>
+                    <span style="font-size:11px;color:#9CA3AF;margin-left:8px">
+                      · ${p.uploaded_by_name || 'Team'}
+                    </span>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        ` : ''}
         <div style="border-top:2px solid #B8965A;padding-top:20px;text-align:center">
           <p style="font-size:11px;color:#9CA3AF">
             Duchess & Butler Ltd | Unit 7 Oakengrove Yard | Hemel Hempstead | HP2 6EZ<br>
