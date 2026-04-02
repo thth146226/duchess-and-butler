@@ -32,8 +32,8 @@ function makeEmail({ to, subject, html, from }) {
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
-  const { to, subject, message, photos, jobName, crmsRef, customHtml } = req.body
-  if (!to || !photos?.length) return res.status(400).json({ error: 'Missing required fields' })
+  const { to, subject, message, photos, jobName, crmsRef } = req.body
+  if (!to) return res.status(400).json({ error: 'Missing required fields' })
 
   try {
     const supabase = createClient(
@@ -53,7 +53,26 @@ module.exports = async function handler(req, res) {
 
     const accessToken = await getAccessToken(setting.value)
 
-    const photoLinks = photos.map((p, i) => `
+    if (req.body.customHtml) {
+      const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ raw: makeEmail({
+          to,
+          subject: subject || `${jobName} — Report`,
+          html: req.body.customHtml,
+          from: 'Duchess & Butler <recon@duchessandbutler.com>',
+        })}),
+      })
+      const gmailData = await response.json()
+      if (gmailData.error) throw new Error(gmailData.error.message)
+      return res.status(200).json({ success: true, id: gmailData.id })
+    }
+
+    const photoLinks = (photos || []).map((p, i) => `
       <tr>
         <td style="padding:8px 0;border-bottom:1px solid #f0ebe3">
           <span style="background:${p.run_type === 'after_del' ? '#FCEBEB' : '#EAF3DE'};color:${p.run_type === 'after_del' ? '#A32D2D' : '#3B6D11'};font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;margin-right:8px">
@@ -65,7 +84,7 @@ module.exports = async function handler(req, res) {
       </tr>
     `).join('')
 
-    const html = customHtml || `
+    const html = `
       <!DOCTYPE html>
       <html>
       <head><meta charset="utf-8"></head>
