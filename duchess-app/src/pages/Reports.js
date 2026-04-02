@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../contexts/AuthContext'
 
 const STATUS_STYLE = {
   draft:     { bg: '#FEF3C7', color: '#854F0B' },
@@ -12,10 +13,13 @@ function fmtDate(d) {
 }
 
 export default function Reports() {
+  const { profile } = useAuth()
   const [reports, setReports]       = useState([])
   const [loading, setLoading]       = useState(true)
   const [selected, setSelected]     = useState(null)
   const [reportItems, setReportItems] = useState([])
+  const [uploadingPhoto, setUploadingPhoto] = useState(false)
+  const [reportPhotos, setReportPhotos]     = useState([])
   const [sending, setSending]       = useState(false)
   const [toast, setToast]           = useState(null)
   const [emailForm, setEmailForm]   = useState({ to: '', subject: '', message: '' })
@@ -39,6 +43,10 @@ export default function Reports() {
 
   useEffect(() => { fetchReports() }, [])
 
+  useEffect(() => {
+    if (!selected) setReportPhotos([])
+  }, [selected])
+
   async function fetchReports() {
     const { data } = await supabase
       .from('job_reports')
@@ -48,13 +56,54 @@ export default function Reports() {
     setLoading(false)
   }
 
+  async function fetchReportPhotos(reportId) {
+    const { data } = await supabase
+      .from('evidence_photos')
+      .select('*')
+      .eq('order_id', reportId)
+      .eq('run_type', 'after_col')
+    setReportPhotos(data || [])
+  }
+
   async function openReport(report) {
     setSelected(report)
+    setReportPhotos([])
     const { data } = await supabase
       .from('job_report_items')
       .select('*')
       .eq('report_id', report.id)
     if (data) setReportItems(data)
+    fetchReportPhotos(report.id)
+  }
+
+  async function uploadReportPhoto(file, reportId) {
+    if (!file) return
+    setUploadingPhoto(true)
+    try {
+      const ext = file.name.split('.').pop()
+      const path = `reports/${reportId}/${Date.now()}.${ext}`
+      const { error: uploadError } = await supabase.storage
+        .from('evidence-photos')
+        .upload(path, file)
+      if (uploadError) throw uploadError
+      const { data: { publicUrl } } = supabase.storage
+        .from('evidence-photos')
+        .getPublicUrl(path)
+      await supabase.from('evidence_photos').insert({
+        order_id:         reportId,
+        run_type:         'after_col',
+        photo_url:        publicUrl,
+        file_path:        path,
+        uploaded_by_name: profile?.name || 'Admin',
+        event_name:       selected?.event_name || '',
+        crms_ref:         selected?.crms_ref || '',
+      })
+      fetchReportPhotos(reportId)
+      showToast('Photo uploaded')
+    } catch (e) {
+      showToast('Upload failed: ' + e.message, 'error')
+    }
+    setUploadingPhoto(false)
   }
 
   async function deleteReport(reportId) {
@@ -527,7 +576,25 @@ export default function Reports() {
               </>
             )}
 
-            {reportItems.length === 0 && !selected.driver_notes && !selected.client_signature && (
+            {/* Collection Photos */}
+            <div style={{ marginTop: '20px' }}>
+              <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B8965A', marginBottom: '10px' }}>Collection Photos</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '8px', marginBottom: '12px' }}>
+                {reportPhotos.map(p => (
+                  <img key={p.id} src={p.photo_url} alt="Collection"
+                    style={{ width: '100%', height: '100px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #DDD8CF', cursor: 'pointer' }}
+                    onClick={() => window.open(p.photo_url, '_blank')}
+                  />
+                ))}
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 14px', background: '#F7F3EE', border: '1px dashed #DDD8CF', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', color: '#6B6860' }}>
+                <input type="file" accept="image/*" multiple style={{ display: 'none' }}
+                  onChange={e => { Array.from(e.target.files).forEach(f => uploadReportPhoto(f, selected.id)); e.target.value = '' }} />
+                {uploadingPhoto ? 'Uploading…' : '+ Add collection photos'}
+              </label>
+            </div>
+
+            {reportItems.length === 0 && !selected.driver_notes && !selected.client_signature && reportPhotos.length === 0 && (
               <div style={{ textAlign: 'center', padding: '40px', color: '#9CA3AF', fontSize: '13px' }}>
                 No details recorded for this report yet.
               </div>
