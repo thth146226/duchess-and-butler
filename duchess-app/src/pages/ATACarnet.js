@@ -2,14 +2,22 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 
-const CATEGORIES = ['glassware', 'crockery', 'cutlery', 'linens', 'furniture', 'other']
+const CATEGORIES = ['glassware', 'charger_plates', 'dinnerware', 'cutlery', 'linens', 'furniture', 'other']
 const CAT_STYLE = {
-  glassware:  { bg: '#E6F1FB', color: '#0C447C' },
-  crockery:   { bg: '#FAEEDA', color: '#854F0B' },
-  cutlery:    { bg: '#EAF3DE', color: '#3B6D11' },
-  linens:     { bg: '#EEEDFE', color: '#3C3489' },
-  furniture:  { bg: '#F1EFE8', color: '#5F5E5A' },
-  other:      { bg: '#F1EFE8', color: '#5F5E5A' },
+  glassware:      { bg: '#E6F1FB', color: '#0C447C' },
+  charger_plates: { bg: '#FAEEDA', color: '#854F0B' },
+  dinnerware:     { bg: '#FCEBEB', color: '#A32D2D' },
+  cutlery:        { bg: '#EAF3DE', color: '#3B6D11' },
+  linens:         { bg: '#EEEDFE', color: '#3C3489' },
+  furniture:      { bg: '#F1EFE8', color: '#5F5E5A' },
+  other:          { bg: '#F1EFE8', color: '#5F5E5A' },
+}
+
+function categorySelectLabel(c) {
+  if (!c) return '—'
+  if (c === 'charger_plates') return 'Charger Plates'
+  if (c === 'dinnerware') return 'DinnerWare'
+  return c.charAt(0).toUpperCase() + c.slice(1)
 }
 
 export default function ATACarnet() {
@@ -295,7 +303,7 @@ export default function ATACarnet() {
                   <div>
                     <div style={{ fontSize: '13px', fontWeight: item.boxes > 0 ? '500' : '400' }}>{item.name}</div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
-                      <span style={{ ...cs, fontSize: '9px', fontWeight: '600', padding: '1px 6px', borderRadius: '10px' }}>{item.category}</span>
+                      <span style={{ ...cs, fontSize: '9px', fontWeight: '600', padding: '1px 6px', borderRadius: '10px' }}>{categorySelectLabel(item.category)}</span>
                       <span style={{ fontSize: '10px', color: '#9CA3AF' }}>{item.pieces_per_unit} pcs/{item.unit_name}</span>
                     </div>
                   </div>
@@ -358,7 +366,11 @@ export default function ATACarnet() {
             <select value={catFilter} onChange={e => setCat(e.target.value)}
               style={{ padding: '9px 12px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif" }}>
               <option value="all">All categories</option>
-              {CATEGORIES.map(c => <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>)}
+              {CATEGORIES.map(c => (
+                <option key={c} value={c}>
+                  {categorySelectLabel(c)}
+                </option>
+              ))}
             </select>
             <button onClick={() => { setEditItem(null); setItemForm(emptyItem); setItemModal(true) }}
               style={{ padding: '9px 18px', background: '#1C1C1E', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '13px', fontWeight: '500', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
@@ -383,7 +395,7 @@ export default function ATACarnet() {
                     </div>
                   </div>
                   <span style={{ ...cs, fontSize: '10px', fontWeight: '600', padding: '2px 8px', borderRadius: '10px', flexShrink: 0 }}>
-                    {item.category}
+                    {categorySelectLabel(item.category)}
                   </span>
                   <div style={{ textAlign: 'right', minWidth: '80px' }}>
                     <div style={{ fontSize: '14px', fontWeight: '500' }}>{item.weight_per_unit} kg</div>
@@ -478,7 +490,11 @@ export default function ATACarnet() {
                 <label style={{ display: 'block', fontSize: '10px', fontWeight: '500', textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6B6860', marginBottom: '5px' }}>Category</label>
                 <select value={itemForm.category} onChange={e => setItemForm(f => ({ ...f, category: e.target.value }))}
                   style={{ width: '100%', padding: '9px 12px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif" }}>
-                  {CATEGORIES.map(c => <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>)}
+                  {CATEGORIES.map(c => (
+                    <option key={c} value={c}>
+                      {categorySelectLabel(c)}
+                    </option>
+                  ))}
                 </select>
               </div>
               <div>
