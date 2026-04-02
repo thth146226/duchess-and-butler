@@ -1,13 +1,12 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
+/** Delivery Photos page — after-delivery (DEL) photos only. */
 const RUN_TYPES = {
   after_del: { label: 'After DEL', bg: '#FCEBEB', color: '#A32D2D', border: '#FCA5A5' },
-  pre_col:   { label: 'Pre-COL',   bg: '#FEF3C7', color: '#B8965A', border: '#DDD8CF' },
-  after_col: { label: 'After COL', bg: '#EAF3DE', color: '#3B6D11', border: '#86EFAC' },
 }
 
-export default function Evidences() {
+export default function DeliveryPhotos() {
   const [photos, setPhotos]           = useState([])
   const [filter, setFilter]           = useState('all')
   const [driverFilter, setDriver]     = useState('all')
@@ -91,7 +90,7 @@ export default function Evidences() {
       const url = URL.createObjectURL(content)
       const a = document.createElement('a')
       a.href = url
-      a.download = `evidence_photos_${Date.now()}.zip`
+      a.download = `delivery_photos_${Date.now()}.zip`
       a.click()
       URL.revokeObjectURL(url)
       showToast(`Downloaded ${selectedPhotos.length} photos`)
@@ -113,7 +112,7 @@ export default function Evidences() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           to:       emailForm.to,
-          subject:  emailForm.subject || `${firstPhoto.event_name} — Evidence Photos`,
+          subject:  emailForm.subject || `${firstPhoto.event_name} — Delivery Photos`,
           message:  emailForm.message,
           photos:   selectedPhotos,
           jobName:  firstPhoto.event_name || 'Event',
@@ -166,7 +165,7 @@ export default function Evidences() {
 
   if (loading) return (
     <div style={{ padding: '48px', textAlign: 'center', color: '#6B6860', fontFamily: "'DM Sans', sans-serif" }}>
-      Loading evidence…
+      Loading delivery photos…
     </div>
   )
 
@@ -174,12 +173,10 @@ export default function Evidences() {
     <div style={{ fontFamily: "'DM Sans', sans-serif" }}>
 
       {/* Stats */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: '12px', marginBottom: '20px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: '12px', marginBottom: '20px' }}>
         {[
           { label: 'Total photos', value: photos.length, color: '#1C1C1E' },
           { label: 'After DEL', value: photos.filter(p => p.run_type === 'after_del').length, color: '#A32D2D' },
-          { label: 'Pre-COL', value: photos.filter(p => p.run_type === 'pre_col').length, color: '#B8965A' },
-          { label: 'After COL', value: photos.filter(p => p.run_type === 'after_col').length, color: '#3B6D11' },
         ].map(s => (
           <div key={s.label} style={{ background: '#F7F3EE', borderRadius: '8px', padding: '14px 16px' }}>
             <div style={{ fontSize: '11px', color: s.color, fontWeight: '500', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{s.label}</div>
@@ -198,7 +195,7 @@ export default function Evidences() {
         />
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
           <span style={{ fontSize: '11px', color: '#6B6860', fontWeight: '500' }}>Type:</span>
-          {[['all','All'], ['after_del','After DEL'], ['pre_col','Pre-COL'], ['after_col','After COL']].map(([val, lbl]) => (
+          {[['all','All'], ['after_del','After DEL']].map(([val, lbl]) => (
             <button key={val} onClick={() => setFilter(val)} style={{
               fontSize: '12px', padding: '5px 12px', borderRadius: '20px', cursor: 'pointer',
               fontFamily: "'DM Sans', sans-serif", fontWeight: '500',
@@ -228,8 +225,8 @@ export default function Evidences() {
       {Object.keys(grouped).length === 0 ? (
         <div style={{ textAlign: 'center', padding: '64px 24px', color: '#6B6860' }}>
           <div style={{ fontSize: '32px', marginBottom: '12px' }}>📷</div>
-          <div style={{ fontSize: '15px', fontWeight: '500', marginBottom: '6px' }}>No evidence photos yet</div>
-          <div style={{ fontSize: '13px', color: '#9CA3AF' }}>Upload photos from a job in the Schedule or Live Jobs</div>
+          <div style={{ fontSize: '15px', fontWeight: '500', marginBottom: '6px' }}>No delivery photos yet</div>
+          <div style={{ fontSize: '13px', color: '#9CA3AF' }}>Upload after-delivery photos from a job in the Schedule or Live Jobs</div>
         </div>
       ) : Object.entries(grouped).map(([jobId, group]) => {
         const jobPhotos = group.photos
@@ -266,7 +263,7 @@ export default function Evidences() {
                     )}
                     <img
                       src={p.photo_url}
-                      alt="Evidence"
+                      alt="Delivery photo"
                       style={{ width: '100%', height: '110px', objectFit: 'cover', display: 'block' }}
                       onClick={e => { e.stopPropagation(); setLightbox(p) }}
                     />
@@ -297,7 +294,7 @@ export default function Evidences() {
             >{downloading ? 'Downloading…' : `↓ Download ZIP (${selected.size})`}</button>
             <button
               onClick={() => {
-                setEmailForm(f => ({ ...f, subject: firstSelected ? `${firstSelected.event_name} — Evidence Photos` : 'Evidence Photos' }))
+                setEmailForm(f => ({ ...f, subject: firstSelected ? `${firstSelected.event_name} — Delivery Photos` : 'Delivery Photos' }))
                 setEmailPanel(true)
               }}
               style={{ background: '#378ADD', color: '#fff', border: 'none', borderRadius: '6px', padding: '8px 18px', fontSize: '12px', fontWeight: '600', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
@@ -313,7 +310,7 @@ export default function Evidences() {
           <div style={{ background: '#fff', borderRadius: '12px', width: '100%', maxWidth: '480px', padding: '28px', boxShadow: '0 12px 48px rgba(28,28,30,0.14)' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
               <div>
-                <div style={{ fontSize: '16px', fontWeight: '500' }}>Send evidence photos</div>
+                <div style={{ fontSize: '16px', fontWeight: '500' }}>Send delivery photos</div>
                 <div style={{ fontSize: '12px', color: '#6B6860', marginTop: '2px' }}>{firstSelected?.event_name} · {selected.size} photo{selected.size !== 1 ? 's' : ''} selected</div>
               </div>
               <button onClick={() => setEmailPanel(false)} style={{ background: '#F7F3EE', border: 'none', width: '28px', height: '28px', borderRadius: '50%', cursor: 'pointer', fontSize: '13px' }}>✕</button>
@@ -321,7 +318,7 @@ export default function Evidences() {
 
             {[
               { label: 'To (client email)', key: 'to', type: 'email', placeholder: 'client@example.com' },
-              { label: 'Subject', key: 'subject', type: 'text', placeholder: 'Evidence photos...' },
+              { label: 'Subject', key: 'subject', type: 'text', placeholder: 'Delivery photos...' },
             ].map(f => (
               <div key={f.key} style={{ marginBottom: '12px' }}>
                 <div style={{ fontSize: '10px', fontWeight: '500', letterSpacing: '0.08em', textTransform: 'uppercase', color: '#6B6860', marginBottom: '5px' }}>{f.label}</div>
@@ -340,7 +337,7 @@ export default function Evidences() {
               <textarea
                 value={emailForm.message}
                 onChange={e => setEmailForm(ef => ({ ...ef, message: e.target.value }))}
-                placeholder="Please find attached the evidence photos for your event..."
+                placeholder="Please find attached the delivery photos for your event..."
                 style={{ width: '100%', padding: '9px 12px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", outline: 'none', boxSizing: 'border-box', minHeight: '80px', resize: 'vertical' }}
               />
             </div>
@@ -350,7 +347,7 @@ export default function Evidences() {
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                 {selectedPhotos.slice(0, 6).map(p => (
                   <span key={p.id} style={{ background: '#F7F3EE', border: '1px solid #DDD8CF', borderRadius: '20px', padding: '3px 10px', fontSize: '11px', color: '#6B6860' }}>
-                    {RUN_TYPES[p.run_type]?.label} · {p.uploaded_by_name}
+                    {RUN_TYPES[p.run_type]?.label || 'After DEL'} · {p.uploaded_by_name}
                   </span>
                 ))}
                 {selectedPhotos.length > 6 && <span style={{ fontSize: '11px', color: '#9CA3AF', padding: '3px 0' }}>+{selectedPhotos.length - 6} more</span>}
@@ -376,11 +373,11 @@ export default function Evidences() {
           onClick={() => setLightbox(null)}>
           <div style={{ background: '#fff', borderRadius: '10px', maxWidth: '600px', width: '100%', overflow: 'hidden' }}
             onClick={e => e.stopPropagation()}>
-            <img src={lightbox.photo_url} alt="Evidence" style={{ width: '100%', maxHeight: '65vh', objectFit: 'contain', display: 'block' }} />
+            <img src={lightbox.photo_url} alt="Delivery photo" style={{ width: '100%', maxHeight: '65vh', objectFit: 'contain', display: 'block' }} />
             <div style={{ padding: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
               <div>
-                <div style={{ fontSize: '14px', fontWeight: '500', marginBottom: '2px' }}>{lightbox.event_name || 'Evidence photo'}</div>
-                <div style={{ fontSize: '12px', color: '#6B6860' }}>{RUN_TYPES[lightbox.run_type]?.label} · by {lightbox.uploaded_by_name}</div>
+                <div style={{ fontSize: '14px', fontWeight: '500', marginBottom: '2px' }}>{lightbox.event_name || 'Delivery photo'}</div>
+                <div style={{ fontSize: '12px', color: '#6B6860' }}>{RUN_TYPES[lightbox.run_type]?.label || 'After DEL'} · by {lightbox.uploaded_by_name}</div>
               </div>
               <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
                 <button onClick={() => deletePhoto(lightbox.id, lightbox.file_path)}

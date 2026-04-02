@@ -8,7 +8,7 @@ const navItems = [
   { section: 'Live Operations', items: [
     { id: 'livejobs', icon: '⚡', label: 'Live Jobs', roles: ['admin','operations','driver'], highlight: true },
     { id: 'notes', icon: '📋', label: 'Notes', roles: ['admin','operations','driver'] },
-    { id: 'evidences', icon: '📷', label: 'Evidence', roles: ['admin','operations','driver'] },
+    { id: 'evidences', icon: '📷', label: 'Delivery Photos', roles: ['admin','operations','driver'] },
     { id: 'schedule', icon: '📅', label: 'Schedule', roles: ['admin','operations','driver'] },
   ]},
   { section: 'Management', items: [
