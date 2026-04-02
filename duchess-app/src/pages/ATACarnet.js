@@ -43,6 +43,7 @@ export default function ATACarnet() {
   const [viewCalc, setViewCalc]         = useState(null)
   const [savingCalc, setSavingCalc]     = useState(false)
   const [calcCatFilter, setCalcCatFilter] = useState('all')
+  const [calcSearch, setCalcSearch]       = useState('')
 
   useEffect(() => { fetchItems(); fetchCalcs() }, [])
 
@@ -290,6 +291,22 @@ export default function ATACarnet() {
             </div>
           </div>
 
+          <input
+            value={calcSearch}
+            onChange={e => setCalcSearch(e.target.value)}
+            placeholder="Search items..."
+            style={{
+              width: '100%',
+              padding: '9px 12px',
+              border: '1px solid #DDD8CF',
+              borderRadius: '6px',
+              fontSize: '13px',
+              fontFamily: "'DM Sans', sans-serif",
+              marginBottom: '10px',
+              boxSizing: 'border-box',
+            }}
+          />
+
           <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
             {['all', ...CATEGORIES].map(c => (
               <button key={c} onClick={() => setCalcCatFilter(c)}
@@ -317,7 +334,11 @@ export default function ATACarnet() {
                 <div key={h} style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6B6860', textAlign: i > 0 ? 'center' : 'left' }}>{h}</div>
               ))}
             </div>
-            {calcItems.filter(i => calcCatFilter === 'all' || i.category === calcCatFilter).map(item => {
+            {calcItems.filter(i => {
+              const matchCat = calcCatFilter === 'all' || i.category === calcCatFilter
+              const matchSearch = !calcSearch || i.name.toLowerCase().includes(calcSearch.toLowerCase())
+              return matchCat && matchSearch
+            }).map(item => {
               const cs = CAT_STYLE[item.category] || CAT_STYLE.other
               return (
                 <div key={item.id} style={{ display: 'grid', gridTemplateColumns: '1fr 70px 90px 90px', gap: 0, padding: '10px 16px', borderBottom: '0.5px solid #EDE8E0', alignItems: 'center', background: item.boxes > 0 ? '#FFFEF8' : '#fff' }}>
