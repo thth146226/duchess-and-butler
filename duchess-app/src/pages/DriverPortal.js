@@ -55,6 +55,9 @@ export default function DriverPortal({ token }) {
   const [signature, setSignature]       = useState(null)
   const [savingReport, setSavingReport] = useState(false)
   const [reportToast, setReportToast]   = useState(null)
+  const [reportPhotoUploading, setReportPhotoUploading] = useState(false)
+  const [submittedReportId, setSubmittedReportId]     = useState(null)
+  const [uploadedPhotos, setUploadedPhotos]            = useState([])
   const [sigCanvas, setSigCanvas]       = useState(null)
   const [isDrawing, setIsDrawing]       = useState(false)
 
@@ -182,6 +185,8 @@ export default function DriverPortal({ token }) {
   async function openReport(job, runType) {
     setReportJob(job)
     setReportRunType(runType)
+    setSubmittedReportId(null)
+    setUploadedPhotos([])
     setDriverNotes('')
     setClientName('')
     setSignature(null)
@@ -282,6 +287,34 @@ export default function DriverPortal({ token }) {
     setSignature(null)
   }
 
+  async function uploadReportPhoto(file, reportId) {
+    if (!file || !reportId) return
+    setReportPhotoUploading(true)
+    try {
+      const ext = file.name.split('.').pop()
+      const path = `reports/${reportId}/${Date.now()}.${ext}`
+      const { error } = await supabase.storage
+        .from('evidence-photos')
+        .upload(path, file)
+      if (error) throw error
+      const { data: { publicUrl } } = supabase.storage
+        .from('evidence-photos')
+        .getPublicUrl(path)
+      await supabase.from('evidence_photos').insert({
+        order_id:         reportId,
+        run_type:         'after_col',
+        photo_url:        publicUrl,
+        file_path:        path,
+        uploaded_by_name: driver?.name || 'Driver',
+        event_name:       reportJob?.event_name || '',
+      })
+      showReportToast('Photo uploaded')
+    } catch(e) {
+      showReportToast('Upload failed: ' + e.message, 'error')
+    }
+    setReportPhotoUploading(false)
+  }
+
   async function submitReport() {
     if (!reportJob) return
     setSavingReport(true)
@@ -323,8 +356,7 @@ export default function DriverPortal({ token }) {
       }
 
       showReportToast('Report submitted successfully')
-      setReportMode(false)
-      setReportJob(null)
+      setSubmittedReportId(report.id)
     } catch(e) {
       showReportToast('Error submitting report: ' + e.message, 'error')
     }
@@ -575,7 +607,7 @@ export default function DriverPortal({ token }) {
 
             {/* Header */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-              <button onClick={() => setReportMode(false)} style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '6px', padding: '6px 12px', cursor: 'pointer', fontSize: '12px', fontFamily: "'DM Sans', sans-serif" }}>← Back</button>
+              <button onClick={() => { setReportMode(false); setSubmittedReportId(null); setUploadedPhotos([]) }} style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '6px', padding: '6px 12px', cursor: 'pointer', fontSize: '12px', fontFamily: "'DM Sans', sans-serif" }}>← Back</button>
               <div>
                 <div style={{ fontSize: '15px', fontWeight: '500' }}>{reportRunType} Report</div>
                 <div style={{ fontSize: '11px', color: '#6B6860' }}>{reportJob.event_name || reportJob.title}</div>
@@ -675,9 +707,39 @@ export default function DriverPortal({ token }) {
             {/* Submit */}
             <button
               onClick={submitReport}
-              disabled={savingReport}
-              style={{ width: '100%', padding: '14px', background: '#1C1C1E', color: '#fff', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: '500', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
-            >{savingReport ? 'Submitting…' : 'Submit Report'}</button>
+              disabled={savingReport || !!submittedReportId}
+              style={{ width: '100%', padding: '14px', background: submittedReportId ? '#DDD8CF' : '#1C1C1E', color: submittedReportId ? '#6B6860' : '#fff', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: '500', cursor: submittedReportId ? 'default' : 'pointer', fontFamily: "'DM Sans', sans-serif", opacity: savingReport ? 0.7 : 1 }}
+            >{savingReport ? 'Submitting…' : submittedReportId ? 'Report submitted' : 'Submit Report'}</button>
+
+            {submittedReportId && (
+              <div style={{ marginTop: '16px', background: '#EAF3DE', border: '1px solid #86EFAC', borderRadius: '8px', padding: '14px 16px' }}>
+                <div style={{ fontSize: '13px', fontWeight: '500', color: '#3B6D11', marginBottom: '10px' }}>
+                  ✓ Report submitted! Add collection photos:
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', marginBottom: '10px' }}>
+                  {uploadedPhotos.map((url, i) => (
+                    <img key={i} src={url} alt="COL"
+                      style={{ width: '100%', height: '80px', objectFit: 'cover', borderRadius: '6px' }} />
+                  ))}
+                </div>
+                <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '10px', background: '#fff', border: '1.5px dashed #86EFAC', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', color: '#3B6D11' }}>
+                  <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
+                    onChange={async e => {
+                      const file = e.target.files[0]
+                      if (!file) return
+                      await uploadReportPhoto(file, submittedReportId)
+                      const url = URL.createObjectURL(file)
+                      setUploadedPhotos(p => [...p, url])
+                      e.target.value = ''
+                    }} />
+                  {reportPhotoUploading ? 'Uploading…' : '📷 Take / upload photo'}
+                </label>
+                <button
+                  onClick={() => { setReportMode(false); setSubmittedReportId(null); setUploadedPhotos([]) }}
+                  style={{ width: '100%', marginTop: '10px', padding: '10px', background: '#1C1C1E', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '13px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
+                >Done</button>
+              </div>
+            )}
           </div>
 
           {reportToast && (
