@@ -183,6 +183,8 @@ export default function Schedule() {
       manual_collection_date: overrideForm.collection_date || null,
       manual_collection_time: overrideForm.collection_time || null,
       manual_venue:           overrideForm.venue || null,
+      delivery_end_time:      overrideForm.delivery_end_time || null,
+      collection_end_time:    overrideForm.collection_end_time || null,
       has_manual_override:    true,
     }).eq('id', job.id)
     setSavingOverride(false)
@@ -1556,6 +1558,14 @@ function RunDetailPanel({
               />
             </div>
             <div>
+              <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '4px' }}>DEL end time</div>
+              <input type="time"
+                defaultValue={run.job.delivery_end_time?.substring(0,5) || ''}
+                onChange={e => setOverrideForm(f => ({ ...f, delivery_end_time: e.target.value }))}
+                style={{ width: '100%', padding: '7px 10px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '12px', fontFamily: "'DM Sans', sans-serif" }}
+              />
+            </div>
+            <div>
               <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '4px' }}>COL date</div>
               <input type="date"
                 defaultValue={run.job.manual_collection_date || run.job.collection_date || ''}
@@ -1568,6 +1578,14 @@ function RunDetailPanel({
               <input type="time"
                 defaultValue={run.job.manual_collection_time || run.job.collection_time?.substring(0,5) || ''}
                 onChange={e => setOverrideForm(f => ({ ...f, collection_time: e.target.value }))}
+                style={{ width: '100%', padding: '7px 10px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '12px', fontFamily: "'DM Sans', sans-serif" }}
+              />
+            </div>
+            <div>
+              <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '4px' }}>COL end time</div>
+              <input type="time"
+                defaultValue={run.job.collection_end_time?.substring(0,5) || ''}
+                onChange={e => setOverrideForm(f => ({ ...f, collection_end_time: e.target.value }))}
                 style={{ width: '100%', padding: '7px 10px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '12px', fontFamily: "'DM Sans', sans-serif" }}
               />
             </div>
