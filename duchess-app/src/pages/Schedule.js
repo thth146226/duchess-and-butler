@@ -71,6 +71,12 @@ function buildRuns(jobs) {
       runType: 'DEL',
       runDate: deliveryDate,
       runTime: deliveryTime?.substring(0, 5) || null,
+      deliveryEndTime: job.manual_delivery_time
+        ? null
+        : job.delivery_end_time?.substring(0, 5) || null,
+      isTimed: !!(job.delivery_end_time &&
+        job.delivery_end_time?.substring(0, 5) !== '17:00' &&
+        job.delivery_end_time?.substring(0, 5) !== '00:00'),
       missingTime: !deliveryTime,
       isManualOverride: !!job.has_manual_override,
       manualSortOrder: job.manual_sort_order || 0,
@@ -84,6 +90,12 @@ function buildRuns(jobs) {
       runType: 'COL',
       runDate: collectionDate,
       runTime: collectionTime?.substring(0, 5) || null,
+      collectionEndTime: job.manual_collection_time
+        ? null
+        : job.collection_end_time?.substring(0, 5) || null,
+      isTimed: !!(job.collection_end_time &&
+        job.collection_end_time?.substring(0, 5) !== '17:00' &&
+        job.collection_end_time?.substring(0, 5) !== '00:00'),
       missingTime: !collectionTime,
       isManualOverride: !!job.has_manual_override,
       manualSortOrder: (job.manual_sort_order || 0) + 0.5,
@@ -1005,7 +1017,28 @@ function RunRow({ run, onSelect, jobNotes }) {
         )}
       </td>
       <td style={{ ...S.td, fontWeight: '600', fontFamily: "'Cormorant Garamond', serif", fontSize: '16px', color: run.missingTime ? '#9CA3AF' : '#1C1C1E' }}>
-        {run.runTime?.substring(0, 5) || <span style={{ fontSize: '11px', color: '#F59E0B' }}>⚠ No time</span>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+          <span>
+            {run.runTime || '—'}
+            {run.runType === 'DEL' && run.deliveryEndTime
+              ? ` - ${run.deliveryEndTime}`
+              : run.runType === 'COL' && run.collectionEndTime
+                ? ` - ${run.collectionEndTime}`
+                : ''}
+          </span>
+          {run.isTimed && (
+            <span style={{
+              background: '#FEF3C7',
+              color: '#854F0B',
+              fontSize: '9px',
+              fontWeight: '700',
+              padding: '2px 6px',
+              borderRadius: '4px',
+              border: '1px solid #FDE68A',
+              whiteSpace: 'nowrap',
+            }}>⏱ TIMED</span>
+          )}
+        </div>
       </td>
       <td style={S.td}>
         <div style={{ fontWeight: 500 }}>{run.event || run.client}</div>
@@ -1114,7 +1147,30 @@ function GroupedByDriverView({ runs, drivers, onSelect }) {
                           )}
                         </td>
                         <td style={S.td}>{fmt(run.runDate)}</td>
-                        <td style={{ ...S.td, fontFamily: "'Cormorant Garamond', serif", fontSize: '15px' }}>{run.runTime?.substring(0, 5) || <span style={{ fontSize: '11px', color: '#F59E0B' }}>⚠ No time</span>}</td>
+                        <td style={{ ...S.td, fontFamily: "'Cormorant Garamond', serif", fontSize: '15px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                            <span>
+                              {run.runTime || '—'}
+                              {run.runType === 'DEL' && run.deliveryEndTime
+                                ? ` - ${run.deliveryEndTime}`
+                                : run.runType === 'COL' && run.collectionEndTime
+                                  ? ` - ${run.collectionEndTime}`
+                                  : ''}
+                            </span>
+                            {run.isTimed && (
+                              <span style={{
+                                background: '#FEF3C7',
+                                color: '#854F0B',
+                                fontSize: '9px',
+                                fontWeight: '700',
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                border: '1px solid #FDE68A',
+                                whiteSpace: 'nowrap',
+                              }}>⏱ TIMED</span>
+                            )}
+                          </div>
+                        </td>
                         <td style={S.td}><div style={{ fontWeight: 500 }}>{run.event || run.client}</div><div style={{ fontSize: '11px', color: '#6B6860' }}>{run.client}</div></td>
                         <td style={{ ...S.td, fontSize: '12px', color: '#6B6860' }}>{run.venue || '—'}</td>
                         <td style={{ ...S.td, fontFamily: "'Cormorant Garamond', serif", fontSize: '14px', color: '#B8965A' }}>{run.ref}</td>
@@ -1422,7 +1478,26 @@ function RunDetailPanel({
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
             {[
               ['Date',      fmt(run.runDate)],
-              ['Time',      run.runTime || '⚠ Not set'],
+              ['Time',      (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <span>
+                    {run.runTime || '⚠ Not set'}
+                    {run.runType === 'DEL' && run.deliveryEndTime ? ` — ${run.deliveryEndTime}` : run.runType === 'COL' && run.collectionEndTime ? ` — ${run.collectionEndTime}` : ''}
+                  </span>
+                  {run.isTimed && (
+                    <span style={{
+                      background: '#FEF3C7',
+                      color: '#854F0B',
+                      fontSize: '9px',
+                      fontWeight: '700',
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                      border: '1px solid #FDE68A',
+                      whiteSpace: 'nowrap',
+                    }}>⏱ TIMED</span>
+                  )}
+                </div>
+              )],
               ['Client',    run.client],
               ['Venue',     run.venue || '—'],
               ['Status',    run.status],
@@ -1430,7 +1505,7 @@ function RunDetailPanel({
             ].map(([label, value]) => (
               <div key={label} style={{ background: '#F7F3EE', borderRadius: '6px', padding: '12px' }}>
                 <div style={{ fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6B6860', marginBottom: '4px' }}>{label}</div>
-                <div style={{ fontSize: '13.5px', fontWeight: '500', color: '#1C1C1E', textTransform: 'capitalize' }}>{value}</div>
+                <div style={{ fontSize: '13.5px', fontWeight: '500', color: '#1C1C1E', ...(label !== 'Time' ? { textTransform: 'capitalize' } : {}) }}>{value}</div>
               </div>
             ))}
           </div>
@@ -1523,7 +1598,11 @@ function RunDetailPanel({
               <div style={{ border: '1px solid #FCA5A5', borderRadius: '8px', padding: '12px 14px', marginBottom: '10px', background: '#FFF8F8' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
                   <span style={{ background: '#FCEBEB', color: '#A32D2D', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '4px' }}>DEL</span>
-                  <span style={{ fontSize: '12px', color: '#6B6860' }}>{run.job.delivery_date} {run.job.delivery_time?.substring(0, 5) || '—'}</span>
+                  <span style={{ fontSize: '12px', color: '#6B6860' }}>
+                    {run.job.delivery_date}{' '}
+                    {run.job.delivery_time?.substring(0, 5) || '—'}
+                    {run.job.delivery_end_time?.substring(0, 5) && ` — ${run.job.delivery_end_time?.substring(0, 5)}`}
+                  </span>
                 </div>
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
                   <button
@@ -1562,7 +1641,11 @@ function RunDetailPanel({
               <div style={{ border: '1px solid #86EFAC', borderRadius: '8px', padding: '12px 14px', marginBottom: '12px', background: '#F8FFF8' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
                   <span style={{ background: '#EAF3DE', color: '#3B6D11', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '4px' }}>COL</span>
-                  <span style={{ fontSize: '12px', color: '#6B6860' }}>{run.job.collection_date} {run.job.collection_time?.substring(0, 5) || '—'}</span>
+                  <span style={{ fontSize: '12px', color: '#6B6860' }}>
+                    {run.job.collection_date}{' '}
+                    {run.job.collection_time?.substring(0, 5) || '—'}
+                    {run.job.collection_end_time?.substring(0, 5) && ` — ${run.job.collection_end_time?.substring(0, 5)}`}
+                  </span>
                 </div>
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
                   <button
@@ -1800,7 +1883,30 @@ function MonthView({ allRuns, monthDate, setMonthDate, onSelect, dragRun, dragOv
                     <tr key={i} style={{ cursor: 'pointer' }} onClick={() => onSelect(run)}>
                       <td style={S.td}><span style={{ background: colors.badge, color: 'white', fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '3px' }}>{run.runType}</span></td>
                       <td style={S.td}>{fmt(run.runDate)}</td>
-                      <td style={{ ...S.td, fontFamily: "'Cormorant Garamond', serif", fontSize: '15px' }}>{run.runTime?.substring(0, 5) || <span style={{ fontSize: '11px', color: '#F59E0B' }}>⚠ No time</span>}</td>
+                      <td style={{ ...S.td, fontFamily: "'Cormorant Garamond', serif", fontSize: '15px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                          <span>
+                            {run.runTime || '—'}
+                            {run.runType === 'DEL' && run.deliveryEndTime
+                              ? ` - ${run.deliveryEndTime}`
+                              : run.runType === 'COL' && run.collectionEndTime
+                                ? ` - ${run.collectionEndTime}`
+                                : ''}
+                          </span>
+                          {run.isTimed && (
+                            <span style={{
+                              background: '#FEF3C7',
+                              color: '#854F0B',
+                              fontSize: '9px',
+                              fontWeight: '700',
+                              padding: '2px 6px',
+                              borderRadius: '4px',
+                              border: '1px solid #FDE68A',
+                              whiteSpace: 'nowrap',
+                            }}>⏱ TIMED</span>
+                          )}
+                        </div>
+                      </td>
                       <td style={S.td}><div style={{ fontWeight: 500 }}>{run.event || run.client}</div><div style={{ fontSize: '11px', color: '#6B6860' }}>{run.client}</div></td>
                       <td style={{ ...S.td, fontSize: '12px', color: '#6B6860' }}>{run.venue || '—'}</td>
                       <td style={S.td}>
@@ -1946,6 +2052,30 @@ function MiniRunCard({ run, onClick, compact = false, draggable = false, onDragS
         <span style={{ background: colors.badge, color: 'white', fontSize: '8px', fontWeight: '700', padding: '1px 3px', borderRadius: '2px', marginRight: '3px' }}>{run.runType}</span>
         <span style={{ color: colors.text, fontWeight: '600' }}>{run.event || run.client}</span>
       </div>
+      {(run.runTime || run.deliveryEndTime || run.collectionEndTime || run.isTimed) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap', marginTop: '3px' }}>
+          <span style={{ fontSize: '9px', color: '#6B6860' }}>
+            {run.runTime || '—'}
+            {run.runType === 'DEL' && run.deliveryEndTime
+              ? ` - ${run.deliveryEndTime}`
+              : run.runType === 'COL' && run.collectionEndTime
+                ? ` - ${run.collectionEndTime}`
+                : ''}
+          </span>
+          {run.isTimed && (
+            <span style={{
+              background: '#FEF3C7',
+              color: '#854F0B',
+              fontSize: '8px',
+              fontWeight: '700',
+              padding: '1px 4px',
+              borderRadius: '3px',
+              border: '1px solid #FDE68A',
+              whiteSpace: 'nowrap',
+            }}>⏱ TIMED</span>
+          )}
+        </div>
+      )}
       {(run.driverName || run.driverName2) && (
         <div style={{ marginTop: '4px' }}>
           <span style={{
