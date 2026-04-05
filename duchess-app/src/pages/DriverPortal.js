@@ -57,6 +57,7 @@ export default function DriverPortal({ token }) {
   const [reportToast, setReportToast]   = useState(null)
   const [reportPhotoUploading, setReportPhotoUploading] = useState(false)
   const [submittedReportId, setSubmittedReportId]     = useState(null)
+  /** Each entry: { url, path } after upload to evidence-photos bucket */
   const [uploadedPhotos, setUploadedPhotos]            = useState([])
   const [sigCanvas, setSigCanvas]       = useState(null)
   const [isDrawing, setIsDrawing]       = useState(false)
@@ -287,34 +288,6 @@ export default function DriverPortal({ token }) {
     setSignature(null)
   }
 
-  async function uploadReportPhoto(file, reportId) {
-    if (!file || !reportId) return
-    setReportPhotoUploading(true)
-    try {
-      const ext = file.name.split('.').pop()
-      const path = `reports/${reportId}/${Date.now()}.${ext}`
-      const { error } = await supabase.storage
-        .from('evidence-photos')
-        .upload(path, file)
-      if (error) throw error
-      const { data: { publicUrl } } = supabase.storage
-        .from('evidence-photos')
-        .getPublicUrl(path)
-      await supabase.from('evidence_photos').insert({
-        order_id:         reportId,
-        run_type:         'after_col',
-        photo_url:        publicUrl,
-        file_path:        path,
-        uploaded_by_name: driver?.name || 'Driver',
-        event_name:       reportJob?.event_name || '',
-      })
-      showReportToast('Photo uploaded')
-    } catch(e) {
-      showReportToast('Upload failed: ' + e.message, 'error')
-    }
-    setReportPhotoUploading(false)
-  }
-
   async function submitReport() {
     if (!reportJob) return
     setSavingReport(true)
@@ -351,6 +324,21 @@ export default function DriverPortal({ token }) {
             quantity:   item.quantity,
             condition:  item.condition,
             notes:      item.notes || null,
+          }))
+        )
+      }
+
+      // Save uploaded photos linked to the report
+      if (uploadedPhotos.length > 0) {
+        await supabase.from('evidence_photos').insert(
+          uploadedPhotos.map(p => ({
+            order_id:         report.id,
+            run_type:         'after_col',
+            photo_url:        p.url,
+            file_path:        p.path,
+            uploaded_by_name: driver?.name || 'Driver',
+            event_name:       reportJob?.event_name || '',
+            crms_ref:         reportJob?.crms_ref || '',
           }))
         )
       }
@@ -704,6 +692,66 @@ export default function DriverPortal({ token }) {
               )}
             </div>
 
+            {/* Collection Photos Upload */}
+            {!submittedReportId && (
+            <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '14px 16px', marginBottom: '16px' }}>
+              <div style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B8965A', marginBottom: '10px' }}>Collection Photos</div>
+
+              {uploadedPhotos.length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', marginBottom: '10px' }}>
+                  {uploadedPhotos.map((photo, i) => (
+                    <img key={i} src={photo.url} alt="COL"
+                      style={{ width: '100%', height: '90px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #DDD8CF' }} />
+                  ))}
+                </div>
+              )}
+
+              <label style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                gap: '8px', padding: '12px',
+                background: '#F7F3EE',
+                border: '1.5px dashed #DDD8CF',
+                borderRadius: '6px', cursor: 'pointer',
+                fontSize: '13px', color: '#6B6860',
+              }}>
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  style={{ display: 'none' }}
+                  onChange={async e => {
+                    const file = e.target.files[0]
+                    if (!file) return
+                    setReportPhotoUploading(true)
+                    try {
+                      const ext = file.name.split('.').pop()
+                      const path = `reports/temp_${Date.now()}.${ext}`
+                      const { error } = await supabase.storage
+                        .from('evidence-photos')
+                        .upload(path, file)
+                      if (error) throw error
+                      const { data: { publicUrl } } = supabase.storage
+                        .from('evidence-photos')
+                        .getPublicUrl(path)
+                      setUploadedPhotos(p => [...p, { url: publicUrl, path }])
+                      showReportToast('Photo added')
+                    } catch (err) {
+                      showReportToast('Upload failed: ' + err.message, 'error')
+                    }
+                    setReportPhotoUploading(false)
+                    e.target.value = ''
+                  }}
+                />
+                {reportPhotoUploading ? 'Uploading…' : '📷 Add collection photo'}
+              </label>
+              {uploadedPhotos.length > 0 && (
+                <div style={{ fontSize: '11px', color: '#3B6D11', marginTop: '6px', textAlign: 'center' }}>
+                  {uploadedPhotos.length} photo{uploadedPhotos.length !== 1 ? 's' : ''} added
+                </div>
+              )}
+            </div>
+            )}
+
             {/* Submit */}
             <button
               onClick={submitReport}
@@ -714,26 +762,8 @@ export default function DriverPortal({ token }) {
             {submittedReportId && (
               <div style={{ marginTop: '16px', background: '#EAF3DE', border: '1px solid #86EFAC', borderRadius: '8px', padding: '14px 16px' }}>
                 <div style={{ fontSize: '13px', fontWeight: '500', color: '#3B6D11', marginBottom: '10px' }}>
-                  ✓ Report submitted! Add collection photos:
+                  ✓ Report submitted successfully
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', marginBottom: '10px' }}>
-                  {uploadedPhotos.map((url, i) => (
-                    <img key={i} src={url} alt="COL"
-                      style={{ width: '100%', height: '80px', objectFit: 'cover', borderRadius: '6px' }} />
-                  ))}
-                </div>
-                <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '10px', background: '#fff', border: '1.5px dashed #86EFAC', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', color: '#3B6D11' }}>
-                  <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
-                    onChange={async e => {
-                      const file = e.target.files[0]
-                      if (!file) return
-                      await uploadReportPhoto(file, submittedReportId)
-                      const url = URL.createObjectURL(file)
-                      setUploadedPhotos(p => [...p, url])
-                      e.target.value = ''
-                    }} />
-                  {reportPhotoUploading ? 'Uploading…' : '📷 Take / upload photo'}
-                </label>
                 <button
                   onClick={() => { setReportMode(false); setSubmittedReportId(null); setUploadedPhotos([]) }}
                   style={{ width: '100%', marginTop: '10px', padding: '10px', background: '#1C1C1E', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '13px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
