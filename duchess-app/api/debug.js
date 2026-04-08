@@ -5,7 +5,7 @@ const HEADERS = { 'X-AUTH-TOKEN': CRMS_API_KEY, 'X-SUBDOMAIN': CRMS_SUBDOMAIN }
 module.exports = async function handler(req, res) {
   try {
     const r = await fetch(
-      'https://api.current-rms.com/api/v1/opportunities?q[number_eq]=QDB7709',
+      'https://api.current-rms.com/api/v1/opportunities?q[number_eq]=QDB7706',
       { headers: HEADERS }
     )
     const d = await r.json()
