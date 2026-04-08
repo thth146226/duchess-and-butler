@@ -75,8 +75,7 @@ function buildRuns(jobs) {
         ? null
         : job.delivery_end_time?.substring(0, 5) || null,
       isTimed: !!(job.delivery_end_time &&
-        job.delivery_end_time?.substring(0, 5) !== '17:00' &&
-        job.delivery_end_time?.substring(0, 5) !== '00:00'),
+        !['17:00', '18:00', '00:00', null].includes(job.delivery_end_time?.substring(0, 5))),
       missingTime: !deliveryTime,
       isManualOverride: !!job.has_manual_override,
       manualSortOrder: job.manual_sort_order || 0,
@@ -94,8 +93,7 @@ function buildRuns(jobs) {
         ? null
         : job.collection_end_time?.substring(0, 5) || null,
       isTimed: !!(job.collection_end_time &&
-        job.collection_end_time?.substring(0, 5) !== '17:00' &&
-        job.collection_end_time?.substring(0, 5) !== '00:00'),
+        !['17:00', '18:00', '00:00', null].includes(job.collection_end_time?.substring(0, 5))),
       missingTime: !collectionTime,
       isManualOverride: !!job.has_manual_override,
       manualSortOrder: (job.manual_sort_order || 0) + 0.5,
