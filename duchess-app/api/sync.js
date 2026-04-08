@@ -61,7 +61,16 @@ async function fetchAllPages(path, key, params = {}) {
 }
 
 function toDate(iso) { return iso ? iso.slice(0, 10) : null }
-function toTime(iso) { return iso ? iso.slice(11, 16) : null }
+function toTime(iso) {
+  if (!iso) return null
+  const date = new Date(iso)
+  // Convert UTC to UK local time (handles both GMT and BST automatically)
+  return date.toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Europe/London',
+  })
+}
 
 // ── ISSUE 3: Status filter ────────────────────────────────────────────────────
 //
