@@ -37,7 +37,6 @@ export default function DriverPortal({ token }) {
   const [selectedJob, setSelected]= useState(null)
   const [tab, setTab]             = useState('details')
   const [notes, setNotes]         = useState([])
-  const [items, setItems]         = useState([])
   const [photos, setPhotos]       = useState([])
   const [runType, setRunType]     = useState('after_del')
   const [uploading, setUploading] = useState(false)
@@ -102,7 +101,7 @@ export default function DriverPortal({ token }) {
   async function fetchJobs(driverName) {
     const { data } = await supabase
       .from('crms_jobs')
-      .select('*')
+      .select('*, crms_items(*)')
       .not('status', 'eq', 'cancelled')
       .order('delivery_date', { ascending: true, nullsLast: true })
 
@@ -122,7 +121,10 @@ export default function DriverPortal({ token }) {
         j.assigned_driver_name_2 === driverName ||
         j.col_driver_name === driverName ||
         j.col_driver_name_2 === driverName
-      )
+      ).map(j => ({
+        ...j,
+        items: j.crms_items || [],
+      }))
       console.log('My jobs found:', myJobs.length)
       setJobs(myJobs)
     }
@@ -132,13 +134,11 @@ export default function DriverPortal({ token }) {
   async function openJob(job) {
     setSelected(job)
     setTab('details')
-    const [{ data: notesData }, { data: itemsData }, { data: photosData }] = await Promise.all([
+    const [{ data: notesData }, { data: photosData }] = await Promise.all([
       supabase.from('job_notes').select('*').eq('job_id', job.id).order('created_at', { ascending: false }),
-      supabase.from('crms_job_items').select('*').eq('job_id', job.id),
       supabase.from('evidence_photos').select('*').eq('order_id', job.id).order('created_at', { ascending: false }),
     ])
     if (notesData) setNotes(notesData)
-    if (itemsData) setItems(itemsData)
     if (photosData) setPhotos(photosData)
   }
 
@@ -480,7 +480,6 @@ export default function DriverPortal({ token }) {
                     {[
                       { label: 'Delivery', value: selectedJob.delivery_date ? `${selectedJob.delivery_date} ${selectedJob.delivery_time || ''}` : '—' },
                       { label: 'Collection', value: selectedJob.collection_date ? `${selectedJob.collection_date} ${selectedJob.collection_time || ''}` : '—' },
-                      { label: 'Venue', value: selectedJob.venue || '—' },
                       { label: 'Client', value: selectedJob.client_name || '—' },
                     ].map(f => (
                       <div key={f.label} style={{ background: '#F7F3EE', borderRadius: '8px', padding: '10px 12px' }}>
@@ -490,12 +489,26 @@ export default function DriverPortal({ token }) {
                     ))}
                   </div>
 
-                  {selectedJob.venue_address && (
-                    <button
-                      onClick={() => openMaps(selectedJob.venue_address)}
-                      style={{ width: '100%', padding: '11px', background: '#EFF6FF', color: '#1D4ED8', border: '1px solid #BFDBFE', borderRadius: '8px', fontSize: '13px', fontWeight: '500', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
-                    >📍 Open in Google Maps</button>
-                  )}
+                  {/* Venue & Address */}
+                  <div style={{ background: '#F7F3EE', borderRadius: '8px', padding: '12px 14px', marginBottom: '10px' }}>
+                    <div style={{ fontSize: '10px', fontWeight: '500', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#6B6860', marginBottom: '6px' }}>Venue & Address</div>
+                    {selectedJob.venue_address ? (
+                      <div>
+                        <div style={{ fontSize: '13px', fontWeight: '500', marginBottom: '2px' }}>{selectedJob.venue || selectedJob.venue_address}</div>
+                        <div style={{ fontSize: '12px', color: '#6B6860', lineHeight: 1.5, marginBottom: '8px' }}>{selectedJob.venue_address}</div>
+                        <a
+                          href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((selectedJob.venue || '') + ' ' + (selectedJob.venue_address || ''))}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ display: 'inline-block', fontSize: '12px', fontWeight: '500', padding: '7px 14px', borderRadius: '6px', background: '#1C1C1E', color: '#fff', textDecoration: 'none' }}
+                        >
+                          Open in Google Maps
+                        </a>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: '12px', color: '#9CA3AF' }}>Full address not yet available — check Current RMS</div>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -522,17 +535,37 @@ export default function DriverPortal({ token }) {
               {/* Items tab */}
               {tab === 'items' && (
                 <div>
-                  {items.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: '24px', color: '#9CA3AF', fontSize: '13px' }}>No items synced</div>
-                  ) : items.filter(i => parseInt(i.quantity) > 0).map((item, i) => (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: '0.5px solid #EDE8E0' }}>
-                      <div>
-                        <div style={{ fontSize: '13px', fontWeight: '500' }}>{item.item_name}</div>
-                        <div style={{ fontSize: '11px', color: '#6B6860', textTransform: 'capitalize' }}>{item.category}</div>
-                      </div>
-                      <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', fontWeight: '600', color: '#1C1C1E' }}>{item.quantity}</div>
+                  {(!selectedJob.items || selectedJob.items.length === 0) ? (
+                    <div style={{ textAlign: 'center', padding: '32px', color: '#9CA3AF', fontSize: '13px' }}>
+                      No items listed for this job
                     </div>
-                  ))}
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
+                      {Object.entries(
+                        selectedJob.items.reduce((groups, item) => {
+                          const cat = item.category || 'Other'
+                          if (!groups[cat]) groups[cat] = []
+                          groups[cat].push(item)
+                          return groups
+                        }, {})
+                      ).map(([category, items]) => (
+                        <div key={category}>
+                          <div style={{ padding: '8px 14px', background: '#F7F3EE', fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B8965A', borderBottom: '0.5px solid #EDE8E0' }}>
+                            {category}
+                          </div>
+                          {items.map((item, i) => (
+                            <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '0.5px solid #EDE8E0' }}>
+                              <div>
+                                <div style={{ fontSize: '13px', fontWeight: '500' }}>{item.description || item.name}</div>
+                                {item.notes && <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '1px' }}>{item.notes}</div>}
+                              </div>
+                              <div style={{ fontSize: '14px', fontWeight: '600', color: '#1C1C1E' }}>×{item.quantity}</div>
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 

@@ -1508,6 +1508,31 @@ function RunDetailPanel({
                 <div style={{ fontSize: '13.5px', fontWeight: '500', color: '#1C1C1E', ...(label !== 'Time' ? { textTransform: 'capitalize' } : {}) }}>{value}</div>
               </div>
             ))}
+
+            {/* Venue & Address */}
+            {run.job.venue_address && (
+              <div style={{ gridColumn: '1/-1', background: '#F7F3EE', borderRadius: '6px', padding: '12px' }}>
+                <div style={{ fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6B6860', marginBottom: '6px' }}>Venue & Address</div>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '10px' }}>
+                  <div>
+                    <div style={{ fontSize: '13px', fontWeight: '500', color: '#1C1C1E', marginBottom: '2px' }}>
+                      {run.job.venue || run.job.venue_address}
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#6B6860', lineHeight: 1.5 }}>
+                      {run.job.venue_address}
+                    </div>
+                  </div>
+                  <a
+                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((run.job.venue || '') + ' ' + (run.job.venue_address || ''))}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ flexShrink: 0, fontSize: '11px', fontWeight: '500', padding: '6px 12px', borderRadius: '6px', background: '#fff', border: '1px solid #DDD8CF', color: '#1C1C1E', textDecoration: 'none', whiteSpace: 'nowrap' }}
+                  >
+                    Open in Maps
+                  </a>
+                </div>
+              </div>
+            )}
           </div>
 
           {(run.driverName || run.driverName2) && (
