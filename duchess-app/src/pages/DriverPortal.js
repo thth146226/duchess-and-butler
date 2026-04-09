@@ -134,7 +134,7 @@ export default function DriverPortal({ token }) {
       if (myJobs.length > 0) {
         const jobIds = myJobs.map(j => j.id)
         const { data: itemsData } = await supabase
-          .from('crms_items')
+          .from('crms_job_items')
           .select('*')
           .in('job_id', jobIds)
 
@@ -233,13 +233,13 @@ export default function DriverPortal({ token }) {
 
     // Load items for this job
     const { data: items } = await supabase
-      .from('crms_items')
+      .from('crms_job_items')
       .select('*')
       .eq('job_id', job.id)
 
     if (items?.length) {
       setReportItems(items.map(i => ({
-        item_name: i.description || i.name || 'Item',
+        item_name: i.item_name || i.description || i.name || 'Item',
         category: i.category || 'other',
         quantity: i.quantity || 1,
         condition: 'good',
@@ -613,7 +613,7 @@ export default function DriverPortal({ token }) {
                           {items.map((item, i) => (
                             <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '0.5px solid #EDE8E0' }}>
                               <div>
-                                <div style={{ fontSize: '13px', fontWeight: '500' }}>{item.description || item.name}</div>
+                                <div style={{ fontSize: '13px', fontWeight: '500' }}>{item.item_name || item.description || item.name}</div>
                                 {item.notes && <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '1px' }}>{item.notes}</div>}
                               </div>
                               <div style={{ fontSize: '14px', fontWeight: '600', color: '#1C1C1E' }}>×{item.quantity}</div>
