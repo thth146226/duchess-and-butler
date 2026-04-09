@@ -104,33 +104,48 @@ export default function DriverPortal({ token }) {
   }
 
   async function fetchJobs(driverName) {
-    // Get jobs from today onwards for the next 60 days
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    const fromDate = today.toISOString().split('T')[0]
-
-    const future = new Date()
-    future.setDate(future.getDate() + 60)
-    // (kept for clarity / future query windowing)
-    // const toDate = future.toISOString().split('T')[0]
-
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('crms_jobs')
       .select('*, crms_items(*)')
       .not('status', 'eq', 'cancelled')
-      .or(`delivery_date.gte.${fromDate},collection_date.gte.${fromDate}`)
       .order('delivery_date', { ascending: true, nullsLast: true })
 
+    console.log('fetchJobs called for:', driverName)
+    console.log('Total jobs fetched:', data?.length, 'Error:', error)
+
     if (data) {
-      const myJobs = data.filter(j =>
-        j.assigned_driver_name === driverName ||
-        j.assigned_driver_name_2 === driverName ||
-        j.col_driver_name === driverName ||
-        j.col_driver_name_2 === driverName
-      ).map(j => ({
+      const today = new Date().toLocaleDateString('en-CA')
+      console.log('Today:', today)
+
+      const myJobs = data.filter(j => {
+        const isMyJob =
+          j.assigned_driver_name === driverName ||
+          j.assigned_driver_name_2 === driverName ||
+          j.col_driver_name === driverName ||
+          j.col_driver_name_2 === driverName
+
+        if (!isMyJob) return false
+
+        const delDate = j.manual_delivery_date || j.delivery_date
+        const colDate = j.manual_collection_date || j.collection_date
+        const hasFutureRun =
+          (delDate && delDate >= today) ||
+          (colDate && colDate >= today)
+
+        return hasFutureRun
+      }).map(j => ({
         ...j,
         items: j.crms_items || [],
       }))
+
+      console.log('My jobs after filter:', myJobs.length)
+      console.log('Sample my jobs:', myJobs.slice(0, 3).map(j => ({
+        event: j.event_name,
+        driver: j.assigned_driver_name,
+        del: j.delivery_date,
+        col: j.collection_date,
+      })))
+
       setJobs(myJobs)
     }
     setLoading(false)
