@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 export default function DriverLinks() {
   const [drivers, setDrivers] = useState([])
   const [copied, setCopied]   = useState(null)
+  const [savingId, setSavingId] = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => { fetchDrivers() }, [])
@@ -32,6 +33,26 @@ export default function DriverLinks() {
     const link = getLink(driver.access_token)
     const msg = encodeURIComponent(`Hi ${driver.name}! Here is your Duchess & Butler driver portal link: ${link}`)
     window.open(`https://wa.me/?text=${msg}`, '_blank')
+  }
+
+  function genToken() {
+    // 32 chars url-safe-ish token
+    const bytes = new Uint8Array(16)
+    window.crypto.getRandomValues(bytes)
+    return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
+  }
+
+  async function regenerateToken(driver) {
+    if (!driver?.id) return
+    if (!window.confirm(`Regenerate link for ${driver.name}? The old link will stop working.`)) return
+    setSavingId(driver.id)
+    const newToken = genToken()
+    await supabase.from('drivers').update({
+      access_token: newToken,
+      token_created_at: new Date().toISOString(),
+    }).eq('id', driver.id)
+    setDrivers(prev => prev.map(d => d.id === driver.id ? { ...d, access_token: newToken, token_created_at: new Date().toISOString() } : d))
+    setSavingId(null)
   }
 
   if (loading) return (
@@ -67,6 +88,11 @@ export default function DriverLinks() {
                 onClick={() => openWhatsApp(d)}
                 style={{ fontSize: '12px', fontWeight: '500', padding: '7px 16px', borderRadius: '6px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", background: '#DCFCE7', color: '#166534', border: '1px solid #86EFAC' }}
               >WhatsApp</button>
+              <button
+                onClick={() => regenerateToken(d)}
+                disabled={savingId === d.id}
+                style={{ fontSize: '12px', fontWeight: '500', padding: '7px 16px', borderRadius: '6px', cursor: savingId === d.id ? 'default' : 'pointer', fontFamily: "'DM Sans', sans-serif", background: savingId === d.id ? '#DDD8CF' : '#FEF2F2', color: savingId === d.id ? '#6B6860' : '#DC2626', border: '1px solid #FECACA' }}
+              >{savingId === d.id ? 'Regenerating…' : 'Regenerate'}</button>
             </div>
           </div>
         ))}

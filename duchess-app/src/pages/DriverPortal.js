@@ -71,22 +71,27 @@ export default function DriverPortal({ token }) {
 
       const { data, error, status, statusText } = await supabase
         .from('drivers')
-        .select('id, name, colour, active')
+        .select('id, name, colour, active, token_created_at')
         .eq('access_token', token)
         .maybeSingle()
 
       console.log('Response:', { data, error, status, statusText })
 
-      if (error) {
-        setError('Database error: ' + error.message)
+      if (error || !data) {
+        setError('Invalid or expired link.')
         setLoading(false)
         return
       }
 
-      if (!data) {
-        setError('No driver found for token: ' + token)
-        setLoading(false)
-        return
+      // Check if token is older than 7 days
+      if (data.token_created_at) {
+        const created = new Date(data.token_created_at)
+        const daysSince = (Date.now() - created.getTime()) / (1000 * 60 * 60 * 24)
+        if (daysSince > 7) {
+          setError('This link has expired. Please ask your manager for a new link.')
+          setLoading(false)
+          return
+        }
       }
 
       setDriver(data)
@@ -99,23 +104,24 @@ export default function DriverPortal({ token }) {
   }
 
   async function fetchJobs(driverName) {
+    // Get jobs from today onwards for the next 60 days
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const fromDate = today.toISOString().split('T')[0]
+
+    const future = new Date()
+    future.setDate(future.getDate() + 60)
+    // (kept for clarity / future query windowing)
+    // const toDate = future.toISOString().split('T')[0]
+
     const { data } = await supabase
       .from('crms_jobs')
       .select('*, crms_items(*)')
       .not('status', 'eq', 'cancelled')
+      .or(`delivery_date.gte.${fromDate},collection_date.gte.${fromDate}`)
       .order('delivery_date', { ascending: true, nullsLast: true })
 
     if (data) {
-      console.log('All jobs:', data.length)
-      console.log('Driver name looking for:', driverName)
-      console.log('Sample job driver fields:', data.slice(0,3).map(j => ({
-        event: j.event_name,
-        d1: j.assigned_driver_name,
-        d2: j.assigned_driver_name_2,
-        col1: j.col_driver_name,
-        col2: j.col_driver_name_2,
-      })))
-
       const myJobs = data.filter(j =>
         j.assigned_driver_name === driverName ||
         j.assigned_driver_name_2 === driverName ||
@@ -125,7 +131,6 @@ export default function DriverPortal({ token }) {
         ...j,
         items: j.crms_items || [],
       }))
-      console.log('My jobs found:', myJobs.length)
       setJobs(myJobs)
     }
     setLoading(false)
@@ -370,9 +375,6 @@ export default function DriverPortal({ token }) {
     return d !== 0 ? d : (a.time || '99:99').localeCompare(b.time || '99:99')
   })
 
-  const todayRuns = runs.filter(r => r.date === today)
-  const upcomingRuns = runs.filter(r => r.date > today)
-
   if (loading) return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#F7F3EE', fontFamily: "'DM Sans', sans-serif", fontSize: '16px', color: '#6B6860' }}>
       Loading…
@@ -412,32 +414,66 @@ export default function DriverPortal({ token }) {
       </div>
 
       <div style={{ padding: '16px', maxWidth: '600px', margin: '0 auto' }}>
+        {jobs.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '48px 24px', color: '#6B6860' }}>
+            <div style={{ fontSize: '32px', marginBottom: '12px' }}>📋</div>
+            <div style={{ fontSize: '15px', fontWeight: '500', marginBottom: '6px' }}>No upcoming runs</div>
+            <div style={{ fontSize: '13px', color: '#9CA3AF' }}>No jobs assigned to you in the next 60 days</div>
+          </div>
+        ) : (() => {
+          const today = new Date().toLocaleDateString('en-CA')
+          const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('en-CA')
 
-        {/* Today */}
-        {todayRuns.length > 0 && (
-          <div style={{ marginBottom: '20px' }}>
-            <div style={{ fontSize: '11px', fontWeight: '600', letterSpacing: '0.08em', textTransform: 'uppercase', color: '#B8965A', marginBottom: '10px' }}>
-              Today — {fmt(today)} · {todayRuns.length} run{todayRuns.length !== 1 ? 's' : ''}
+          // Build runs from jobs
+          const runs = []
+          jobs.forEach(job => {
+            if (job.delivery_date && (
+              job.assigned_driver_name === driver?.name ||
+              job.assigned_driver_name_2 === driver?.name
+            )) {
+              runs.push({ job, type: 'DEL', date: job.delivery_date, time: job.delivery_time })
+            }
+            if (job.collection_date && (
+              job.assigned_driver_name === driver?.name ||
+              job.assigned_driver_name_2 === driver?.name ||
+              job.col_driver_name === driver?.name ||
+              job.col_driver_name_2 === driver?.name
+            )) {
+              runs.push({ job, type: 'COL', date: job.collection_date, time: job.collection_time })
+            }
+          })
+
+          runs.sort((a, b) => {
+            const d = a.date.localeCompare(b.date)
+            return d !== 0 ? d : (a.time || '99:99').localeCompare(b.time || '99:99')
+          })
+
+          // Group by date label
+          const groups = {}
+          runs.forEach(run => {
+            const label = run.date === today ? 'Today'
+              : run.date === tomorrow ? 'Tomorrow'
+                : new Date(run.date + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })
+            if (!groups[label]) groups[label] = []
+            groups[label].push(run)
+          })
+
+          return Object.entries(groups).map(([label, groupRuns]) => (
+            <div key={label} style={{ marginBottom: '20px' }}>
+              <div style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B8965A', marginBottom: '8px', padding: '0 2px' }}>
+                {label} · {groupRuns.length} run{groupRuns.length !== 1 ? 's' : ''}
+              </div>
+              {groupRuns.map((run, i) => (
+                <RunCard
+                  key={i}
+                  run={run}
+                  onOpen={() => openJob(run.job)}
+                  onReport={openReport}
+                />
+              ))}
             </div>
-            {todayRuns.map((r, i) => <RunCard key={i} run={r} onOpen={() => openJob(r.job)} onReport={openReport} />)}
-          </div>
-        )}
-
-        {todayRuns.length === 0 && (
-          <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '24px', textAlign: 'center', marginBottom: '20px' }}>
-            <div style={{ fontSize: '13px', color: '#6B6860' }}>No runs assigned to you today</div>
-          </div>
-        )}
-
-        {/* Upcoming */}
-        {upcomingRuns.length > 0 && (
-          <div>
-            <div style={{ fontSize: '11px', fontWeight: '600', letterSpacing: '0.08em', textTransform: 'uppercase', color: '#6B6860', marginBottom: '10px' }}>
-              Upcoming — {upcomingRuns.length} run{upcomingRuns.length !== 1 ? 's' : ''}
-            </div>
-            {upcomingRuns.map((r, i) => <RunCard key={i} run={r} onOpen={() => openJob(r.job)} onReport={openReport} />)}
-          </div>
-        )}
+          ))
+        })()}
       </div>
 
       {/* Job detail panel */}
