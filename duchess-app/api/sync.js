@@ -137,41 +137,26 @@ function isConfirmedOrder(o) {
 // Fields available: name, address1, address2, town_city, county, postcode, country_name
 
 function extractVenueName(o) {
-  // venue_name is a flat field; destination/venue is the nested object
   return (
-    o.venue_name ||
+    o.destination?.address?.name ||
     o.destination?.name ||
-    o.venue?.name ||
+    o.venue_name ||
     o.location ||
     ''
   )
 }
 
 function extractVenueAddress(o) {
-  // Current RMS confirmed field structure from debug:
-  // destination: { id, name, street, postcode, city, county, country: { name } }
-  // billing_address: { id, name, street, postcode, city, county, country_id, country_name }
-  // Both are OBJECTS — must extract individual fields, not pass object as string
-
-  const dest = o.destination || o.billing_address || null
-
-  if (dest && typeof dest === 'object') {
-    const parts = [
-      dest.street    || dest.address1 || dest.address,
-      dest.city      || dest.town_city,
-      dest.county,
-      dest.postcode,
-    ].filter(v => v && typeof v === 'string' && v.trim())
-
-    if (parts.length > 0) {
-      // Clean \r\n that sometimes appears inside street field
-      return parts.join(', ').replace(/\r\n/g, ', ').replace(/,\s*,/g, ',').trim()
-    }
-  }
-
-  // Fallback: flat string fields
-  if (o.delivery_address && typeof o.delivery_address === 'string') return o.delivery_address
-  return null
+  const addr = o.destination?.address
+  if (!addr) return null
+  const parts = [
+    addr.street?.replace(/\r\n/g, ', ').replace(/,\s*,/g, ',').trim(),
+    addr.city,
+    addr.county,
+    addr.postcode,
+  ].filter(v => v && v.trim())
+  if (parts.length === 0) return null
+  return parts.join(', ')
 }
 
 // ── field mapper ──────────────────────────────────────────────────────────────
