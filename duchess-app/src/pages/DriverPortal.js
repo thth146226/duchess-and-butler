@@ -58,6 +58,7 @@ export default function DriverPortal({ token }) {
   const [submittedReportId, setSubmittedReportId]     = useState(null)
   /** Each entry: { url, path } after upload to evidence-photos bucket */
   const [uploadedPhotos, setUploadedPhotos]            = useState([])
+  const [deletedItems, setDeletedItems] = useState({})
   const [sigCanvas, setSigCanvas]       = useState(null)
   const [isDrawing, setIsDrawing]       = useState(false)
 
@@ -210,6 +211,19 @@ export default function DriverPortal({ token }) {
   function showReportToast(msg, type = 'success') {
     setReportToast({ msg, type })
     setTimeout(() => setReportToast(null), 3000)
+  }
+
+  function toggleItemDeleted(jobId, itemId) {
+    setDeletedItems(prev => {
+      const key = `${jobId}_${itemId}`
+      const updated = { ...prev }
+      if (updated[key]) {
+        delete updated[key]
+      } else {
+        updated[key] = true
+      }
+      return updated
+    })
   }
 
   async function openReport(job, runType) {
@@ -415,6 +429,8 @@ export default function DriverPortal({ token }) {
     </div>
   )
 
+  const job = selectedJob
+
   return (
     <div style={{ minHeight: '100vh', background: '#F7F3EE', fontFamily: "'DM Sans', sans-serif" }}>
 
@@ -595,14 +611,18 @@ export default function DriverPortal({ token }) {
               {/* Items tab */}
               {tab === 'items' && (
                 <div>
-                  {(!selectedJob.items || selectedJob.items.length === 0) ? (
+                  {(!job.items || job.items.length === 0) ? (
                     <div style={{ textAlign: 'center', padding: '32px', color: '#9CA3AF', fontSize: '13px' }}>
                       No items listed for this job
                     </div>
                   ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
+                    <div>
+                      <div style={{ padding: '10px 14px', background: '#FEF3C7', borderBottom: '0.5px solid #FDE68A', fontSize: '11px', color: '#854F0B' }}>
+                        Tap the X to mark items as sold or not for collection
+                      </div>
                       {Object.entries(
-                        selectedJob.items.reduce((groups, item) => {
+                        job.items
+                          .reduce((groups, item) => {
                           const cat = item.category || 'Other'
                           if (!groups[cat]) groups[cat] = []
                           groups[cat].push(item)
@@ -613,17 +633,61 @@ export default function DriverPortal({ token }) {
                           <div style={{ padding: '8px 14px', background: '#F7F3EE', fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B8965A', borderBottom: '0.5px solid #EDE8E0' }}>
                             {category}
                           </div>
-                          {items.map((item, i) => (
-                            <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '0.5px solid #EDE8E0' }}>
-                              <div>
-                                <div style={{ fontSize: '13px', fontWeight: '500' }}>{item.item_name || item.description || item.name}</div>
-                                {item.notes && <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '1px' }}>{item.notes}</div>}
+                          {items.map((item, i) => {
+                            const key = `${job.id}_${item.id}`
+                            const isDeleted = deletedItems[key]
+                            return (
+                            <div key={i} style={{ 
+                              display: 'flex', alignItems: 'center', 
+                              justifyContent: 'space-between', 
+                              padding: '10px 14px', 
+                              borderBottom: '0.5px solid #EDE8E0',
+                              opacity: isDeleted ? 0.4 : 1,
+                              background: isDeleted ? '#FEF2F2' : '#fff',
+                              transition: 'all 0.2s'
+                            }}>
+                              <div style={{ flex: 1 }}>
+                                <div style={{ 
+                                  fontSize: '13px', fontWeight: '500',
+                                  textDecoration: isDeleted ? 'line-through' : 'none',
+                                  color: isDeleted ? '#9CA3AF' : '#1C1C1E'
+                                }}>
+                                  {item.description || item.item_name || item.name}
+                                </div>
+                                {isDeleted && (
+                                  <div style={{ fontSize: '10px', color: '#DC2626', fontWeight: '500', marginTop: '2px' }}>
+                                    Sold / not for collection
+                                  </div>
+                                )}
                               </div>
-                              <div style={{ fontSize: '14px', fontWeight: '600', color: '#1C1C1E' }}>×{item.quantity}</div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
+                                <div style={{ fontSize: '14px', fontWeight: '600', color: isDeleted ? '#9CA3AF' : '#1C1C1E' }}>
+                                  ×{item.quantity}
+                                </div>
+                                <button
+                                  onClick={() => toggleItemDeleted(job.id, item.id)}
+                                  style={{ 
+                                    width: '28px', height: '28px', 
+                                    borderRadius: '50%', 
+                                    border: 'none',
+                                    background: isDeleted ? '#EAF3DE' : '#FEF2F2',
+                                    color: isDeleted ? '#3B6D11' : '#DC2626',
+                                    cursor: 'pointer', 
+                                    fontSize: '14px',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    fontWeight: '700'
+                                  }}
+                                >{isDeleted ? '↩' : '✕'}</button>
+                              </div>
                             </div>
-                          ))}
+                          )})}
                         </div>
                       ))}
+                      {Object.values(deletedItems).some(Boolean) && (
+                        <div style={{ padding: '10px 14px', background: '#EAF3DE', borderTop: '0.5px solid #86EFAC', fontSize: '11px', color: '#3B6D11', fontWeight: '500' }}>
+                          Items marked with ✕ will not appear in the collection list
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
