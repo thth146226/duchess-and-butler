@@ -58,14 +58,7 @@ export default function DriverPortal({ token }) {
   const [submittedReportId, setSubmittedReportId]     = useState(null)
   /** Each entry: { url, path } after upload to evidence-photos bucket */
   const [uploadedPhotos, setUploadedPhotos]            = useState([])
-  const [deletedItems, setDeletedItems] = useState(() => {
-    try {
-      const saved = localStorage.getItem('driver_deleted_items')
-      return saved ? JSON.parse(saved) : {}
-    } catch {
-      return {}
-    }
-  })
+  const [deletedItems, setDeletedItems] = useState({})
   const [sigCanvas, setSigCanvas]       = useState(null)
   const [isDrawing, setIsDrawing]       = useState(false)
 
@@ -108,6 +101,21 @@ export default function DriverPortal({ token }) {
       console.error('Exception:', e)
       setError('Exception: ' + e.message)
       setLoading(false)
+    }
+  }
+
+  async function fetchHiddenItems(jobIds) {
+    if (!jobIds.length) return
+    const { data } = await supabase
+      .from('driver_portal_hidden_items')
+      .select('job_id, item_id')
+      .in('job_id', jobIds)
+    if (data) {
+      const hidden = {}
+      data.forEach(row => {
+        hidden[`${row.job_id}_${row.item_id}`] = true
+      })
+      setDeletedItems(hidden)
     }
   }
 
@@ -161,8 +169,10 @@ export default function DriverPortal({ token }) {
           ...j,
           items: itemsByJob[j.id] || [],
         })))
+        fetchHiddenItems(myJobs.map(j => j.id))
       } else {
         setJobs([])
+        fetchHiddenItems(myJobs.map(j => j.id))
       }
     }
     setLoading(false)
@@ -220,20 +230,31 @@ export default function DriverPortal({ token }) {
     setTimeout(() => setReportToast(null), 3000)
   }
 
-  function toggleItemDeleted(jobId, itemId) {
-    setDeletedItems(prev => {
-      const key = `${jobId}_${itemId}`
-      const updated = { ...prev }
-      if (updated[key]) {
+  async function toggleItemDeleted(jobId, itemId) {
+    const key = `${jobId}_${itemId}`
+    const isHidden = deletedItems[key]
+
+    if (isHidden) {
+      await supabase
+        .from('driver_portal_hidden_items')
+        .delete()
+        .eq('job_id', jobId)
+        .eq('item_id', itemId)
+      setDeletedItems(prev => {
+        const updated = { ...prev }
         delete updated[key]
-      } else {
-        updated[key] = true
-      }
-      try {
-        localStorage.setItem('driver_deleted_items', JSON.stringify(updated))
-      } catch {}
-      return updated
-    })
+        return updated
+      })
+    } else {
+      await supabase
+        .from('driver_portal_hidden_items')
+        .upsert({
+          job_id: jobId,
+          item_id: itemId,
+          hidden_by: driver?.name || 'Driver',
+        }, { onConflict: 'job_id,item_id' })
+      setDeletedItems(prev => ({ ...prev, [key]: true }))
+    }
   }
 
   async function openReport(job, runType) {
