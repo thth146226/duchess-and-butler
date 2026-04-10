@@ -1411,6 +1411,58 @@ function RunDetailChanges({ run }) {
   )
 }
 
+// Linens Status from D&B Linens Studio (Schedule detail panel)
+function LinensStudioStatus({ crmsRef }) {
+  const [linensStatus, setLinensStatus] = useState(null)
+
+  useEffect(() => {
+    if (!crmsRef) {
+      setLinensStatus(null)
+      return
+    }
+    let cancelled = false
+    async function fetchLinensStatus() {
+      const { data } = await supabase
+        .from('linens_job_assignments')
+        .select('*, linens_assignment_items(*)')
+        .eq('crms_ref', crmsRef)
+        .maybeSingle()
+      if (!cancelled) setLinensStatus(data || null)
+    }
+    setLinensStatus(null)
+    fetchLinensStatus()
+    return () => { cancelled = true }
+  }, [crmsRef])
+
+  if (!linensStatus) return null
+
+  const STATUS_LABELS = {
+    assigned:   { label: 'Linens assigned', bg: '#EEEDFE', color: '#3C3489' },
+    delivered:  { label: 'Linens delivered', bg: '#FEF3C7', color: '#854F0B' },
+    at_laundry: { label: 'At laundry (TDS)', bg: '#E6F1FB', color: '#0C447C' },
+    completed:  { label: 'Linens completed', bg: '#EAF3DE', color: '#3B6D11' },
+  }
+  const ss = STATUS_LABELS[linensStatus.status] || STATUS_LABELS.assigned
+  const totalPieces = (linensStatus.linens_assignment_items || []).reduce((sum, i) => sum + (i.quantity_sent || 0), 0)
+
+  return (
+    <div style={{ marginTop: '16px', background: '#F7F3EE', borderRadius: '8px', padding: '12px 14px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+        <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B8965A' }}>Linens Studio</div>
+        <span style={{ fontSize: '10px', fontWeight: '600', padding: '2px 8px', borderRadius: '10px', background: ss.bg, color: ss.color }}>{ss.label}</span>
+      </div>
+      <div style={{ fontSize: '12px', color: '#6B6860' }}>{totalPieces} pieces assigned</div>
+      {(linensStatus.linens_assignment_items || []).slice(0, 3).map(item => (
+        <div key={item.id} style={{ fontSize: '11px', color: '#6B6860', marginTop: '2px' }}>
+          · {item.product_name} × {item.quantity_sent}
+          {item.quantity_missing > 0 && <span style={{ color: '#A32D2D' }}> ({item.quantity_missing} missing)</span>}
+          {item.quantity_damaged > 0 && <span style={{ color: '#854F0B' }}> ({item.quantity_damaged} damaged)</span>}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ── RUN DETAIL PANEL ──────────────────────────────────────────────────────────
 function RunDetailPanel({
   run,
@@ -1629,6 +1681,8 @@ function RunDetailPanel({
           >
             {savingOverride ? 'Saving…' : 'Save override'}
           </button>
+
+          <LinensStudioStatus crmsRef={run.job?.crms_ref} />
 
           {/* ── DRIVER ASSIGNMENT ── */}
           <div style={{ marginTop: '8px' }}>
