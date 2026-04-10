@@ -145,6 +145,9 @@ export default function DriverPortal({ token }) {
             itemsByJob[item.job_id].push(item)
           })
         }
+        console.log('Items fetched:', itemsData?.length)
+        console.log('Job IDs:', jobIds)
+        console.log('Items by job:', JSON.stringify(itemsByJob))
 
         setJobs(myJobs.map(j => ({
           ...j,
