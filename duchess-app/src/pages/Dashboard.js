@@ -36,6 +36,7 @@ export default function Dashboard({ onNavigate }) {
   const [changes, setChanges]   = useState([])
   const [syncInfo, setSyncInfo] = useState(null)
   const [loading, setLoading]   = useState(true)
+  const [viewMonth, setViewMonth] = useState(new Date())
 
   useEffect(() => {
     fetchAll()
@@ -59,7 +60,6 @@ export default function Dashboard({ onNavigate }) {
   }
 
   const weekDays = getWeekDays()
-  const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
   // Stats
   const todayDel    = jobs.filter(j => j.delivery_date === today)
@@ -118,43 +118,120 @@ export default function Dashboard({ onNavigate }) {
         ))}
       </div>
 
-      {/* Week view */}
-      <div style={S.sectionLabel}>This week</div>
-      <div style={{ ...S.card, marginBottom: '1.5rem' }}>
-        <div style={{ padding: '14px 16px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: '6px' }}>
-            {weekDays.map((date, i) => {
-              const isToday = date === today
-              const dels = jobs.filter(j => j.delivery_date === date).length
-              const cols = jobs.filter(j => j.collection_date === date).length
-              return (
-                <div key={date} style={{
-                  background: isToday ? '#EFF6FF' : '#F7F3EE',
-                  border: isToday ? '1px solid #93C5FD' : '1px solid transparent',
-                  borderRadius: '8px', padding: '8px 6px', textAlign: 'center',
-                  cursor: (dels + cols) > 0 ? 'pointer' : 'default',
-                }} onClick={() => (dels + cols) > 0 && onNavigate('schedule')}>
-                  <div style={{ fontSize: '10px', color: '#6B6860', marginBottom: '4px' }}>{DAY_NAMES[i]}</div>
-                  <div style={{ fontSize: '15px', fontWeight: '500', marginBottom: '6px', color: isToday ? '#1D4ED8' : '#1C1C1E' }}>
-                    {new Date(date + 'T12:00:00').getDate()}
-                  </div>
-                  <div style={{ display: 'flex', gap: '3px', justifyContent: 'center', flexWrap: 'wrap' }}>
-                    {Array.from({ length: Math.min(dels, 3) }).map((_, k) => (
-                      <div key={`d${k}`} style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#E24B4A' }} />
-                    ))}
-                    {Array.from({ length: Math.min(cols, 3) }).map((_, k) => (
-                      <div key={`c${k}`} style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#1D9E75' }} />
-                    ))}
-                  </div>
-                  {(dels + cols) > 0 && (
-                    <div style={{ fontSize: '9px', color: '#6B6860', marginTop: '3px' }}>
-                      {dels > 0 ? `${dels}D` : ''}{dels > 0 && cols > 0 ? ' ' : ''}{cols > 0 ? `${cols}C` : ''}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
+      {/* Monthly view */}
+      <div style={{ marginBottom: '24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+          <div style={{ fontSize: '11px', fontWeight: '600', letterSpacing: '0.1em', textTransform: 'uppercase', color: '#6B6860' }}>
+            {viewMonth.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}
           </div>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <button
+              onClick={() => setViewMonth(m => new Date(m.getFullYear(), m.getMonth() - 1, 1))}
+              style={{ width: '28px', height: '28px', border: '1px solid #DDD8CF', borderRadius: '6px', background: '#fff', cursor: 'pointer', fontSize: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            >←</button>
+            <button
+              onClick={() => setViewMonth(new Date())}
+              style={{ padding: '4px 10px', border: '1px solid #DDD8CF', borderRadius: '6px', background: '#fff', cursor: 'pointer', fontSize: '11px', fontFamily: "'DM Sans', sans-serif", color: '#6B6860' }}
+            >Today</button>
+            <button
+              onClick={() => setViewMonth(m => new Date(m.getFullYear(), m.getMonth() + 1, 1))}
+              style={{ width: '28px', height: '28px', border: '1px solid #DDD8CF', borderRadius: '6px', background: '#fff', cursor: 'pointer', fontSize: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            >→</button>
+          </div>
+        </div>
+
+        <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', overflow: 'hidden' }}>
+          {/* Day headers */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0,1fr))', background: '#F7F3EE', borderBottom: '1px solid #DDD8CF' }}>
+            {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d => (
+              <div key={d} style={{ padding: '8px 4px', textAlign: 'center', fontSize: '10px', fontWeight: '600', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{d}</div>
+            ))}
+          </div>
+
+          {/* Calendar grid */}
+          {(() => {
+            const todayCal = new Date().toLocaleDateString('en-CA')
+            const year = viewMonth.getFullYear()
+            const month = viewMonth.getMonth()
+            const firstDay = new Date(year, month, 1)
+            const lastDay = new Date(year, month + 1, 0)
+
+            // Monday = 0
+            let startPad = firstDay.getDay() - 1
+            if (startPad < 0) startPad = 6
+
+            const days = []
+            // Empty cells before month start
+            for (let i = 0; i < startPad; i++) {
+              days.push(null)
+            }
+            // Days of month
+            for (let d = 1; d <= lastDay.getDate(); d++) {
+              days.push(new Date(year, month, d))
+            }
+            // Pad to complete last week
+            while (days.length % 7 !== 0) days.push(null)
+
+            const weeks = []
+            for (let i = 0; i < days.length; i += 7) {
+              weeks.push(days.slice(i, i + 7))
+            }
+
+            return weeks.map((week, wi) => (
+              <div key={wi} style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0,1fr))', borderBottom: wi < weeks.length - 1 ? '1px solid #EDE8E0' : 'none' }}>
+                {week.map((day, di) => {
+                  if (!day) return <div key={di} style={{ minHeight: '64px', background: '#FAFAF8', borderRight: di < 6 ? '1px solid #EDE8E0' : 'none' }} />
+
+                  const ds = day.toLocaleDateString('en-CA')
+                  const isTodayCell = ds === todayCal
+                  const isPast = ds < todayCal
+
+                  // Count runs for this day from jobs
+                  const dayDels = jobs?.filter(j => (j.manual_delivery_date || j.delivery_date) === ds) || []
+                  const dayCols = jobs?.filter(j => (j.manual_collection_date || j.collection_date) === ds) || []
+                  const total = dayDels.length + dayCols.length
+
+                  return (
+                    <div key={di}
+                      onClick={() => total > 0 && onNavigate && onNavigate('schedule')}
+                      style={{
+                        minHeight: '64px',
+                        padding: '6px 8px',
+                        borderRight: di < 6 ? '1px solid #EDE8E0' : 'none',
+                        background: isTodayCell ? '#FFF8F0' : isPast ? '#FAFAFA' : '#fff',
+                        cursor: total > 0 ? 'pointer' : 'default',
+                        position: 'relative'
+                      }}>
+                      <div style={{
+                        fontSize: '12px',
+                        fontWeight: isTodayCell ? '700' : '400',
+                        color: isTodayCell ? '#B8965A' : isPast ? '#9CA3AF' : '#1C1C1E',
+                        marginBottom: '4px'
+                      }}>
+                        {isTodayCell ? (
+                          <span style={{ background: '#B8965A', color: '#fff', borderRadius: '50%', width: '20px', height: '20px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px' }}>
+                            {day.getDate()}
+                          </span>
+                        ) : day.getDate()}
+                      </div>
+                      {dayDels.length > 0 && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '3px', marginBottom: '2px' }}>
+                          <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#EF4444', flexShrink: 0 }} />
+                          <span style={{ fontSize: '9px', color: '#A32D2D', fontWeight: '600' }}>{dayDels.length} DEL</span>
+                        </div>
+                      )}
+                      {dayCols.length > 0 && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                          <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#22C55E', flexShrink: 0 }} />
+                          <span style={{ fontSize: '9px', color: '#3B6D11', fontWeight: '600' }}>{dayCols.length} COL</span>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            ))
+          })()}
         </div>
       </div>
 
