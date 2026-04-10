@@ -42,7 +42,19 @@ function AppInner() {
   const { user, profile, loading } = useAuth()
   const [page, setPage] = useState('dashboard')
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [totpVerified, setTotpVerified] = useState(false)
+  const [totpVerified, setTotpVerified] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem('totp_verified')
+      if (!saved) return false
+      const { verified, timestamp } = JSON.parse(saved)
+      const oneHour = 60 * 60 * 1000
+      if (verified && Date.now() - timestamp < oneHour) return true
+      sessionStorage.removeItem('totp_verified')
+      return false
+    } catch {
+      return false
+    }
+  })
 
   // Public driver portal — no auth required
   const params = new URLSearchParams(window.location.search)
@@ -61,9 +73,16 @@ function AppInner() {
       return (
         <TOTPVerify
           userId={user.id}
-          onComplete={() => setTotpVerified(true)}
+          onComplete={() => {
+            sessionStorage.setItem('totp_verified', JSON.stringify({
+              verified: true,
+              timestamp: Date.now()
+            }))
+            setTotpVerified(true)
+          }}
           onSignOut={async () => {
             setTotpVerified(false)
+            sessionStorage.removeItem('totp_verified')
             await supabase.auth.signOut()
           }}
         />
@@ -73,9 +92,19 @@ function AppInner() {
       return (
         <TOTPSetup
           onComplete={() => {
+            sessionStorage.setItem('totp_verified', JSON.stringify({
+              verified: true,
+              timestamp: Date.now()
+            }))
             setTotpVerified(true)
           }}
-          onSkip={() => setTotpVerified(true)}
+          onSkip={() => {
+            sessionStorage.setItem('totp_verified', JSON.stringify({
+              verified: true,
+              timestamp: Date.now()
+            }))
+            setTotpVerified(true)
+          }}
         />
       )
     }
