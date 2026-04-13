@@ -674,8 +674,10 @@ export default function Schedule() {
       {selectedRun && (
         <RunDetailPanel
           run={selectedRun}
+          profile={profile}
           drivers={drivers}
           assigningId={assigningId}
+          showToast={showToast}
           onClose={() => setSelectedRun(null)}
           delDriver1={delDriver1}
           setDelDriver1={setDelDriver1}
@@ -1466,8 +1468,10 @@ function LinensStudioStatus({ crmsRef }) {
 // ── RUN DETAIL PANEL ──────────────────────────────────────────────────────────
 function RunDetailPanel({
   run,
+  profile,
   drivers,
   onClose,
+  showToast,
   assigningId,
   delDriver1,
   setDelDriver1,
@@ -1520,6 +1524,13 @@ function RunDetailPanel({
               onClick={() => setTab('evidence')}
             >
               Evidence
+            </button>
+            <button
+              type="button"
+              style={{ ...S.tabBtn, ...(tab === 'report' ? S.tabBtnActive : {}) }}
+              onClick={() => setTab('report')}
+            >
+              Report
             </button>
           </div>
 
@@ -1815,6 +1826,15 @@ function RunDetailPanel({
                 eventName={run.event}
               />
             </div>
+          )}
+          {tab === 'report' && run && (
+            <ReportTab
+              job={run.job}
+              runType={run.runType}
+              profile={profile}
+              supabase={supabase}
+              showToast={showToast}
+            />
           )}
         </div>
       </div>
@@ -2226,6 +2246,254 @@ function MiniRunCard({ run, onClick, compact = false, draggable = false, onDragS
         </div>
       )}
       {run.isUrgent && <div style={{ fontSize: '9px', background: '#EF4444', color: 'white', padding: '1px 4px', borderRadius: '2px', display: 'inline-block', marginTop: '3px' }}>URGENT</div>}
+    </div>
+  )
+}
+
+function ReportTab({ job, runType, profile, supabase, showToast }) {
+  const [report, setReport] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [driverNotes, setDriverNotes] = useState('')
+  const [clientName, setClientName] = useState('')
+  const [items, setItems] = useState([])
+  const [saving, setSaving] = useState(false)
+  const [photos, setPhotos] = useState([])
+  const [uploading, setUploading] = useState(false)
+
+  useEffect(() => {
+    fetchReport()
+  }, [job.id, runType])
+
+  async function fetchReport() {
+    setLoading(true)
+    const { data } = await supabase
+      .from('job_reports')
+      .select('*, job_report_items(*)')
+      .eq('job_id', job.id)
+      .eq('run_type', runType)
+      .maybeSingle()
+    if (data) {
+      setReport(data)
+      fetchPhotos(data.id)
+    } else {
+      setReport(null)
+      setPhotos([])
+    }
+    setLoading(false)
+  }
+
+  async function fetchPhotos(reportId) {
+    const { data } = await supabase
+      .from('evidence_photos')
+      .select('*')
+      .eq('order_id', reportId)
+      .eq('run_type', 'after_col')
+    if (data) setPhotos(data)
+  }
+
+  async function loadItems() {
+    const { data } = await supabase
+      .from('crms_job_items')
+      .select('*')
+      .eq('job_id', job.id)
+    if (data?.length) {
+      setItems(data.map(i => ({
+        item_name: i.item_name,
+        category: i.category,
+        quantity: i.quantity,
+        condition: 'good',
+        notes: '',
+      })))
+    } else {
+      setItems([{ item_name: 'General items', category: 'other', quantity: 1, condition: 'good', notes: '' }])
+    }
+    setCreating(true)
+  }
+
+  function updateCondition(index, condition) {
+    setItems(prev => prev.map((it, i) => (i === index ? { ...it, condition } : it)))
+  }
+
+  function updateNote(index, notes) {
+    setItems(prev => prev.map((it, i) => (i === index ? { ...it, notes } : it)))
+  }
+
+  async function submitReport() {
+    setSaving(true)
+    try {
+      const { data: newReport, error } = await supabase
+        .from('job_reports')
+        .insert({
+          job_id: job.id,
+          job_table: 'crms_jobs',
+          crms_ref: job.crms_ref || null,
+          event_name: job.event_name || '',
+          run_type: runType,
+          driver_name: profile?.name || null,
+          status: 'submitted',
+          driver_notes: driverNotes || null,
+          client_name: clientName || null,
+          submitted_at: new Date().toISOString(),
+        })
+        .select().single()
+      if (error) throw error
+      if (items.length > 0) {
+        await supabase.from('job_report_items').insert(
+          items.map(it => ({
+            report_id: newReport.id,
+            item_name: it.item_name,
+            category: it.category,
+            quantity: it.quantity,
+            condition: it.condition,
+            notes: it.notes || null,
+          })),
+        )
+      }
+      showToast('Report submitted')
+      setCreating(false)
+      fetchReport()
+    } catch (e) {
+      showToast(`Error: ${e.message}`, 'error')
+    }
+    setSaving(false)
+  }
+
+  async function uploadPhoto(file) {
+    if (!report) return
+    setUploading(true)
+    try {
+      const ext = file.name.split('.').pop()
+      const path = `reports/${report.id}/${Date.now()}.${ext}`
+      await supabase.storage.from('evidence-photos').upload(path, file)
+      const { data: { publicUrl } } = supabase.storage.from('evidence-photos').getPublicUrl(path)
+      await supabase.from('evidence_photos').insert({
+        order_id: report.id,
+        run_type: 'after_col',
+        photo_url: publicUrl,
+        file_path: path,
+        uploaded_by_name: profile?.name || 'Admin',
+        event_name: job.event_name || '',
+        crms_ref: job.crms_ref || '',
+      })
+      fetchPhotos(report.id)
+      showToast('Photo uploaded')
+    } catch (e) {
+      showToast('Upload failed', 'error')
+    }
+    setUploading(false)
+  }
+
+  if (loading) return <div style={{ padding: '24px', color: '#6B6860', fontSize: '13px' }}>Loading report…</div>
+
+  if (report && !creating) return (
+    <div style={{ padding: '4px 0' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+        <span style={{ fontSize: '11px', fontWeight: '600', padding: '3px 10px', borderRadius: '10px', background: '#EAF3DE', color: '#3B6D11' }}>
+          {runType} Report Submitted
+        </span>
+        <div style={{ fontSize: '11px', color: '#6B6860' }}>{report.driver_name} · {new Date(report.submitted_at).toLocaleDateString('en-GB')}</div>
+      </div>
+
+      {(report.job_report_items || []).map(item => (
+        <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '0.5px solid #EDE8E0', fontSize: '13px' }}>
+          <span>{item.item_name} {item.quantity ? `(${item.quantity})` : ''}</span>
+          <span style={{ fontWeight: '500', color: item.condition === 'good' ? '#3B6D11' : item.condition === 'damaged' ? '#A32D2D' : '#854F0B' }}>
+            {item.condition?.toUpperCase()}
+          </span>
+        </div>
+      ))}
+
+      {report.driver_notes && (
+        <div style={{ marginTop: '12px', background: '#F7F3EE', borderRadius: '6px', padding: '10px 12px', fontSize: '12px', color: '#1C1C1E', fontStyle: 'italic' }}>
+          "{report.driver_notes}"
+        </div>
+      )}
+
+      {report.client_signature && (
+        <div style={{ marginTop: '12px' }}>
+          <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '6px' }}>Client signature</div>
+          <img src={report.client_signature} alt="Signature" style={{ maxWidth: '200px', border: '1px solid #DDD8CF', borderRadius: '4px' }} />
+        </div>
+      )}
+
+      <div style={{ marginTop: '14px' }}>
+        <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>Collection Photos</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', marginBottom: '8px' }}>
+          {photos.map(p => (
+            <img key={p.id} src={p.photo_url} alt="COL"
+              style={{ width: '100%', height: '80px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #DDD8CF', cursor: 'pointer' }}
+              onClick={() => window.open(p.photo_url, '_blank')} />
+          ))}
+        </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 12px', background: '#F7F3EE', border: '1px dashed #DDD8CF', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', color: '#6B6860' }}>
+          <input type="file" accept="image/*" style={{ display: 'none' }}
+            onChange={e => e.target.files[0] && uploadPhoto(e.target.files[0])} />
+          {uploading ? 'Uploading…' : '+ Add photo'}
+        </label>
+      </div>
+    </div>
+  )
+
+  if (!creating) return (
+    <div style={{ padding: '24px', textAlign: 'center' }}>
+      <div style={{ fontSize: '13px', color: '#6B6860', marginBottom: '16px' }}>No {runType} report yet for this job.</div>
+      <button onClick={loadItems}
+        style={{ padding: '9px 20px', background: '#1C1C1E', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '13px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
+        + Create {runType} Report
+      </button>
+    </div>
+  )
+
+  return (
+    <div>
+      <div style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B8965A', marginBottom: '12px' }}>
+        {runType} Report — {job.event_name}
+      </div>
+
+      {items.map((item, i) => (
+        <div key={i} style={{ padding: '10px 0', borderBottom: '0.5px solid #EDE8E0' }}>
+          <div style={{ fontSize: '13px', fontWeight: '500', marginBottom: '8px' }}>{item.item_name} {item.quantity ? `(${item.quantity})` : ''}</div>
+          <div style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
+            {['good', 'damaged', 'missing'].map(c => (
+              <button key={c} onClick={() => updateCondition(i, c)}
+                style={{ fontSize: '11px', fontWeight: '600', padding: '4px 12px', borderRadius: '20px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", background: item.condition === c ? (c === 'good' ? '#EAF3DE' : c === 'damaged' ? '#FCEBEB' : '#FEF3C7') : 'transparent', color: item.condition === c ? (c === 'good' ? '#3B6D11' : c === 'damaged' ? '#A32D2D' : '#854F0B') : '#6B6860', border: `1px solid ${item.condition === c ? (c === 'good' ? '#86EFAC' : c === 'damaged' ? '#FCA5A5' : '#FDE68A') : '#DDD8CF'}` }}>
+                {c.charAt(0).toUpperCase() + c.slice(1)}
+              </button>
+            ))}
+          </div>
+          {item.condition !== 'good' && (
+            <input value={item.notes} onChange={e => updateNote(i, e.target.value)}
+              placeholder="Add note..."
+              style={{ width: '100%', padding: '7px 10px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '12px', fontFamily: "'DM Sans', sans-serif", boxSizing: 'border-box' }} />
+          )}
+        </div>
+      ))}
+
+      <div style={{ marginTop: '14px', marginBottom: '12px' }}>
+        <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '6px' }}>Driver notes</div>
+        <textarea value={driverNotes} onChange={e => setDriverNotes(e.target.value)}
+          placeholder="Any observations..."
+          style={{ width: '100%', padding: '9px 12px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", minHeight: '70px', resize: 'vertical', boxSizing: 'border-box' }} />
+      </div>
+
+      <div style={{ marginBottom: '14px' }}>
+        <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '6px' }}>Client name (optional)</div>
+        <input value={clientName} onChange={e => setClientName(e.target.value)}
+          placeholder="Client name..."
+          style={{ width: '100%', padding: '9px 12px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", boxSizing: 'border-box' }} />
+      </div>
+
+      <div style={{ display: 'flex', gap: '8px' }}>
+        <button onClick={() => setCreating(false)}
+          style={{ padding: '9px 16px', background: 'transparent', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", color: '#6B6860' }}>
+          Cancel
+        </button>
+        <button onClick={submitReport} disabled={saving}
+          style={{ flex: 1, padding: '9px', background: '#1C1C1E', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '13px', fontWeight: '500', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
+          {saving ? 'Submitting…' : 'Submit Report'}
+        </button>
+      </div>
     </div>
   )
 }
