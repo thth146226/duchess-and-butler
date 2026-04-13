@@ -419,6 +419,99 @@ export default function DriverPortal({ token }) {
 
   const job = selectedJob
 
+  if (reportMode && reportJob) {
+    return (
+      <div style={{ background: '#F7F3EE', fontFamily: "'DM Sans', sans-serif", minHeight: '100vh', paddingBottom: '40px' }}>
+        <div style={{ maxWidth: '600px', margin: '0 auto', padding: '20px 16px' }}>
+
+          {/* Header */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
+            <button onClick={() => { setReportMode(false); setSubmittedReportId(null); setUploadedPhotos([]) }}
+              style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '6px', padding: '8px 14px', cursor: 'pointer', fontSize: '13px', fontFamily: "'DM Sans', sans-serif" }}>← Back</button>
+            <div>
+              <div style={{ fontSize: '15px', fontWeight: '500' }}>{reportRunType} Report</div>
+              <div style={{ fontSize: '11px', color: '#6B6860' }}>{reportJob.event_name || reportJob.title}</div>
+            </div>
+          </div>
+
+          {/* Driver notes */}
+          <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '14px 16px', marginBottom: '16px' }}>
+            <div style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B8965A', marginBottom: '10px' }}>Driver notes</div>
+            <textarea value={driverNotes} onChange={e => setDriverNotes(e.target.value)}
+              placeholder="Any observations about the delivery/collection, items, venue access, etc..."
+              style={{ width: '100%', padding: '10px 12px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", minHeight: '100px', resize: 'vertical', boxSizing: 'border-box' }} />
+          </div>
+
+          {/* Client signature */}
+          <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '14px 16px', marginBottom: '16px' }}>
+            <div style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B8965A', marginBottom: '10px' }}>Client signature</div>
+            <input value={clientName} onChange={e => setClientName(e.target.value)}
+              placeholder="Client name..."
+              style={{ width: '100%', padding: '9px 12px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", marginBottom: '10px', boxSizing: 'border-box' }} />
+            <div style={{ fontSize: '12px', color: '#6B6860', marginBottom: '8px' }}>Ask the client to sign below:</div>
+            <canvas ref={el => setSigCanvas(el)} width={800} height={200}
+              onMouseDown={startDrawing} onMouseMove={draw} onMouseUp={stopDrawing}
+              onTouchStart={startDrawing} onTouchMove={draw} onTouchEnd={stopDrawing}
+              style={{ width: '100%', height: '150px', border: '1.5px dashed #DDD8CF', borderRadius: '8px', background: '#FAFAF8', cursor: 'crosshair', touchAction: 'none', display: 'block' }} />
+            {signature && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
+                <span style={{ fontSize: '12px', color: '#3B6D11' }}>✓ Signature captured</span>
+                <button onClick={clearSignature} style={{ fontSize: '11px', color: '#6B6860', background: 'none', border: 'none', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>Clear</button>
+              </div>
+            )}
+          </div>
+
+          {/* Collection Photos */}
+          <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '14px 16px', marginBottom: '20px' }}>
+            <div style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B8965A', marginBottom: '10px' }}>Collection Photos</div>
+            {uploadedPhotos.length > 0 && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', marginBottom: '10px' }}>
+                {uploadedPhotos.map((photo, i) => (
+                  <img key={i} src={photo.url} alt="COL"
+                    style={{ width: '100%', height: '90px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #DDD8CF' }} />
+                ))}
+              </div>
+            )}
+            <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '12px', background: '#F7F3EE', border: '1.5px dashed #DDD8CF', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', color: '#6B6860' }}>
+              <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
+                onChange={async e => {
+                  const file = e.target.files[0]
+                  if (!file) return
+                  setReportPhotoUploading(true)
+                  try {
+                    const ext = file.name.split('.').pop()
+                    const path = `reports/temp_${Date.now()}.${ext}`
+                    const { error } = await supabase.storage.from('evidence-photos').upload(path, file)
+                    if (error) throw error
+                    const { data: { publicUrl } } = supabase.storage.from('evidence-photos').getPublicUrl(path)
+                    setUploadedPhotos(p => [...p, { url: publicUrl, path }])
+                    showReportToast('Photo added')
+                  } catch (err) {
+                    showReportToast('Upload failed: ' + err.message, 'error')
+                  }
+                  setReportPhotoUploading(false)
+                  e.target.value = ''
+                }} />
+              {reportPhotoUploading ? 'Uploading…' : '📷 Add collection photo'}
+            </label>
+          </div>
+
+          {/* Submit */}
+          <button onClick={submitReport} disabled={savingReport}
+            style={{ width: '100%', padding: '16px', background: '#1C1C1E', color: '#fff', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: '500', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
+            {savingReport ? 'Submitting…' : 'Submit Report'}
+          </button>
+
+          {reportToast && (
+            <div style={{ marginTop: '16px', background: '#1C1C1E', color: '#fff', padding: '12px 16px', borderRadius: '8px', fontSize: '13px', borderLeft: `3px solid ${reportToast.type === 'error' ? '#EF4444' : '#10B981'}`, textAlign: 'center' }}>
+              {reportToast.msg}
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div style={{ minHeight: '100vh', background: '#F7F3EE', fontFamily: "'DM Sans', sans-serif" }}>
 
@@ -715,142 +808,6 @@ export default function DriverPortal({ token }) {
         </div>
       )}
 
-      {reportMode && reportJob && (
-        <div style={{ position: 'fixed', inset: 0, background: '#F7F3EE', zIndex: 300, overflowY: 'auto', fontFamily: "'DM Sans', sans-serif" }}>
-          <div style={{ maxWidth: '600px', margin: '0 auto', padding: '20px 16px' }}>
-
-            {/* Header */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-              <button onClick={() => { setReportMode(false); setSubmittedReportId(null); setUploadedPhotos([]) }} style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '6px', padding: '6px 12px', cursor: 'pointer', fontSize: '12px', fontFamily: "'DM Sans', sans-serif" }}>← Back</button>
-              <div>
-                <div style={{ fontSize: '15px', fontWeight: '500' }}>{reportRunType} Report</div>
-                <div style={{ fontSize: '11px', color: '#6B6860' }}>{reportJob.event_name || reportJob.title}</div>
-              </div>
-            </div>
-
-            {/* Driver notes */}
-            <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '14px 16px', marginBottom: '16px' }}>
-              <div style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B8965A', marginBottom: '10px' }}>Driver notes</div>
-              <textarea
-                value={driverNotes}
-                onChange={e => setDriverNotes(e.target.value)}
-                placeholder="Any observations about the delivery/collection, items, venue access, etc..."
-                style={{ width: '100%', padding: '10px 12px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", minHeight: '100px', resize: 'vertical', boxSizing: 'border-box' }}
-              />
-            </div>
-
-            {/* Client signature */}
-            <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '14px 16px', marginBottom: '20px' }}>
-              <div style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B8965A', marginBottom: '10px' }}>Client signature</div>
-              <input
-                value={clientName}
-                onChange={e => setClientName(e.target.value)}
-                placeholder="Client name..."
-                style={{ width: '100%', padding: '9px 12px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", marginBottom: '10px', boxSizing: 'border-box' }}
-              />
-              <div style={{ fontSize: '12px', color: '#6B6860', marginBottom: '8px' }}>Ask the client to sign below:</div>
-              <canvas
-                ref={el => setSigCanvas(el)}
-                width={800}
-                height={200}
-                onMouseDown={startDrawing}
-                onMouseMove={draw}
-                onMouseUp={stopDrawing}
-                onTouchStart={startDrawing}
-                onTouchMove={draw}
-                onTouchEnd={stopDrawing}
-                style={{
-                  width: '100%',
-                  height: '150px',
-                  border: '1.5px dashed #DDD8CF',
-                  borderRadius: '8px',
-                  background: '#FAFAF8',
-                  cursor: 'crosshair',
-                  touchAction: 'none',
-                  display: 'block',
-                }}
-              />
-              {signature && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
-                  <span style={{ fontSize: '12px', color: '#3B6D11' }}>✓ Signature captured</span>
-                  <button onClick={clearSignature} style={{ fontSize: '11px', color: '#6B6860', background: 'none', border: 'none', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>Clear</button>
-                </div>
-              )}
-            </div>
-
-            {/* Collection Photos Upload */}
-            <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '14px 16px', marginBottom: '16px' }}>
-              <div style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B8965A', marginBottom: '10px' }}>Collection Photos</div>
-
-              {uploadedPhotos.length > 0 && (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', marginBottom: '10px' }}>
-                  {uploadedPhotos.map((photo, i) => (
-                    <img key={i} src={photo.url} alt="COL"
-                      style={{ width: '100%', height: '90px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #DDD8CF' }} />
-                  ))}
-                </div>
-              )}
-
-              <label style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                gap: '8px', padding: '12px',
-                background: '#F7F3EE',
-                border: '1.5px dashed #DDD8CF',
-                borderRadius: '6px', cursor: 'pointer',
-                fontSize: '13px', color: '#6B6860',
-              }}>
-                <input
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  style={{ display: 'none' }}
-                  onChange={async e => {
-                    const file = e.target.files[0]
-                    if (!file) return
-                    setReportPhotoUploading(true)
-                    try {
-                      const ext = file.name.split('.').pop()
-                      const path = `reports/temp_${Date.now()}.${ext}`
-                      const { error } = await supabase.storage
-                        .from('evidence-photos')
-                        .upload(path, file)
-                      if (error) throw error
-                      const { data: { publicUrl } } = supabase.storage
-                        .from('evidence-photos')
-                        .getPublicUrl(path)
-                      setUploadedPhotos(p => [...p, { url: publicUrl, path }])
-                      showReportToast('Photo added')
-                    } catch (err) {
-                      showReportToast('Upload failed: ' + err.message, 'error')
-                    }
-                    setReportPhotoUploading(false)
-                    e.target.value = ''
-                  }}
-                />
-                {reportPhotoUploading ? 'Uploading…' : '📷 Add collection photo'}
-              </label>
-              {uploadedPhotos.length > 0 && (
-                <div style={{ fontSize: '11px', color: '#3B6D11', marginTop: '6px', textAlign: 'center' }}>
-                  {uploadedPhotos.length} photo{uploadedPhotos.length !== 1 ? 's' : ''} added
-                </div>
-              )}
-            </div>
-
-            {/* Submit */}
-            <button
-              onClick={submitReport}
-              disabled={savingReport}
-              style={{ width: '100%', padding: '14px', background: '#1C1C1E', color: '#fff', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: '500', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", opacity: savingReport ? 0.7 : 1 }}
-            >{savingReport ? 'Submitting…' : 'Submit Report'}</button>
-          </div>
-
-          {reportToast && (
-            <div style={{ position: 'fixed', bottom: '24px', right: '16px', left: '16px', background: '#1C1C1E', color: '#fff', padding: '12px 16px', borderRadius: '8px', fontSize: '13px', borderLeft: `3px solid ${reportToast.type === 'error' ? '#EF4444' : '#10B981'}`, zIndex: 999, textAlign: 'center' }}>
-              {reportToast.msg}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   )
 }
