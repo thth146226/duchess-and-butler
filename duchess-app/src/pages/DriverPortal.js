@@ -759,8 +759,8 @@ export default function DriverPortal({ token }) {
       )}
 
       {reportMode && reportJob && (
-        <div style={{ position: 'fixed', inset: 0, background: '#F7F3EE', zIndex: 300, overflowY: 'auto', fontFamily: "'DM Sans', sans-serif" }}>
-          <div style={{ maxWidth: '600px', margin: '0 auto', padding: '20px 16px' }}>
+        <div style={{ position: 'fixed', inset: 0, background: '#F7F3EE', zIndex: 300, overflowY: 'auto', WebkitOverflowScrolling: 'touch', fontFamily: "'DM Sans', sans-serif" }}>
+          <div style={{ maxWidth: '600px', margin: '0 auto', padding: '20px 16px', paddingBottom: '80px' }}>
 
             {/* Header */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
