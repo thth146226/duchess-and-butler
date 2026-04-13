@@ -759,8 +759,8 @@ export default function DriverPortal({ token }) {
       )}
 
       {reportMode && reportJob && (
-        <div style={{ position: 'fixed', inset: 0, background: '#F7F3EE', zIndex: 300, overflowY: 'auto', WebkitOverflowScrolling: 'touch', fontFamily: "'DM Sans', sans-serif" }}>
-          <div style={{ maxWidth: '600px', margin: '0 auto', padding: '20px 16px', paddingBottom: '80px' }}>
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: '#F7F3EE', zIndex: 300, overflow: 'scroll', overflowX: 'hidden', WebkitOverflowScrolling: 'touch', fontFamily: "'DM Sans', sans-serif", height: '100%' }}>
+          <div style={{ maxWidth: '600px', margin: '0 auto', padding: '20px 16px', paddingBottom: '120px', minHeight: '100vh' }}>
 
             {/* Header */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
@@ -922,11 +922,13 @@ export default function DriverPortal({ token }) {
             )}
 
             {/* Submit */}
-            <button
-              onClick={submitReport}
-              disabled={savingReport || !!submittedReportId}
-              style={{ width: '100%', padding: '14px', background: submittedReportId ? '#DDD8CF' : '#1C1C1E', color: submittedReportId ? '#6B6860' : '#fff', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: '500', cursor: submittedReportId ? 'default' : 'pointer', fontFamily: "'DM Sans', sans-serif", opacity: savingReport ? 0.7 : 1 }}
-            >{savingReport ? 'Submitting…' : submittedReportId ? 'Report submitted' : 'Submit Report'}</button>
+            <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, padding: '16px', background: '#F7F3EE', borderTop: '1px solid #DDD8CF', zIndex: 301 }}>
+              <button
+                onClick={submitReport}
+                disabled={savingReport || !!submittedReportId}
+                style={{ width: '100%', padding: '14px', background: submittedReportId ? '#DDD8CF' : '#1C1C1E', color: submittedReportId ? '#6B6860' : '#fff', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: '500', cursor: submittedReportId ? 'default' : 'pointer', fontFamily: "'DM Sans', sans-serif", opacity: savingReport ? 0.7 : 1 }}
+              >{savingReport ? 'Submitting…' : submittedReportId ? 'Report submitted' : 'Submit Report'}</button>
+            </div>
 
             {submittedReportId && (
               <div style={{ marginTop: '16px', background: '#EAF3DE', border: '1px solid #86EFAC', borderRadius: '8px', padding: '14px 16px' }}>
