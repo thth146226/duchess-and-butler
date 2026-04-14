@@ -32,7 +32,6 @@ export default function Reports() {
   const [jobResults, setJobResults]       = useState([])
   const [jobLoading, setJobLoading]       = useState(false)
   const [createJob, setCreateJob]         = useState(null)
-  const [createItems, setCreateItems]     = useState([])
   const [createDriverNotes, setCreateDriverNotes] = useState('')
   const [createClientName, setCreateClientName]   = useState('')
   const [createSignature, setCreateSignature]     = useState(null)
@@ -131,18 +130,6 @@ export default function Reports() {
     setTimeout(() => setCreateToast(null), 3000)
   }
 
-  function updateCreateItemCondition(index, condition) {
-    const updated = [...createItems]
-    updated[index].condition = condition
-    setCreateItems(updated)
-  }
-
-  function updateCreateItemNote(index, notes) {
-    const updated = [...createItems]
-    updated[index].notes = notes
-    setCreateItems(updated)
-  }
-
   // Signature canvas (create modal)
   function getPos(e, canvas) {
     const rect = canvas.getBoundingClientRect()
@@ -200,7 +187,6 @@ export default function Reports() {
     setJobSearch('')
     setJobResults([])
     setCreateJob(null)
-    setCreateItems([])
     setCreateDriverNotes('')
     setCreateClientName('')
     setCreateSignature(null)
@@ -237,38 +223,6 @@ export default function Reports() {
 
   async function selectJob(job) {
     setCreateJob(job)
-
-    const { data: existing } = await supabase
-      .from('job_reports')
-      .select('id')
-      .eq('job_id', job.id)
-      .eq('run_type', createRunType)
-      .maybeSingle()
-
-    if (existing) {
-      showCreateToast('Report already exists for this run', 'error')
-      return
-    }
-
-    const { data: items } = await supabase
-      .from('crms_job_items')
-      .select('*')
-      .eq('job_id', job.id)
-
-    if (items?.length) {
-      setCreateItems(items
-        .filter(i => parseInt(i.quantity) > 0)
-        .map(i => ({
-          item_name: i.item_name || i.description || 'Item',
-          category: i.category || 'other',
-          quantity: i.quantity || 1,
-          condition: 'good',
-          notes: '',
-        }))
-      )
-    } else {
-      setCreateItems([{ item_name: 'General items', category: 'other', quantity: 1, condition: 'good', notes: '' }])
-    }
   }
 
   async function submitNewReport() {
@@ -278,10 +232,6 @@ export default function Reports() {
     }
     setSavingCreate(true)
     try {
-      const driverName = createRunType === 'DEL'
-        ? (createJob.assigned_driver_name || null)
-        : (createJob.col_driver_name || createJob.assigned_driver_name || null)
-
       const { data: report, error } = await supabase
         .from('job_reports')
         .insert({
@@ -290,12 +240,11 @@ export default function Reports() {
           crms_ref:         createJob.crms_ref || null,
           event_name:       createJob.event_name || '',
           run_type:         createRunType,
-          driver_id:        null,
-          driver_name:      driverName,
+          driver_name:      profile?.name || null,
           status:           'submitted',
           driver_notes:     createDriverNotes || null,
-          client_signature: createSignature || null,
           client_name:      createClientName || null,
+          client_signature: createSignature || null,
           signed_at:        createSignature ? new Date().toISOString() : null,
           submitted_at:     new Date().toISOString(),
         })
@@ -304,25 +253,15 @@ export default function Reports() {
 
       if (error) throw error
 
-      if (createItems.length > 0) {
-        await supabase.from('job_report_items').insert(
-          createItems.map(item => ({
-            report_id: report.id,
-            item_name: item.item_name,
-            category: item.category,
-            quantity: item.quantity,
-            condition: item.condition,
-            notes: item.notes || null,
-          }))
-        )
-      }
-
-      showToast('Report created')
+      showToast('Report created successfully')
       setCreateOpen(false)
+      setCreateJob(null)
+      setCreateDriverNotes('')
+      setCreateClientName('')
+      setCreateSignature(null)
       fetchReports()
-      openReport(report)
     } catch (e) {
-      showCreateToast('Error submitting report: ' + e.message, 'error')
+      showToast('Error: ' + e.message, 'error')
     }
     setSavingCreate(false)
   }
@@ -681,7 +620,7 @@ export default function Reports() {
               {['DEL', 'COL'].map(rt => (
                 <button
                   key={rt}
-                  onClick={() => { setCreateRunType(rt); setCreateJob(null); setCreateItems([]) }}
+                  onClick={() => { setCreateRunType(rt); setCreateJob(null) }}
                   style={{
                     fontSize: '11px',
                     fontWeight: '700',
@@ -728,56 +667,12 @@ export default function Reports() {
                     <div style={{ fontSize: '11px', color: '#6B6860' }}>{createJob.crms_ref || '—'} · {createJob.client_name || '—'}</div>
                   </div>
                   <button
-                    onClick={() => { setCreateJob(null); setCreateItems([]) }}
+                    onClick={() => { setCreateJob(null) }}
                     style={{ fontSize: '11px', color: '#6B6860', background: 'none', border: 'none', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
                   >Change</button>
                 </div>
               )}
             </div>
-
-            {/* Item conditions */}
-            {createJob && (
-              <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '10px', overflow: 'hidden', marginBottom: '14px' }}>
-                <div style={{ padding: '12px 14px', borderBottom: '1px solid #DDD8CF', fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B8965A' }}>
-                  Item condition ({createRunType})
-                </div>
-                {createItems.map((item, i) => (
-                  <div key={i} style={{ padding: '12px 14px', borderBottom: i < createItems.length - 1 ? '1px solid #EDE8E0' : 'none' }}>
-                    <div style={{ fontSize: '13px', fontWeight: '500', marginBottom: '8px' }}>
-                      {item.item_name} {item.quantity ? `(${item.quantity})` : ''}
-                    </div>
-                    <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', flexWrap: 'wrap' }}>
-                      {['good', 'damaged', 'missing'].map(c => (
-                        <button
-                          key={c}
-                          onClick={() => updateCreateItemCondition(i, c)}
-                          style={{
-                            fontSize: '11px', fontWeight: '600', padding: '5px 14px', borderRadius: '20px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif",
-                            background: item.condition === c
-                              ? c === 'good' ? '#EAF3DE' : c === 'damaged' ? '#FCEBEB' : '#FEF3C7'
-                              : 'transparent',
-                            color: item.condition === c
-                              ? c === 'good' ? '#3B6D11' : c === 'damaged' ? '#A32D2D' : '#854F0B'
-                              : '#6B6860',
-                            border: `1px solid ${item.condition === c
-                              ? c === 'good' ? '#86EFAC' : c === 'damaged' ? '#FCA5A5' : '#FDE68A'
-                              : '#DDD8CF'}`,
-                          }}
-                        >{c.charAt(0).toUpperCase() + c.slice(1)}</button>
-                      ))}
-                    </div>
-                    {item.condition !== 'good' && (
-                      <input
-                        value={item.notes}
-                        onChange={e => updateCreateItemNote(i, e.target.value)}
-                        placeholder="Add note (e.g. 2 plates broken)..."
-                        style={{ width: '100%', padding: '8px 10px', border: '1px solid #DDD8CF', borderRadius: '8px', fontSize: '12px', fontFamily: "'DM Sans', sans-serif", boxSizing: 'border-box' }}
-                      />
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
 
             {/* Driver notes */}
             <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '10px', padding: '12px 14px', marginBottom: '14px' }}>
