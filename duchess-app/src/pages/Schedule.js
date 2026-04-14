@@ -2254,12 +2254,15 @@ function ReportTab({ job, runType, profile, supabase, showToast }) {
   const [report, setReport] = useState(null)
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
-  const [driverNotes, setDriverNotes] = useState('')
-  const [clientName, setClientName] = useState('')
   const [items, setItems] = useState([])
   const [saving, setSaving] = useState(false)
   const [photos, setPhotos] = useState([])
   const [uploading, setUploading] = useState(false)
+  const [sigCanvas, setSigCanvas]   = useState(null)
+  const [isDrawing, setIsDrawing]   = useState(false)
+  const [newSignature, setNewSignature] = useState(null)
+  const [newClientName, setNewClientName] = useState('')
+  const [newDriverNotes, setNewDriverNotes] = useState('')
 
   useEffect(() => {
     fetchReport()
@@ -2319,22 +2322,62 @@ function ReportTab({ job, runType, profile, supabase, showToast }) {
     setItems(prev => prev.map((it, i) => (i === index ? { ...it, notes } : it)))
   }
 
+  function getPos(e, canvas) {
+    const rect = canvas.getBoundingClientRect()
+    const scaleX = canvas.width / rect.width
+    const scaleY = canvas.height / rect.height
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY
+    return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY }
+  }
+  function startDraw(e) {
+    e.preventDefault()
+    if (!sigCanvas) return
+    setIsDrawing(true)
+    const ctx = sigCanvas.getContext('2d')
+    const { x, y } = getPos(e, sigCanvas)
+    ctx.beginPath(); ctx.moveTo(x, y)
+  }
+  function onDraw(e) {
+    e.preventDefault()
+    if (!isDrawing || !sigCanvas) return
+    const ctx = sigCanvas.getContext('2d')
+    const { x, y } = getPos(e, sigCanvas)
+    ctx.lineTo(x, y)
+    ctx.strokeStyle = '#1C1C1E'; ctx.lineWidth = 2.5
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.stroke()
+  }
+  function stopDraw(e) {
+    if (e) e.preventDefault()
+    setIsDrawing(false)
+    if (sigCanvas) setNewSignature(sigCanvas.toDataURL('image/png'))
+  }
+  function clearSig() {
+    if (sigCanvas) {
+      const ctx = sigCanvas.getContext('2d')
+      ctx.clearRect(0, 0, sigCanvas.width, sigCanvas.height)
+    }
+    setNewSignature(null)
+  }
+
   async function submitReport() {
     setSaving(true)
     try {
       const { data: newReport, error } = await supabase
         .from('job_reports')
         .insert({
-          job_id: job.id,
-          job_table: 'crms_jobs',
-          crms_ref: job.crms_ref || null,
-          event_name: job.event_name || '',
-          run_type: runType,
-          driver_name: profile?.name || null,
-          status: 'submitted',
-          driver_notes: driverNotes || null,
-          client_name: clientName || null,
-          submitted_at: new Date().toISOString(),
+          job_id:           job.id,
+          job_table:        'crms_jobs',
+          crms_ref:         job.crms_ref || null,
+          event_name:       job.event_name || '',
+          run_type:         runType,
+          driver_name:      profile?.name || null,
+          status:           'submitted',
+          driver_notes:     newDriverNotes || null,
+          client_name:      newClientName || null,
+          client_signature: newSignature || null,
+          signed_at:        newSignature ? new Date().toISOString() : null,
+          submitted_at:     new Date().toISOString(),
         })
         .select().single()
       if (error) throw error
@@ -2472,16 +2515,30 @@ function ReportTab({ job, runType, profile, supabase, showToast }) {
 
       <div style={{ marginTop: '14px', marginBottom: '12px' }}>
         <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '6px' }}>Driver notes</div>
-        <textarea value={driverNotes} onChange={e => setDriverNotes(e.target.value)}
+        <textarea value={newDriverNotes} onChange={e => setNewDriverNotes(e.target.value)}
           placeholder="Any observations..."
           style={{ width: '100%', padding: '9px 12px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", minHeight: '70px', resize: 'vertical', boxSizing: 'border-box' }} />
       </div>
 
-      <div style={{ marginBottom: '14px' }}>
+      <div style={{ marginBottom: '12px' }}>
         <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '6px' }}>Client name (optional)</div>
-        <input value={clientName} onChange={e => setClientName(e.target.value)}
+        <input value={newClientName} onChange={e => setNewClientName(e.target.value)}
           placeholder="Client name..."
           style={{ width: '100%', padding: '9px 12px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", boxSizing: 'border-box' }} />
+      </div>
+
+      <div style={{ marginBottom: '14px' }}>
+        <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '6px' }}>Client signature (optional)</div>
+        <canvas ref={el => setSigCanvas(el)} width={800} height={200}
+          onMouseDown={startDraw} onMouseMove={onDraw} onMouseUp={stopDraw}
+          onTouchStart={startDraw} onTouchMove={onDraw} onTouchEnd={stopDraw}
+          style={{ width: '100%', height: '120px', border: '1.5px dashed #DDD8CF', borderRadius: '8px', background: '#FAFAF8', cursor: 'crosshair', touchAction: 'none', display: 'block' }} />
+        {newSignature && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
+            <span style={{ fontSize: '11px', color: '#3B6D11' }}>✓ Signature captured</span>
+            <button onClick={clearSig} style={{ fontSize: '11px', color: '#6B6860', background: 'none', border: 'none', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>Clear</button>
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: '8px' }}>
