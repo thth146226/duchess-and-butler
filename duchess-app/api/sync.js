@@ -187,11 +187,13 @@ function mapOpportunity(o) {
     delivery_date:    toDate(deliveryISO),
     delivery_time:     toTime(o.deliver_starts_at),
     delivery_end_time: toTime(o.deliver_ends_at),
+    delivery_instructions: o.delivery_instructions || null,
 
     // Collection
     collection_date:  toDate(collectionISO),
     collection_time:   toTime(o.collect_starts_at),
     collection_end_time: toTime(o.collect_ends_at),
+    collection_instructions: o.collection_instructions || null,
 
     // Status
     status:           mapStatus(o.opportunity_status_name || o.status_name || ''),
@@ -207,6 +209,7 @@ function mapOpportunity(o) {
 
     // Content
     notes:                o.description         || o.notes || '',
+    crms_description: o.description || null,
     special_instructions: o.special_instructions || '',
     total_value:          parseFloat(o.grand_total || o.total || 0),
 
