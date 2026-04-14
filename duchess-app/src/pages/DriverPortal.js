@@ -548,25 +548,54 @@ export default function DriverPortal({ token }) {
           // Build runs from jobs
           const runs = []
           jobs.forEach(job => {
-            if (job.delivery_date && (
+            const delDate = job.manual_delivery_date || job.delivery_date
+            const delTime = job.manual_delivery_time || job.delivery_time
+            const colDate = job.manual_collection_date || job.collection_date
+            const colTime = job.manual_collection_time || job.collection_time
+
+            const delEndTime = job.delivery_end_time?.substring(0,5)
+            const colEndTime = job.collection_end_time?.substring(0,5)
+
+            const isDelTimed = !!(delEndTime && !['17:00','18:00','00:00'].includes(delEndTime))
+            const isColTimed = !!(colEndTime && !['17:00','18:00','00:00'].includes(colEndTime))
+
+            if (delDate && (
               job.assigned_driver_name === driver?.name ||
               job.assigned_driver_name_2 === driver?.name
             )) {
-              runs.push({ job, type: 'DEL', date: job.delivery_date, time: job.delivery_time })
+              runs.push({ 
+                job, type: 'DEL', 
+                date: delDate, 
+                time: delTime?.substring(0,5) || null,
+                endTime: delEndTime || null,
+                isTimed: isDelTimed,
+                sortOrder: job.manual_sort_order || 0,
+              })
             }
-            if (job.collection_date && (
+            if (colDate && (
               job.assigned_driver_name === driver?.name ||
               job.assigned_driver_name_2 === driver?.name ||
               job.col_driver_name === driver?.name ||
               job.col_driver_name_2 === driver?.name
             )) {
-              runs.push({ job, type: 'COL', date: job.collection_date, time: job.collection_time })
+              runs.push({ 
+                job, type: 'COL', 
+                date: colDate, 
+                time: colTime?.substring(0,5) || null,
+                endTime: colEndTime || null,
+                isTimed: isColTimed,
+                sortOrder: job.manual_sort_order || 0,
+              })
             }
           })
 
           runs.sort((a, b) => {
             const d = a.date.localeCompare(b.date)
-            return d !== 0 ? d : (a.time || '99:99').localeCompare(b.time || '99:99')
+            if (d !== 0) return d
+            const aHasOrder = (a.sortOrder || 0) > 0
+            const bHasOrder = (b.sortOrder || 0) > 0
+            if (aHasOrder || bHasOrder) return (a.sortOrder || 0) - (b.sortOrder || 0)
+            return (a.time || '99:99').localeCompare(b.time || '99:99')
           })
 
           // Group by date label
@@ -635,8 +664,24 @@ export default function DriverPortal({ token }) {
                 <div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '14px' }}>
                     {[
-                      { label: 'Delivery', value: selectedJob.delivery_date ? `${selectedJob.delivery_date} ${selectedJob.delivery_time || ''}` : '—' },
-                      { label: 'Collection', value: selectedJob.collection_date ? `${selectedJob.collection_date} ${selectedJob.collection_time || ''}` : '—' },
+                      { label: 'Delivery', value: (() => {
+                        const date = selectedJob.manual_delivery_date || selectedJob.delivery_date
+                        const time = (selectedJob.manual_delivery_time || selectedJob.delivery_time)?.substring(0,5)
+                        const endTime = selectedJob.delivery_end_time?.substring(0,5)
+                        if (!date) return '—'
+                        const dateStr = new Date(date + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
+                        const timeStr = time ? (endTime && !['17:00','18:00','00:00'].includes(endTime) ? `${time} - ${endTime}` : time) : ''
+                        return `${dateStr}${timeStr ? ' · ' + timeStr : ''}`
+                      })() },
+                      { label: 'Collection', value: (() => {
+                        const date = selectedJob.manual_collection_date || selectedJob.collection_date
+                        const time = (selectedJob.manual_collection_time || selectedJob.collection_time)?.substring(0,5)
+                        const endTime = selectedJob.collection_end_time?.substring(0,5)
+                        if (!date) return '—'
+                        const dateStr = new Date(date + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
+                        const timeStr = time ? (endTime && !['17:00','18:00','00:00'].includes(endTime) ? `${time} - ${endTime}` : time) : ''
+                        return `${dateStr}${timeStr ? ' · ' + timeStr : ''}`
+                      })() },
                       { label: 'Client', value: selectedJob.client_name || '—' },
                     ].map(f => (
                       <div key={f.label} style={{ background: '#F7F3EE', borderRadius: '8px', padding: '10px 12px' }}>
@@ -828,7 +873,15 @@ function RunCard({ run, onOpen, onReport }) {
       <div style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '0.5px solid #EDE8E0' }}>
         <span style={{ fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '4px', background: isDel ? '#FCEBEB' : '#EAF3DE', color: isDel ? '#A32D2D' : '#3B6D11', flexShrink: 0 }}>{run.type}</span>
         <span style={{ fontSize: '13px', fontWeight: '500', flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{run.job.event_name}</span>
-        <span style={{ fontSize: '12px', color: '#6B6860', flexShrink: 0 }}>{run.time?.substring(0, 5) || '—'}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+          <span style={{ fontSize: '12px', color: '#6B6860' }}>
+            {run.time?.substring(0, 5) || '—'}
+            {run.endTime ? ` - ${run.endTime}` : ''}
+          </span>
+          {run.isTimed && (
+            <span style={{ background: '#FEF3C7', color: '#854F0B', fontSize: '9px', fontWeight: '700', padding: '2px 6px', borderRadius: '4px', border: '1px solid #FDE68A', whiteSpace: 'nowrap' }}>⏱ TIMED</span>
+          )}
+        </div>
       </div>
       <div style={{ padding: '8px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ fontSize: '11px', color: '#6B6860' }}>
