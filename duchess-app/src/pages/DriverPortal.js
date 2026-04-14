@@ -129,8 +129,6 @@ export default function DriverPortal({ token }) {
     console.log('Total jobs fetched:', data?.length, 'Error:', error)
 
     if (data) {
-      const today = new Date().toLocaleDateString('en-CA')
-
       const myJobs = data.filter(j => {
         const isMyJob =
           j.assigned_driver_name === driverName ||
@@ -138,9 +136,15 @@ export default function DriverPortal({ token }) {
           j.col_driver_name === driverName ||
           j.col_driver_name_2 === driverName
         if (!isMyJob) return false
-        const delDate = j.manual_delivery_date || j.delivery_date
-        const colDate = j.manual_collection_date || j.collection_date
-        return (delDate && delDate >= today) || (colDate && colDate >= today)
+
+        // Show job if DEL or COL is not yet done
+        const delAssigned = j.assigned_driver_name === driverName || j.assigned_driver_name_2 === driverName
+        const colAssigned = j.col_driver_name === driverName || j.col_driver_name_2 === driverName
+
+        const delPending = delAssigned && !j.delivery_done
+        const colPending = colAssigned && !j.collection_done
+
+        return delPending || colPending
       })
 
       console.log('My jobs after filter:', myJobs.length)
@@ -559,7 +563,7 @@ export default function DriverPortal({ token }) {
             const isDelTimed = !!(delEndTime && !['17:00','18:00','00:00'].includes(delEndTime))
             const isColTimed = !!(colEndTime && !['17:00','18:00','00:00'].includes(colEndTime))
 
-            if (delDate && (
+            if (delDate && !job.delivery_done && (
               job.assigned_driver_name === driver?.name ||
               job.assigned_driver_name_2 === driver?.name
             )) {
@@ -572,7 +576,7 @@ export default function DriverPortal({ token }) {
                 sortOrder: job.manual_sort_order || 0,
               })
             }
-            if (colDate && (
+            if (colDate && !job.collection_done && (
               job.assigned_driver_name === driver?.name ||
               job.assigned_driver_name_2 === driver?.name ||
               job.col_driver_name === driver?.name ||
@@ -619,6 +623,7 @@ export default function DriverPortal({ token }) {
                   run={run}
                   onOpen={() => openJob(run.job)}
                   onReport={openReport}
+                  onDone={fetchJobs.bind(null, driver?.name)}
                 />
               ))}
             </div>
@@ -865,7 +870,7 @@ export default function DriverPortal({ token }) {
   )
 }
 
-function RunCard({ run, onOpen, onReport }) {
+function RunCard({ run, onOpen, onReport, onDone }) {
   const isToday = run.date === new Date().toISOString().split('T')[0]
   const isDel = run.type === 'DEL'
   return (
@@ -896,6 +901,16 @@ function RunCard({ run, onOpen, onReport }) {
             onClick={(e) => { e.stopPropagation(); onReport && onReport(run.job, run.type) }}
             style={{ fontSize: '11px', fontWeight: '500', padding: '6px 14px', borderRadius: '6px', border: 'none', background: run.type === 'DEL' ? '#FCEBEB' : '#EAF3DE', color: run.type === 'DEL' ? '#A32D2D' : '#3B6D11', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
           >+ {run.type} Report</button>
+          <button
+            onClick={async (e) => {
+              e.stopPropagation()
+              const field = run.type === 'DEL' ? 'delivery_done' : 'collection_done'
+              if (!window.confirm(`Mark this ${run.type} as done?`)) return
+              await supabase.from('crms_jobs').update({ [field]: true }).eq('id', run.job.id)
+              onDone && onDone()
+            }}
+            style={{ fontSize: '11px', fontWeight: '500', padding: '6px 14px', borderRadius: '6px', border: 'none', background: '#EAF3DE', color: '#3B6D11', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
+          >✓ Done</button>
         </div>
       </div>
     </div>

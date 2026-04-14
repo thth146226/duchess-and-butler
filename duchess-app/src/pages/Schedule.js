@@ -1778,6 +1778,38 @@ function RunDetailPanel({
               </div>
             )}
 
+            {/* Mark as Done */}
+            <div style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>
+              {run.runType === 'DEL' && (
+                <button
+                  onClick={async () => {
+                    await supabase.from('crms_jobs')
+                      .update({ delivery_done: !run.job.delivery_done })
+                      .eq('id', run.job.id)
+                    fetchJobs()
+                    showToast(run.job.delivery_done ? 'DEL marked as pending' : 'DEL marked as done')
+                  }}
+                  style={{ fontSize: '12px', fontWeight: '500', padding: '7px 16px', borderRadius: '6px', border: 'none', background: run.job.delivery_done ? '#EAF3DE' : '#F7F3EE', color: run.job.delivery_done ? '#3B6D11' : '#6B6860', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
+                >
+                  {run.job.delivery_done ? '✓ DEL Done' : 'Mark DEL Done'}
+                </button>
+              )}
+              {run.runType === 'COL' && (
+                <button
+                  onClick={async () => {
+                    await supabase.from('crms_jobs')
+                      .update({ collection_done: !run.job.collection_done })
+                      .eq('id', run.job.id)
+                    fetchJobs()
+                    showToast(run.job.collection_done ? 'COL marked as pending' : 'COL marked as done')
+                  }}
+                  style={{ fontSize: '12px', fontWeight: '500', padding: '7px 16px', borderRadius: '6px', border: 'none', background: run.job.collection_done ? '#EAF3DE' : '#F7F3EE', color: run.job.collection_done ? '#3B6D11' : '#6B6860', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
+                >
+                  {run.job.collection_done ? '✓ COL Done' : 'Mark COL Done'}
+                </button>
+              )}
+            </div>
+
             {/* Save button */}
             <button
               disabled={!!assigningId}
