@@ -873,6 +873,8 @@ export default function DriverPortal({ token }) {
 function RunCard({ run, onOpen, onReport, onDone }) {
   const isToday = run.date === new Date().toISOString().split('T')[0]
   const isDel = run.type === 'DEL'
+  const today = new Date().toLocaleDateString('en-CA')
+  const isFuture = run.date > today
   return (
     <div style={{ background: '#fff', border: `1px solid ${isDel ? '#FCA5A5' : '#86EFAC'}`, borderRadius: '8px', marginBottom: '10px', overflow: 'hidden' }}>
       <div onClick={onOpen} style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '0.5px solid #EDE8E0', cursor: 'pointer' }}>
@@ -904,11 +906,18 @@ function RunCard({ run, onOpen, onReport, onDone }) {
         <button
           onClick={async (e) => {
             e.stopPropagation()
+            if (isFuture) return
             const field = run.type === 'DEL' ? 'delivery_done' : 'collection_done'
             const isDone = run.type === 'DEL' ? run.job.delivery_done : run.job.collection_done
+            if (!isDone) {
+              const confirmed = window.confirm(`Mark ${run.type} as done for ${run.job.event_name}? This will remove it from your portal.`)
+              if (!confirmed) return
+            }
             await supabase.from('crms_jobs').update({ [field]: !isDone }).eq('id', run.job.id)
             onDone && onDone()
           }}
+          disabled={isFuture}
+          title={isFuture ? 'Cannot mark future runs as done' : ''}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -920,7 +929,8 @@ function RunCard({ run, onOpen, onReport, onDone }) {
             border: `1.5px solid ${(run.type === 'DEL' ? run.job.delivery_done : run.job.collection_done) ? '#86EFAC' : '#DDD8CF'}`,
             background: (run.type === 'DEL' ? run.job.delivery_done : run.job.collection_done) ? '#EAF3DE' : '#fff',
             color: (run.type === 'DEL' ? run.job.delivery_done : run.job.collection_done) ? '#3B6D11' : '#9CA3AF',
-            cursor: 'pointer',
+            opacity: isFuture ? 0.3 : 1,
+            cursor: isFuture ? 'not-allowed' : 'pointer',
             fontFamily: "'DM Sans', sans-serif",
             transition: 'all 0.15s',
           }}
