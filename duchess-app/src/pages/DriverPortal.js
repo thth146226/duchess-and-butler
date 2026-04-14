@@ -895,23 +895,55 @@ function RunCard({ run, onOpen, onReport, onDone }) {
         <span style={{ fontSize: '11px', color: '#B8965A', fontWeight: '500' }}>View →</span>
       </div>
 
-      <div style={{ padding: '0 14px 12px' }}>
-        <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
-          <button
-            onClick={(e) => { e.stopPropagation(); onReport && onReport(run.job, run.type) }}
-            style={{ fontSize: '11px', fontWeight: '500', padding: '6px 14px', borderRadius: '6px', border: 'none', background: run.type === 'DEL' ? '#FCEBEB' : '#EAF3DE', color: run.type === 'DEL' ? '#A32D2D' : '#3B6D11', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
-          >+ {run.type} Report</button>
-          <button
-            onClick={async (e) => {
-              e.stopPropagation()
-              const field = run.type === 'DEL' ? 'delivery_done' : 'collection_done'
-              if (!window.confirm(`Mark this ${run.type} as done?`)) return
-              await supabase.from('crms_jobs').update({ [field]: true }).eq('id', run.job.id)
-              onDone && onDone()
-            }}
-            style={{ fontSize: '11px', fontWeight: '500', padding: '6px 14px', borderRadius: '6px', border: 'none', background: '#EAF3DE', color: '#3B6D11', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
-          >✓ Done</button>
-        </div>
+      <div style={{ padding: '0 14px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <button
+          onClick={(e) => { e.stopPropagation(); onReport && onReport(run.job, run.type) }}
+          style={{ fontSize: '11px', fontWeight: '500', padding: '6px 14px', borderRadius: '6px', border: 'none', background: run.type === 'DEL' ? '#FCEBEB' : '#EAF3DE', color: run.type === 'DEL' ? '#A32D2D' : '#3B6D11', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
+        >+ {run.type} Report</button>
+
+        <button
+          onClick={async (e) => {
+            e.stopPropagation()
+            const field = run.type === 'DEL' ? 'delivery_done' : 'collection_done'
+            const isDone = run.type === 'DEL' ? run.job.delivery_done : run.job.collection_done
+            await supabase.from('crms_jobs').update({ [field]: !isDone }).eq('id', run.job.id)
+            onDone && onDone()
+          }}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            fontSize: '11px',
+            fontWeight: '500',
+            padding: '6px 12px',
+            borderRadius: '6px',
+            border: `1.5px solid ${(run.type === 'DEL' ? run.job.delivery_done : run.job.collection_done) ? '#86EFAC' : '#DDD8CF'}`,
+            background: (run.type === 'DEL' ? run.job.delivery_done : run.job.collection_done) ? '#EAF3DE' : '#fff',
+            color: (run.type === 'DEL' ? run.job.delivery_done : run.job.collection_done) ? '#3B6D11' : '#9CA3AF',
+            cursor: 'pointer',
+            fontFamily: "'DM Sans', sans-serif",
+            transition: 'all 0.15s',
+          }}
+        >
+          <div style={{
+            width: '16px',
+            height: '16px',
+            borderRadius: '4px',
+            border: `1.5px solid ${(run.type === 'DEL' ? run.job.delivery_done : run.job.collection_done) ? '#3B6D11' : '#DDD8CF'}`,
+            background: (run.type === 'DEL' ? run.job.delivery_done : run.job.collection_done) ? '#3B6D11' : '#fff',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+          }}>
+            {(run.type === 'DEL' ? run.job.delivery_done : run.job.collection_done) && (
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <path d="M2 5l2.5 2.5L8 3" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            )}
+          </div>
+          {(run.type === 'DEL' ? run.job.delivery_done : run.job.collection_done) ? 'Done' : 'Mark done'}
+        </button>
       </div>
     </div>
   )
