@@ -616,7 +616,7 @@ export default function DriverPortal({ token }) {
 
               {/* Tabs */}
               <div style={{ display: 'flex', gap: '0', marginTop: '12px', borderBottom: '1px solid #DDD8CF' }}>
-                {[['details','Details'], ['notes','Notes'], ['items','Items'], ['evidence','Evidence']].map(([id, label]) => (
+                {[['details','Details'], ['notes','Notes'], ['items','Items'], ['evidence','Evidence'], ['report','Report']].map(([id, label]) => (
                   <button key={id} onClick={() => setTab(id)} style={{
                     padding: '8px 14px', background: 'transparent', border: 'none',
                     borderBottom: `2px solid ${tab === id ? '#B8965A' : 'transparent'}`,
@@ -803,6 +803,14 @@ export default function DriverPortal({ token }) {
                   )}
                 </div>
               )}
+
+              {tab === 'report' && (
+                <DriverReportTab
+                  job={selectedJob}
+                  driver={driver}
+                  supabase={supabase}
+                />
+              )}
             </div>
           </div>
         </div>
@@ -837,6 +845,248 @@ function RunCard({ run, onOpen, onReport }) {
           >+ {run.type} Report</button>
         </div>
       </div>
+    </div>
+  )
+}
+
+function DriverReportTab({ job, driver, supabase }) {
+  const [report, setReport]         = useState(null)
+  const [loading, setLoading]       = useState(true)
+  const [creating, setCreating]     = useState(false)
+  const [runType, setRunType]       = useState('COL')
+  const [driverNotes, setDriverNotes] = useState('')
+  const [clientName, setClientName] = useState('')
+  const [signature, setSignature]   = useState(null)
+  const [sigCanvas, setSigCanvas]   = useState(null)
+  const [isDrawing, setIsDrawing]   = useState(false)
+  const [photos, setPhotos]         = useState([])
+  const [uploading, setUploading]   = useState(false)
+  const [saving, setSaving]         = useState(false)
+  const [toast, setToast]           = useState(null)
+
+  useEffect(() => { fetchReport() }, [job?.id])
+
+  function showToast(msg, type = 'success') {
+    setToast({ msg, type })
+    setTimeout(() => setToast(null), 3000)
+  }
+
+  async function fetchReport() {
+    setLoading(true)
+    const { data } = await supabase
+      .from('job_reports')
+      .select('*')
+      .eq('job_id', job.id)
+      .maybeSingle()
+    if (data) {
+      setReport(data)
+      const { data: p } = await supabase
+        .from('evidence_photos')
+        .select('*')
+        .eq('order_id', data.id)
+      if (p) setPhotos(p)
+    } else {
+      setReport(null)
+      setPhotos([])
+    }
+    setLoading(false)
+  }
+
+  function getPos(e, canvas) {
+    const rect = canvas.getBoundingClientRect()
+    const scaleX = canvas.width / rect.width
+    const scaleY = canvas.height / rect.height
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY
+    return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY }
+  }
+  function startDraw(e) {
+    e.preventDefault()
+    if (!sigCanvas) return
+    setIsDrawing(true)
+    const ctx = sigCanvas.getContext('2d')
+    const { x, y } = getPos(e, sigCanvas)
+    ctx.beginPath(); ctx.moveTo(x, y)
+  }
+  function onDraw(e) {
+    e.preventDefault()
+    if (!isDrawing || !sigCanvas) return
+    const ctx = sigCanvas.getContext('2d')
+    const { x, y } = getPos(e, sigCanvas)
+    ctx.lineTo(x, y)
+    ctx.strokeStyle = '#1C1C1E'; ctx.lineWidth = 2.5
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.stroke()
+  }
+  function stopDraw(e) {
+    if (e) e.preventDefault()
+    setIsDrawing(false)
+    if (sigCanvas) setSignature(sigCanvas.toDataURL('image/png'))
+  }
+  function clearSig() {
+    if (sigCanvas) {
+      const ctx = sigCanvas.getContext('2d')
+      ctx.clearRect(0, 0, sigCanvas.width, sigCanvas.height)
+    }
+    setSignature(null)
+  }
+
+  async function uploadPhoto(file, reportId) {
+    setUploading(true)
+    try {
+      const ext = file.name.split('.').pop()
+      const path = `reports/${reportId}/${Date.now()}.${ext}`
+      const { error } = await supabase.storage.from('evidence-photos').upload(path, file)
+      if (error) throw error
+      const { data: { publicUrl } } = supabase.storage.from('evidence-photos').getPublicUrl(path)
+      await supabase.from('evidence_photos').insert({
+        order_id: reportId, run_type: 'after_col',
+        photo_url: publicUrl, file_path: path,
+        uploaded_by_name: driver?.name || 'Driver',
+        event_name: job?.event_name || '',
+      })
+      const { data: p } = await supabase.from('evidence_photos').select('*').eq('order_id', reportId)
+      if (p) setPhotos(p)
+      showToast('Photo uploaded')
+    } catch (e) { showToast('Upload failed', 'error') }
+    setUploading(false)
+  }
+
+  async function submitReport() {
+    setSaving(true)
+    try {
+      const { data: newReport, error } = await supabase
+        .from('job_reports')
+        .insert({
+          job_id:           job.id,
+          job_table:        'crms_jobs',
+          crms_ref:         job.crms_ref || null,
+          event_name:       job.event_name || '',
+          run_type:         runType,
+          driver_name:      driver?.name || null,
+          status:           'submitted',
+          driver_notes:     driverNotes || null,
+          client_name:      clientName || null,
+          client_signature: signature || null,
+          signed_at:        signature ? new Date().toISOString() : null,
+          submitted_at:     new Date().toISOString(),
+        })
+        .select().single()
+      if (error) throw error
+      showToast('Report submitted!')
+      setCreating(false)
+      setReport(newReport)
+      fetchReport()
+    } catch (e) { showToast('Error: ' + e.message, 'error') }
+    setSaving(false)
+  }
+
+  if (loading) return <div style={{ padding: '20px', color: '#6B6860', fontSize: '13px' }}>Loading…</div>
+
+  if (report) return (
+    <div style={{ padding: '4px 0' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+        <span style={{ fontSize: '11px', fontWeight: '600', padding: '3px 10px', borderRadius: '10px', background: '#EAF3DE', color: '#3B6D11' }}>
+          {report.run_type} Report Submitted
+        </span>
+        <div style={{ fontSize: '11px', color: '#6B6860' }}>{report.driver_name}</div>
+      </div>
+      {report.driver_notes && (
+        <div style={{ background: '#F7F3EE', borderRadius: '6px', padding: '10px 12px', fontSize: '12px', marginBottom: '10px', fontStyle: 'italic' }}>
+          "{report.driver_notes}"
+        </div>
+      )}
+      {report.client_signature && (
+        <div style={{ marginBottom: '12px' }}>
+          <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '6px' }}>Client signature — {report.client_name}</div>
+          <img src={report.client_signature} alt="Signature" style={{ maxWidth: '100%', border: '1px solid #DDD8CF', borderRadius: '6px' }} />
+        </div>
+      )}
+      {photos.length > 0 && (
+        <div>
+          <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>Photos</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', marginBottom: '10px' }}>
+            {photos.map(p => (
+              <img key={p.id} src={p.photo_url} alt="Report"
+                style={{ width: '100%', height: '80px', objectFit: 'cover', borderRadius: '6px' }}
+                onClick={() => window.open(p.photo_url, '_blank')} />
+            ))}
+          </div>
+        </div>
+      )}
+      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px', background: '#F7F3EE', border: '1px dashed #DDD8CF', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', color: '#6B6860' }}>
+        <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
+          onChange={e => e.target.files[0] && uploadPhoto(e.target.files[0], report.id)} />
+        {uploading ? 'Uploading…' : '+ Add photo'}
+      </label>
+      {toast && <div style={{ marginTop: '10px', background: '#1C1C1E', color: '#fff', padding: '10px 14px', borderRadius: '6px', fontSize: '12px', textAlign: 'center' }}>{toast.msg}</div>}
+    </div>
+  )
+
+  if (!creating) return (
+    <div style={{ padding: '20px', textAlign: 'center' }}>
+      <div style={{ fontSize: '13px', color: '#6B6860', marginBottom: '16px' }}>No report yet for this job.</div>
+      <button onClick={() => setCreating(true)}
+        style={{ padding: '10px 20px', background: '#1C1C1E', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '13px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
+        + Create Report
+      </button>
+    </div>
+  )
+
+  return (
+    <div style={{ paddingBottom: '20px' }}>
+      {/* Run type */}
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
+        {['DEL', 'COL'].map(t => (
+          <button key={t} onClick={() => setRunType(t)}
+            style={{ fontSize: '12px', fontWeight: '600', padding: '6px 20px', borderRadius: '6px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", background: runType === t ? (t === 'DEL' ? '#FCEBEB' : '#EAF3DE') : 'transparent', color: runType === t ? (t === 'DEL' ? '#A32D2D' : '#3B6D11') : '#6B6860', border: `1.5px solid ${runType === t ? (t === 'DEL' ? '#FCA5A5' : '#86EFAC') : '#DDD8CF'}` }}>
+            {t === 'DEL' ? 'Delivery' : 'Collection'}
+          </button>
+        ))}
+      </div>
+
+      {/* Driver notes */}
+      <div style={{ marginBottom: '12px' }}>
+        <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '5px' }}>Driver notes</div>
+        <textarea value={driverNotes} onChange={e => setDriverNotes(e.target.value)}
+          placeholder="Any observations..."
+          style={{ width: '100%', padding: '9px 12px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", minHeight: '80px', resize: 'vertical', boxSizing: 'border-box' }} />
+      </div>
+
+      {/* Client name */}
+      <div style={{ marginBottom: '12px' }}>
+        <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '5px' }}>Client name</div>
+        <input value={clientName} onChange={e => setClientName(e.target.value)}
+          placeholder="Client name..."
+          style={{ width: '100%', padding: '9px 12px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", boxSizing: 'border-box' }} />
+      </div>
+
+      {/* Signature */}
+      <div style={{ marginBottom: '14px' }}>
+        <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '5px' }}>Client signature</div>
+        <canvas ref={el => setSigCanvas(el)} width={800} height={200}
+          onMouseDown={startDraw} onMouseMove={onDraw} onMouseUp={stopDraw}
+          onTouchStart={startDraw} onTouchMove={onDraw} onTouchEnd={stopDraw}
+          style={{ width: '100%', height: '130px', border: '1.5px dashed #DDD8CF', borderRadius: '8px', background: '#FAFAF8', cursor: 'crosshair', touchAction: 'none', display: 'block' }} />
+        {signature && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
+            <span style={{ fontSize: '11px', color: '#3B6D11' }}>✓ Signature captured</span>
+            <button onClick={clearSig} style={{ fontSize: '11px', color: '#6B6860', background: 'none', border: 'none', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>Clear</button>
+          </div>
+        )}
+      </div>
+
+      {/* Actions */}
+      <div style={{ display: 'flex', gap: '8px' }}>
+        <button onClick={() => setCreating(false)}
+          style={{ padding: '9px 16px', background: 'transparent', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", color: '#6B6860' }}>
+          Cancel
+        </button>
+        <button onClick={submitReport} disabled={saving}
+          style={{ flex: 1, padding: '9px', background: '#1C1C1E', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '13px', fontWeight: '500', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
+          {saving ? 'Submitting…' : 'Submit Report'}
+        </button>
+      </div>
+      {toast && <div style={{ marginTop: '10px', background: '#1C1C1E', color: '#fff', padding: '10px 14px', borderRadius: '6px', fontSize: '12px', textAlign: 'center' }}>{toast.msg}</div>}
     </div>
   )
 }
