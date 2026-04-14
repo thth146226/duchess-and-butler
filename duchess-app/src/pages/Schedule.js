@@ -2464,9 +2464,22 @@ function ReportTab({ job, runType, profile, supabase, showToast }) {
         <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>Collection Photos</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', marginBottom: '8px' }}>
           {photos.map(p => (
-            <img key={p.id} src={p.photo_url} alt="COL"
-              style={{ width: '100%', height: '80px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #DDD8CF', cursor: 'pointer' }}
-              onClick={() => window.open(p.photo_url, '_blank')} />
+            <div key={p.id} style={{ position: 'relative' }}>
+              <img src={p.photo_url} alt="COL"
+                style={{ width: '100%', height: '80px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #DDD8CF', cursor: 'pointer', display: 'block' }}
+                onClick={() => window.open(p.photo_url, '_blank')}
+              />
+              <button
+                onClick={async () => {
+                  if (!window.confirm('Delete this photo?')) return
+                  await supabase.storage.from('evidence-photos').remove([p.file_path])
+                  await supabase.from('evidence_photos').delete().eq('id', p.id)
+                  fetchPhotos(report.id)
+                  showToast('Photo deleted')
+                }}
+                style={{ position: 'absolute', top: '4px', right: '4px', width: '22px', height: '22px', borderRadius: '50%', background: 'rgba(28,28,30,0.7)', border: 'none', color: '#fff', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
+              >✕</button>
+            </div>
           ))}
         </div>
         <label style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 12px', background: '#F7F3EE', border: '1px dashed #DDD8CF', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', color: '#6B6860' }}>

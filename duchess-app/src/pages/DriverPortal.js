@@ -1059,9 +1059,22 @@ function DriverReportTab({ job, driver, supabase }) {
           <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>Photos</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', marginBottom: '10px' }}>
             {photos.map(p => (
-              <img key={p.id} src={p.photo_url} alt="Report"
-                style={{ width: '100%', height: '80px', objectFit: 'cover', borderRadius: '6px' }}
-                onClick={() => window.open(p.photo_url, '_blank')} />
+              <div key={p.id} style={{ position: 'relative' }}>
+                <img src={p.photo_url} alt="Report"
+                  style={{ width: '100%', height: '80px', objectFit: 'cover', borderRadius: '6px', cursor: 'pointer', display: 'block' }}
+                  onClick={() => window.open(p.photo_url, '_blank')}
+                />
+                <button
+                  onClick={async () => {
+                    await supabase.storage.from('evidence-photos').remove([p.file_path])
+                    await supabase.from('evidence_photos').delete().eq('id', p.id)
+                    const { data: updated } = await supabase.from('evidence_photos').select('*').eq('order_id', report.id)
+                    if (updated) setPhotos(updated)
+                    showToast('Photo deleted')
+                  }}
+                  style={{ position: 'absolute', top: '4px', right: '4px', width: '22px', height: '22px', borderRadius: '50%', background: 'rgba(28,28,30,0.7)', border: 'none', color: '#fff', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
+                >✕</button>
+              </div>
             ))}
           </div>
         </div>
