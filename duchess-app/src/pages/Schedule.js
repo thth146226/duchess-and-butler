@@ -1513,7 +1513,10 @@ function RunDetailPanel({
             <button
               onClick={async () => {
                 if (!window.confirm('Delete this job from the system? This cannot be undone.')) return
-                await supabase.from('crms_jobs').delete().eq('id', run.job.id)
+                const jobId = run.job?.id || run.id
+                console.log('Deleting job:', jobId, run)
+                const { error } = await supabase.from('crms_jobs').delete().eq('id', jobId)
+                if (error) { showToast('Error: ' + error.message, 'error'); return }
                 onClose()
                 fetchJobs()
                 showToast('Job deleted')
