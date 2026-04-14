@@ -678,6 +678,7 @@ export default function Schedule() {
           drivers={drivers}
           assigningId={assigningId}
           showToast={showToast}
+          fetchJobs={fetchJobs}
           onClose={() => setSelectedRun(null)}
           delDriver1={delDriver1}
           setDelDriver1={setDelDriver1}
@@ -1472,6 +1473,7 @@ function RunDetailPanel({
   drivers,
   onClose,
   showToast,
+  fetchJobs,
   assigningId,
   delDriver1,
   setDelDriver1,
@@ -1507,7 +1509,19 @@ function RunDetailPanel({
             </div>
             <div style={{ fontSize: '12px', color: '#6B6860' }}>{run.ref} · {run.client}</div>
           </div>
-          <button style={S.closeBtn} onClick={onClose}>✕</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button
+              onClick={async () => {
+                if (!window.confirm('Delete this job from the system? This cannot be undone.')) return
+                await supabase.from('crms_jobs').delete().eq('id', run.job.id)
+                onClose()
+                fetchJobs()
+                showToast('Job deleted')
+              }}
+              style={{ fontSize: '11px', fontWeight: '500', padding: '5px 12px', borderRadius: '6px', border: '1px solid #FECACA', background: '#FEF2F2', color: '#DC2626', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
+            >Delete job</button>
+            <button style={S.closeBtn} onClick={onClose}>✕</button>
+          </div>
         </div>
 
         <div style={{ padding: '24px 28px', overflowY: 'auto' }}>
