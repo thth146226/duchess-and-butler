@@ -716,6 +716,26 @@ export default function DriverPortal({ token }) {
                       <div style={{ fontSize: '12px', color: '#9CA3AF' }}>Full address not yet available — check Current RMS</div>
                     )}
                   </div>
+                  {/* Delivery / Collection instructions */}
+                  {(selectedJob.delivery_instructions || selectedJob.collection_instructions) && (
+                    <div style={{ background: '#FEF3C7', border: '1px solid #FDE68A', borderRadius: '8px', padding: '12px 14px', marginTop: '10px' }}>
+                      <div style={{ fontSize: '10px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#854F0B', marginBottom: '6px' }}>
+                        📋 Job Instructions
+                      </div>
+                      {selectedJob.delivery_instructions && (
+                        <div style={{ marginBottom: '6px' }}>
+                          <div style={{ fontSize: '10px', color: '#854F0B', fontWeight: '600', marginBottom: '2px' }}>Delivery:</div>
+                          <div style={{ fontSize: '12px', color: '#1C1C1E', lineHeight: 1.5 }}>{selectedJob.delivery_instructions}</div>
+                        </div>
+                      )}
+                      {selectedJob.collection_instructions && (
+                        <div>
+                          <div style={{ fontSize: '10px', color: '#854F0B', fontWeight: '600', marginBottom: '2px' }}>Collection:</div>
+                          <div style={{ fontSize: '12px', color: '#1C1C1E', lineHeight: 1.5 }}>{selectedJob.collection_instructions}</div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -892,7 +912,12 @@ function RunCard({ run, onOpen, onReport, onDone }) {
       </div>
       <div onClick={onOpen} style={{ padding: '8px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
         <div style={{ fontSize: '11px', color: '#6B6860' }}>
-          {isToday ? 'Today' : new Date(run.date + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })} · {run.job.venue || '—'}
+          {isToday ? 'Today' : new Date(run.date + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })} · <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span>{run.job.venue || '—'}</span>
+            {(run.job.delivery_instructions || run.job.collection_instructions) && (
+              <span style={{ fontSize: '9px', fontWeight: '700', padding: '1px 5px', borderRadius: '4px', background: '#FEF3C7', color: '#854F0B', border: '1px solid #FDE68A' }}>NOTE</span>
+            )}
+          </div>
         </div>
         <span style={{ fontSize: '11px', color: '#B8965A', fontWeight: '500' }}>View →</span>
       </div>
