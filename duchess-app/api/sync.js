@@ -366,6 +366,23 @@ export default async function handler(req, res) {
 
         } else {
           // ── EXISTING job ───────────────────────────────────────────────────
+          // Only update if data actually changed
+          const hasChanged = !existing ||
+            existing.status !== mapped.status ||
+            existing.delivery_date !== mapped.delivery_date ||
+            existing.collection_date !== mapped.collection_date ||
+            existing.delivery_time !== mapped.delivery_time ||
+            existing.collection_time !== mapped.collection_time ||
+            existing.delivery_end_time !== mapped.delivery_end_time ||
+            existing.collection_end_time !== mapped.collection_end_time ||
+            existing.event_name !== mapped.event_name ||
+            existing.client_name !== mapped.client_name ||
+            existing.venue !== mapped.venue ||
+            existing.venue_address !== mapped.venue_address ||
+            existing.notes !== mapped.notes ||
+            existing.special_instructions !== mapped.special_instructions
+
+          if (hasChanged) {
           const changes = detectChanges(existing, mapped)
 
           if (changes.length > 0) {
@@ -395,16 +412,9 @@ export default async function handler(req, res) {
 
             stats.updated++
           } else {
-            await supabase
-              .from('crms_jobs')
-              .update({
-                last_synced_at: new Date().toISOString(),
-                crms_state: mapped.crms_state,
-                crms_state_name: mapped.crms_state_name,
-                is_order: mapped.is_order,
-                ordered_at: mapped.ordered_at,
-              })
-              .eq('crms_id', mapped.crms_id)
+            stats.unchanged++
+          }
+          } else {
             stats.unchanged++
           }
 
