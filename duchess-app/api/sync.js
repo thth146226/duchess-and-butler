@@ -362,13 +362,6 @@ export default async function handler(req, res) {
           stats.items_synced += itemResult.count
           if (itemResult.error) stats.item_errors.push({ crms_id: opp.id, error: itemResult.error })
 
-          await supabase.from('sync_log').insert({
-            crms_id:     mapped.crms_id,
-            event_type:  'job_created',
-            description: `New: ${mapped.event_name} (${mapped.crms_ref}) · ${itemResult.count} items${itemResult.error ? ' [item error: ' + itemResult.error + ']' : ''}`,
-            synced_at:   new Date().toISOString(),
-          })
-
           stats.created++
 
         } else {
@@ -399,29 +392,6 @@ export default async function handler(req, res) {
               .from('crms_jobs')
               .update(updatePayload)
               .eq('crms_id', mapped.crms_id)
-
-            for (const change of changes) {
-              await supabase.from('change_log').insert({
-                crms_id:          mapped.crms_id,
-                job_ref:          mapped.crms_ref,
-                event_name:       mapped.event_name,
-                field_changed:    change.field,
-                old_value:        change.old_value,
-                new_value:        change.new_value,
-                affects_schedule: change.affects_schedule,
-                is_urgent:        change.is_urgent,
-                detected_at:      new Date().toISOString(),
-                source:           'current_rms_sync',
-              })
-              stats.changes_logged++
-            }
-
-            await supabase.from('sync_log').insert({
-              crms_id:    mapped.crms_id,
-              event_type: 'job_updated',
-              description: `${changes.length} change(s): ${changes.map(c => c.field).join(', ')}`,
-              synced_at:  new Date().toISOString(),
-            })
 
             stats.updated++
           } else {
