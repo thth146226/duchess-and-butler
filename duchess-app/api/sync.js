@@ -297,6 +297,8 @@ export default async function handler(req, res) {
     item_errors: [],
     errors: [],
   }
+  const changedJobIds = []
+  const changedJobsToSync = []
 
   try {
     // ── 1. Fetch ALL opportunities from Current RMS ──────────────────────────
@@ -357,10 +359,10 @@ export default async function handler(req, res) {
 
           if (insertErr) throw insertErr
 
-          // Sync items immediately for new jobs
-          const itemResult = await syncItems(supabase, opp.id, inserted?.id)
-          stats.items_synced += itemResult.count
-          if (itemResult.error) stats.item_errors.push({ crms_id: opp.id, error: itemResult.error })
+          if (inserted?.id) {
+            changedJobIds.push(inserted.id)
+            changedJobsToSync.push({ oppId: opp.id, jobId: inserted.id })
+          }
 
           stats.created++
 
@@ -410,6 +412,8 @@ export default async function handler(req, res) {
               .update(updatePayload)
               .eq('crms_id', mapped.crms_id)
 
+            changedJobIds.push(existing.id)
+            changedJobsToSync.push({ oppId: opp.id, jobId: existing.id })
             stats.updated++
           } else {
             stats.unchanged++
@@ -418,14 +422,19 @@ export default async function handler(req, res) {
             stats.unchanged++
           }
 
-          // ── Sync items for ALL existing jobs (upsert is idempotent) ──────
-          const itemResult = await syncItems(supabase, opp.id, existing.id)
-          stats.items_synced += itemResult.count
-          if (itemResult.error) stats.item_errors.push({ crms_id: opp.id, error: itemResult.error })
         }
 
       } catch (jobErr) {
         stats.errors.push({ crms_id: opp.id, error: jobErr.message })
+      }
+    }
+
+    // Only re-sync items for jobs that actually changed
+    if (changedJobIds.length > 0) {
+      for (const changed of changedJobsToSync) {
+        const itemResult = await syncItems(supabase, changed.oppId, changed.jobId)
+        stats.items_synced += itemResult.count
+        if (itemResult.error) stats.item_errors.push({ crms_id: changed.oppId, error: itemResult.error })
       }
     }
 
