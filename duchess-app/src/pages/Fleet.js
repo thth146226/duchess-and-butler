@@ -96,6 +96,8 @@ export default function Fleet() {
   const [toast, setToast] = useState(null)
   const [savingVehicle, setSavingVehicle] = useState(false)
   const [savingEvent, setSavingEvent] = useState(false)
+  const [editingEventId, setEditingEventId] = useState(null)
+  const [editEventForm, setEditEventForm] = useState({})
   const [showInactive, setShowInactive] = useState(false)
   const [newVehicleOpen, setNewVehicleOpen] = useState(false)
   const [newVehicle, setNewVehicle] = useState({
@@ -255,9 +257,10 @@ export default function Fleet() {
       return
     }
     showToast('Event logged')
+    // Reset form after save
     setEventForm({
       event_type: 'service',
-      event_date: new Date().toISOString().slice(0, 10),
+      event_date: '',
       odometer_miles: '',
       vendor: '',
       notes: '',
@@ -272,6 +275,25 @@ export default function Fleet() {
     if (error) showToast(error.message, 'error')
     else {
       showToast('Event removed')
+      fetchEvents(selectedId)
+    }
+  }
+
+  async function saveEditEvent() {
+    const { error } = await supabase
+      .from('fleet_events')
+      .update({
+        event_type: editEventForm.event_type,
+        event_date: editEventForm.event_date,
+        odometer_miles: editEventForm.odometer_miles ? Number(editEventForm.odometer_miles) : null,
+        vendor: editEventForm.vendor || null,
+        notes: editEventForm.notes || null,
+      })
+      .eq('id', editingEventId)
+    if (error) showToast(error.message, 'error')
+    else {
+      showToast('Event updated')
+      setEditingEventId(null)
       fetchEvents(selectedId)
     }
   }
@@ -587,19 +609,87 @@ export default function Fleet() {
                   {events.map(ev => {
                     const m = eventMeta(ev.event_type)
                     return (
-                      <div key={ev.id} style={{ ...S.eventRow, borderLeftColor: m.color }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
-                          <div>
-                            <span style={{ fontSize: '12px', fontWeight: '600', color: m.color, background: m.bg, padding: '2px 8px', borderRadius: '4px' }}>{m.label}</span>
-                            <span style={{ fontSize: '13px', marginLeft: '10px', fontWeight: '500' }}>{fmtDate(ev.event_date)}</span>
+                      editingEventId === ev.id ? (
+                        <div key={ev.id} style={{ padding: '12px 16px', background: '#F7F3EE', borderLeft: '3px solid #C4A882' }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
+                            <div>
+                              <label style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Type</label>
+                              <select value={editEventForm.event_type}
+                                onChange={e => setEditEventForm(f => ({ ...f, event_type: e.target.value }))}
+                                style={{ width: '100%', padding: '7px 10px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", marginTop: '4px' }}>
+                                {EVENT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                              </select>
+                            </div>
+                            <div>
+                              <label style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Date</label>
+                              <div style={{ marginTop: '4px' }}>
+                                <DateInputDMY
+                                  value={editEventForm.event_date}
+                                  onChange={val => setEditEventForm(f => ({ ...f, event_date: val }))}
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <label style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Odometer (miles)</label>
+                              <input type="number" value={editEventForm.odometer_miles || ''}
+                                onChange={e => setEditEventForm(f => ({ ...f, odometer_miles: e.target.value }))}
+                                style={{ width: '100%', padding: '7px 10px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", marginTop: '4px', boxSizing: 'border-box' }} />
+                            </div>
+                            <div>
+                              <label style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Vendor / garage</label>
+                              <input type="text" value={editEventForm.vendor || ''}
+                                onChange={e => setEditEventForm(f => ({ ...f, vendor: e.target.value }))}
+                                style={{ width: '100%', padding: '7px 10px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", marginTop: '4px', boxSizing: 'border-box' }} />
+                            </div>
+                            <div style={{ gridColumn: '1/-1' }}>
+                              <label style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Notes</label>
+                              <textarea value={editEventForm.notes || ''}
+                                onChange={e => setEditEventForm(f => ({ ...f, notes: e.target.value }))}
+                                rows={2}
+                                style={{ width: '100%', padding: '7px 10px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', fontFamily: "'DM Sans', sans-serif", marginTop: '4px', boxSizing: 'border-box', resize: 'vertical' }} />
+                            </div>
                           </div>
-                          <button type="button" onClick={() => deleteEvent(ev.id)} style={S.iconBtn}>Remove</button>
+                          <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                            <button onClick={() => setEditingEventId(null)}
+                              style={{ fontSize: '12px', padding: '6px 14px', borderRadius: '6px', border: '1px solid #DDD8CF', background: 'transparent', color: '#6B6860', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
+                              Cancel
+                            </button>
+                            <button onClick={saveEditEvent}
+                              style={{ fontSize: '12px', padding: '6px 14px', borderRadius: '6px', border: 'none', background: '#1C1C1E', color: '#fff', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
+                              Save
+                            </button>
+                          </div>
                         </div>
-                        <div style={{ fontSize: '12px', color: '#6B6860', marginTop: '6px' }}>
-                          {[ev.odometer_miles != null && `${ev.odometer_miles.toLocaleString()} mi`, ev.vendor].filter(Boolean).join(' · ')}
+                      ) : (
+                        <div key={ev.id} style={{ ...S.eventRow, borderLeftColor: m.color }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+                            <div>
+                              <span style={{ fontSize: '12px', fontWeight: '600', color: m.color, background: m.bg, padding: '2px 8px', borderRadius: '4px' }}>{m.label}</span>
+                              <span style={{ fontSize: '13px', marginLeft: '10px', fontWeight: '500' }}>{fmtDate(ev.event_date)}</span>
+                            </div>
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                              <button onClick={() => {
+                                setEditingEventId(ev.id)
+                                setEditEventForm({
+                                  event_type: ev.event_type,
+                                  event_date: ev.event_date,
+                                  odometer_miles: ev.odometer_miles || '',
+                                  vendor: ev.vendor || '',
+                                  notes: ev.notes || '',
+                                })
+                              }}
+                                style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '5px', border: '1px solid #DDD8CF', background: '#F7F3EE', color: '#6B6860', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
+                                Edit
+                              </button>
+                              <button type="button" onClick={() => deleteEvent(ev.id)} style={S.iconBtn}>Remove</button>
+                            </div>
+                          </div>
+                          <div style={{ fontSize: '12px', color: '#6B6860', marginTop: '6px' }}>
+                            {[ev.odometer_miles != null && `${ev.odometer_miles.toLocaleString()} mi`, ev.vendor].filter(Boolean).join(' · ')}
+                          </div>
+                          {ev.notes && <div style={{ fontSize: '13px', marginTop: '8px', lineHeight: 1.5 }}>{ev.notes}</div>}
                         </div>
-                        {ev.notes && <div style={{ fontSize: '13px', marginTop: '8px', lineHeight: 1.5 }}>{ev.notes}</div>}
-                      </div>
+                      )
                     )
                   })}
                 </div>
