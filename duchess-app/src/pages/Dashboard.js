@@ -35,6 +35,7 @@ export default function Dashboard({ onNavigate }) {
   const [jobs, setJobs]         = useState([])
   const [changes, setChanges]   = useState([])
   const [syncInfo, setSyncInfo] = useState(null)
+  const [fleetAlerts, setFleetAlerts] = useState([])
   const [loading, setLoading]   = useState(true)
   const [viewMonth, setViewMonth] = useState(new Date())
 
@@ -56,7 +57,73 @@ export default function Dashboard({ onNavigate }) {
     if (jobsData) setJobs(jobsData)
     if (changesData) setChanges(changesData)
     if (syncData) setSyncInfo(syncData)
+    await fetchFleetAlerts()
     setLoading(false)
+  }
+
+  async function fetchFleetAlerts() {
+    const today = new Date()
+    const in45Days = new Date()
+    in45Days.setDate(today.getDate() + 45)
+    const todayStr = today.toISOString().split('T')[0]
+    const in45Str = in45Days.toISOString().split('T')[0]
+
+    // Check MOT expiry
+    const { data: vans } = await supabase
+      .from('fleet_vans')
+      .select('id, registration, make, model, mot_expiry')
+      .eq('active', true)
+      .gte('mot_expiry', todayStr)
+      .lte('mot_expiry', in45Str)
+
+    const motAlerts = (vans || []).map(v => {
+      const daysLeft = Math.ceil(
+        (new Date(v.mot_expiry) - today) / (1000 * 60 * 60 * 24)
+      )
+      return {
+        type: 'MOT',
+        van: `${v.registration} · ${v.make} ${v.model}`,
+        daysLeft,
+        expiry: v.mot_expiry,
+        id: v.id,
+      }
+    })
+
+    // Check service — last service event per van
+    const { data: allVans } = await supabase
+      .from('fleet_vans')
+      .select('id, registration, make, model')
+      .eq('active', true)
+
+    const serviceAlerts = []
+    for (const van of (allVans || [])) {
+      const { data: lastService } = await supabase
+        .from('fleet_events')
+        .select('event_date')
+        .eq('van_id', van.id)
+        .eq('event_type', 'service')
+        .order('event_date', { ascending: false })
+        .limit(1)
+        .single()
+
+      if (lastService?.event_date) {
+        const nextService = new Date(lastService.event_date)
+        nextService.setMonth(nextService.getMonth() + 6)
+        const nextStr = nextService.toISOString().split('T')[0]
+        if (nextStr >= todayStr && nextStr <= in45Str) {
+          const daysLeft = Math.ceil((nextService - today) / (1000 * 60 * 60 * 24))
+          serviceAlerts.push({
+            type: 'Service',
+            van: `${van.registration} · ${van.make} ${van.model}`,
+            daysLeft,
+            expiry: nextStr,
+            id: van.id,
+          })
+        }
+      }
+    }
+
+    setFleetAlerts([...motAlerts, ...serviceAlerts].sort((a, b) => a.daysLeft - b.daysLeft))
   }
 
   const weekDays = getWeekDays()
@@ -117,6 +184,45 @@ export default function Dashboard({ onNavigate }) {
           </div>
         ))}
       </div>
+
+      {fleetAlerts.length > 0 && (
+        <div style={{ marginBottom: '24px' }}>
+          <div style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#92400E', marginBottom: '10px' }}>
+            Fleet Alerts
+          </div>
+          {fleetAlerts.map((alert, i) => (
+            <div key={i} style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '12px 16px',
+              marginBottom: '8px',
+              background: alert.daysLeft <= 14 ? '#FEF2F2' : '#FEF3C7',
+              border: `1px solid ${alert.daysLeft <= 14 ? '#FECACA' : '#FDE68A'}`,
+              borderLeft: `3px solid ${alert.daysLeft <= 14 ? '#DC2626' : '#D97706'}`,
+              borderRadius: '6px',
+            }}>
+              <div>
+                <div style={{ fontSize: '13px', fontWeight: '500', color: '#1C1C1E' }}>
+                  {alert.type === 'MOT' ? '🚗' : '🔧'} {alert.van}
+                </div>
+                <div style={{ fontSize: '12px', color: '#6B6860', marginTop: '2px' }}>
+                  {alert.type} {alert.type === 'MOT' ? 'expires' : 'due'} {alert.expiry}
+                </div>
+              </div>
+              <div style={{
+                fontSize: '13px',
+                fontWeight: '600',
+                color: alert.daysLeft <= 14 ? '#DC2626' : '#D97706',
+                flexShrink: 0,
+                marginLeft: '16px',
+              }}>
+                {alert.daysLeft}d
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Monthly view */}
       <div style={{ marginBottom: '24px' }}>
