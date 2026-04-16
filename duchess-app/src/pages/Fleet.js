@@ -98,6 +98,7 @@ export default function Fleet() {
   const [savingEvent, setSavingEvent] = useState(false)
   const [editingEventId, setEditingEventId] = useState(null)
   const [editEventForm, setEditEventForm] = useState({})
+  const [showEventForm, setShowEventForm] = useState(false)
   const [showInactive, setShowInactive] = useState(false)
   const [newVehicleOpen, setNewVehicleOpen] = useState(false)
   const [newVehicle, setNewVehicle] = useState({
@@ -237,8 +238,8 @@ export default function Fleet() {
     }
   }
 
-  async function addEvent(e) {
-    e.preventDefault()
+  async function handleAddEvent(e) {
+    if (e?.preventDefault) e.preventDefault()
     if (!selectedId) return
     setSavingEvent(true)
     const odo = eventForm.odometer_miles === '' ? null : parseInt(eventForm.odometer_miles, 10)
@@ -257,6 +258,7 @@ export default function Fleet() {
       return
     }
     showToast('Event logged')
+    setShowEventForm(false)
     // Reset form after save
     setEventForm({
       event_type: 'service',
@@ -559,46 +561,66 @@ export default function Fleet() {
 
               <div style={{ ...S.card, marginTop: '16px' }}>
                 <div style={S.cardTitle}>Log event</div>
-                <form onSubmit={addEvent} style={S.formGrid}>
-                  <label style={S.label}>
-                    Type
-                    <select
-                      style={S.input}
-                      value={eventForm.event_type}
-                      onChange={e => setEventForm(f => ({ ...f, event_type: e.target.value }))}
-                    >
-                      {EVENT_TYPES.map(et => (
-                        <option key={et.value} value={et.value}>{et.label}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label style={S.label}>
-                    Date
-                    <DateInputDMY
-                      value={eventForm.event_date}
-                      onChange={val => setEventForm(f => ({ ...f, event_date: val }))}
-                    />
-                  </label>
-                  <label style={S.label}>
-                    Odometer (miles)
-                    <input
-                      style={S.input}
-                      value={eventForm.odometer_miles}
-                      onChange={e => setEventForm(f => ({ ...f, odometer_miles: e.target.value }))}
-                      placeholder="Optional miles"
-                    />
-                  </label>
-                  <label style={S.label}>
-                    Vendor / garage
-                    <input style={S.input} value={eventForm.vendor} onChange={e => setEventForm(f => ({ ...f, vendor: e.target.value }))} />
-                  </label>
-                  <label style={{ ...S.label, gridColumn: '1 / -1' }}>
-                    Notes
-                    <textarea style={{ ...S.input, minHeight: '64px' }} value={eventForm.notes} onChange={e => setEventForm(f => ({ ...f, notes: e.target.value }))} />
-                  </label>
-                  <button type="submit" disabled={savingEvent} style={{ ...S.btnPrimary, opacity: savingEvent ? 0.7 : 1 }}>
-                    {savingEvent ? 'Saving…' : 'Add event'}
-                  </button>
+                <form>
+                  {showEventForm && (
+                    <div style={S.formGrid}>
+                      <label style={S.label}>
+                        Type
+                        <select
+                          style={S.input}
+                          value={eventForm.event_type}
+                          onChange={e => setEventForm(f => ({ ...f, event_type: e.target.value }))}
+                        >
+                          {EVENT_TYPES.map(et => (
+                            <option key={et.value} value={et.value}>{et.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label style={S.label}>
+                        Date
+                        <DateInputDMY
+                          value={eventForm.event_date}
+                          onChange={val => setEventForm(f => ({ ...f, event_date: val }))}
+                        />
+                      </label>
+                      <label style={S.label}>
+                        Odometer (miles)
+                        <input
+                          style={S.input}
+                          value={eventForm.odometer_miles}
+                          onChange={e => setEventForm(f => ({ ...f, odometer_miles: e.target.value }))}
+                          placeholder="Optional miles"
+                        />
+                      </label>
+                      <label style={S.label}>
+                        Vendor / garage
+                        <input style={S.input} value={eventForm.vendor} onChange={e => setEventForm(f => ({ ...f, vendor: e.target.value }))} />
+                      </label>
+                      <label style={{ ...S.label, gridColumn: '1 / -1' }}>
+                        Notes
+                        <textarea style={{ ...S.input, minHeight: '64px' }} value={eventForm.notes} onChange={e => setEventForm(f => ({ ...f, notes: e.target.value }))} />
+                      </label>
+                    </div>
+                  )}
+                  <div style={{ marginTop: showEventForm ? '12px' : '0' }}>
+                    {showEventForm ? (
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button type="button" onClick={() => setShowEventForm(false)}
+                          style={{ padding: '9px 18px', borderRadius: '6px', border: '1px solid #DDD8CF', background: 'transparent', color: '#6B6860', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", fontSize: '13px' }}>
+                          Cancel
+                        </button>
+                        <button type="button" onClick={handleAddEvent} disabled={savingEvent}
+                          style={{ padding: '9px 18px', borderRadius: '6px', border: 'none', background: '#1C1C1E', color: '#fff', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", fontSize: '13px', opacity: savingEvent ? 0.7 : 1 }}>
+                          {savingEvent ? 'Saving…' : 'Add event'}
+                        </button>
+                      </div>
+                    ) : (
+                      <button type="button" onClick={() => setShowEventForm(true)}
+                        style={{ padding: '9px 18px', borderRadius: '6px', border: '1px solid #DDD8CF', background: '#F7F3EE', color: '#1C1C1E', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", fontSize: '13px', fontWeight: '500' }}>
+                        + Log event
+                      </button>
+                    )}
+                  </div>
                 </form>
               </div>
 
