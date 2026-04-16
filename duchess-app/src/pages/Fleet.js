@@ -491,7 +491,7 @@ export default function Fleet() {
                     Tax expiry
                     <DateInputDMY
                       value={selected.tax_expiry || ''}
-                      onChange={val => updateVehicleField(selected.id, { tax_expiry: val || null })}
+                      onChange={val => updateVehicleField(selected.id, { road_tax_expiry: val || null })}
                     />
                   </label>
                   <label style={S.label}>
@@ -513,7 +513,7 @@ export default function Fleet() {
                         const raw = e.target.value.trim()
                         const v = raw === '' ? null : parseInt(raw, 10)
                         if (Number.isNaN(v) && raw !== '') return
-                        if (v !== selected.mileage_last_recorded) updateVehicleField(selected.id, { mileage_last_recorded: v })
+                        if (v !== selected.mileage_last_recorded) updateVehicleField(selected.id, { current_mileage: v })
                       }}
                     />
                   </label>
