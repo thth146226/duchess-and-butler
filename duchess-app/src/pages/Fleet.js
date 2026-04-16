@@ -156,7 +156,7 @@ export default function Fleet() {
     const { data, error } = await supabase
       .from('fleet_events')
       .select('*')
-      .eq('vehicle_id', vehicleId)
+      .eq('van_id', vehicleId)
       .order('event_date', { ascending: false })
     if (error) {
       showToast(error.message, 'error')
@@ -241,7 +241,7 @@ export default function Fleet() {
     setSavingEvent(true)
     const odo = eventForm.odometer_miles === '' ? null : parseInt(eventForm.odometer_miles, 10)
     const { error } = await supabase.from('fleet_events').insert({
-      vehicle_id: selectedId,
+      van_id: selectedId,
       event_type: eventForm.event_type,
       event_date: eventForm.event_date,
       odometer_miles: Number.isFinite(odo) ? odo : null,
