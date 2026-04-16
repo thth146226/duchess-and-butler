@@ -19,7 +19,62 @@ function eventMeta(value) {
 
 function fmtDate(d) {
   if (!d) return '—'
-  return new Date(d + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+  return new Date(d + 'T12:00:00').toLocaleDateString('en-GB', {
+    day: '2-digit', month: '2-digit', year: 'numeric'
+  })
+}
+
+function DateInputDMY({ value, onChange }) {
+  const [day, setDay] = useState('')
+  const [month, setMonth] = useState('')
+  const [year, setYear] = useState('')
+
+  useEffect(() => {
+    if (value) {
+      const [y, m, d] = value.split('-')
+      setYear(y || '')
+      setMonth(m || '')
+      setDay(d || '')
+    } else {
+      setYear('')
+      setMonth('')
+      setDay('')
+    }
+  }, [value])
+
+  function update(d, m, y) {
+    if (d && m && y && y.length === 4) {
+      onChange(`${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`)
+    }
+  }
+
+  const inputStyle = {
+    padding: '9px 8px',
+    border: '1px solid #DDD8CF',
+    borderRadius: '6px',
+    fontSize: '13px',
+    fontFamily: "'DM Sans', sans-serif",
+    textAlign: 'center',
+    boxSizing: 'border-box',
+    width: '100%',
+  }
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '60px 60px 80px', gap: '6px' }}>
+      <input type="number" min="1" max="31" placeholder="DD"
+        value={day}
+        onChange={e => { setDay(e.target.value); update(e.target.value, month, year) }}
+        style={inputStyle} />
+      <input type="number" min="1" max="12" placeholder="MM"
+        value={month}
+        onChange={e => { setMonth(e.target.value); update(day, e.target.value, year) }}
+        style={inputStyle} />
+      <input type="number" min="2020" max="2035" placeholder="YYYY"
+        value={year}
+        onChange={e => { setYear(e.target.value); update(day, month, e.target.value) }}
+        style={inputStyle} />
+    </div>
+  )
 }
 
 function daysUntil(dateStr) {
@@ -431,29 +486,23 @@ export default function Fleet() {
                 <div style={{ ...S.formGrid, marginTop: '18px' }}>
                   <label style={S.label}>
                     MOT expiry
-                    <input
-                      type="date"
-                      style={S.input}
+                    <DateInputDMY
                       value={selected.mot_expiry || ''}
-                      onChange={e => updateVehicleField(selected.id, { mot_expiry: e.target.value || null })}
+                      onChange={val => updateVehicleField(selected.id, { mot_expiry: val || null })}
                     />
                   </label>
                   <label style={S.label}>
                     Tax expiry
-                    <input
-                      type="date"
-                      style={S.input}
+                    <DateInputDMY
                       value={selected.tax_expiry || ''}
-                      onChange={e => updateVehicleField(selected.id, { tax_expiry: e.target.value || null })}
+                      onChange={val => updateVehicleField(selected.id, { tax_expiry: val || null })}
                     />
                   </label>
                   <label style={S.label}>
                     Insurance expiry
-                    <input
-                      type="date"
-                      style={S.input}
+                    <DateInputDMY
                       value={selected.insurance_expiry || ''}
-                      onChange={e => updateVehicleField(selected.id, { insurance_expiry: e.target.value || null })}
+                      onChange={val => updateVehicleField(selected.id, { insurance_expiry: val || null })}
                     />
                   </label>
                   <label style={S.label}>
@@ -506,12 +555,9 @@ export default function Fleet() {
                   </label>
                   <label style={S.label}>
                     Date
-                    <input
-                      type="date"
-                      style={S.input}
-                      required
+                    <DateInputDMY
                       value={eventForm.event_date}
-                      onChange={e => setEventForm(f => ({ ...f, event_date: e.target.value }))}
+                      onChange={val => setEventForm(f => ({ ...f, event_date: val }))}
                     />
                   </label>
                   <label style={S.label}>
