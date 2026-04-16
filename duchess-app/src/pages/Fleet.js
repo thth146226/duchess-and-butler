@@ -109,7 +109,6 @@ export default function Fleet() {
     event_type: 'service',
     event_date: new Date().toISOString().slice(0, 10),
     odometer_km: '',
-    cost_gbp: '',
     vendor: '',
     notes: '',
   })
@@ -241,13 +240,11 @@ export default function Fleet() {
     if (!selectedId) return
     setSavingEvent(true)
     const odo = eventForm.odometer_km === '' ? null : parseInt(eventForm.odometer_km, 10)
-    const cost = eventForm.cost_gbp === '' ? null : parseFloat(eventForm.cost_gbp)
     const { error } = await supabase.from('fleet_events').insert({
       vehicle_id: selectedId,
       event_type: eventForm.event_type,
       event_date: eventForm.event_date,
       odometer_km: Number.isFinite(odo) ? odo : null,
-      cost_gbp: Number.isFinite(cost) ? cost : null,
       vendor: eventForm.vendor.trim() || null,
       notes: eventForm.notes.trim() || null,
       created_by: profile?.id || null,
@@ -262,7 +259,6 @@ export default function Fleet() {
       event_type: 'service',
       event_date: new Date().toISOString().slice(0, 10),
       odometer_km: '',
-      cost_gbp: '',
       vendor: '',
       notes: '',
     })
@@ -506,12 +502,13 @@ export default function Fleet() {
                     />
                   </label>
                   <label style={S.label}>
-                    Last recorded mileage
+                    Current Mileage (miles)
                     <input
                       type="number"
                       style={S.input}
                       key={`mileage-${selected.id}`}
                       defaultValue={selected.mileage_last_recorded ?? ''}
+                      placeholder="e.g. 45000 miles"
                       onBlur={e => {
                         const raw = e.target.value.trim()
                         const v = raw === '' ? null : parseInt(raw, 10)
@@ -561,21 +558,12 @@ export default function Fleet() {
                     />
                   </label>
                   <label style={S.label}>
-                    Odometer (km)
+                    Odometer (miles)
                     <input
                       style={S.input}
                       value={eventForm.odometer_km}
                       onChange={e => setEventForm(f => ({ ...f, odometer_km: e.target.value }))}
-                      placeholder="Optional"
-                    />
-                  </label>
-                  <label style={S.label}>
-                    Cost (£)
-                    <input
-                      style={S.input}
-                      value={eventForm.cost_gbp}
-                      onChange={e => setEventForm(f => ({ ...f, cost_gbp: e.target.value }))}
-                      placeholder="Optional"
+                      placeholder="Optional miles"
                     />
                   </label>
                   <label style={S.label}>
@@ -608,7 +596,7 @@ export default function Fleet() {
                           <button type="button" onClick={() => deleteEvent(ev.id)} style={S.iconBtn}>Remove</button>
                         </div>
                         <div style={{ fontSize: '12px', color: '#6B6860', marginTop: '6px' }}>
-                          {[ev.odometer_km != null && `${ev.odometer_km.toLocaleString()} km`, ev.cost_gbp != null && `£${Number(ev.cost_gbp).toFixed(2)}`, ev.vendor].filter(Boolean).join(' · ')}
+                          {[ev.odometer_km != null && `${ev.odometer_km.toLocaleString()} mi`, ev.vendor].filter(Boolean).join(' · ')}
                         </div>
                         {ev.notes && <div style={{ fontSize: '13px', marginTop: '8px', lineHeight: 1.5 }}>{ev.notes}</div>}
                       </div>
