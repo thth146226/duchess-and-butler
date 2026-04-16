@@ -108,7 +108,7 @@ export default function Fleet() {
   const [eventForm, setEventForm] = useState({
     event_type: 'service',
     event_date: new Date().toISOString().slice(0, 10),
-    odometer_km: '',
+    odometer_miles: '',
     vendor: '',
     notes: '',
   })
@@ -239,12 +239,12 @@ export default function Fleet() {
     e.preventDefault()
     if (!selectedId) return
     setSavingEvent(true)
-    const odo = eventForm.odometer_km === '' ? null : parseInt(eventForm.odometer_km, 10)
+    const odo = eventForm.odometer_miles === '' ? null : parseInt(eventForm.odometer_miles, 10)
     const { error } = await supabase.from('fleet_events').insert({
       vehicle_id: selectedId,
       event_type: eventForm.event_type,
       event_date: eventForm.event_date,
-      odometer_km: Number.isFinite(odo) ? odo : null,
+      odometer_miles: Number.isFinite(odo) ? odo : null,
       vendor: eventForm.vendor.trim() || null,
       notes: eventForm.notes.trim() || null,
       created_by: profile?.id || null,
@@ -258,7 +258,7 @@ export default function Fleet() {
     setEventForm({
       event_type: 'service',
       event_date: new Date().toISOString().slice(0, 10),
-      odometer_km: '',
+      odometer_miles: '',
       vendor: '',
       notes: '',
     })
@@ -561,8 +561,8 @@ export default function Fleet() {
                     Odometer (miles)
                     <input
                       style={S.input}
-                      value={eventForm.odometer_km}
-                      onChange={e => setEventForm(f => ({ ...f, odometer_km: e.target.value }))}
+                      value={eventForm.odometer_miles}
+                      onChange={e => setEventForm(f => ({ ...f, odometer_miles: e.target.value }))}
                       placeholder="Optional miles"
                     />
                   </label>
@@ -596,7 +596,7 @@ export default function Fleet() {
                           <button type="button" onClick={() => deleteEvent(ev.id)} style={S.iconBtn}>Remove</button>
                         </div>
                         <div style={{ fontSize: '12px', color: '#6B6860', marginTop: '6px' }}>
-                          {[ev.odometer_km != null && `${ev.odometer_km.toLocaleString()} mi`, ev.vendor].filter(Boolean).join(' · ')}
+                          {[ev.odometer_miles != null && `${ev.odometer_miles.toLocaleString()} mi`, ev.vendor].filter(Boolean).join(' · ')}
                         </div>
                         {ev.notes && <div style={{ fontSize: '13px', marginTop: '8px', lineHeight: 1.5 }}>{ev.notes}</div>}
                       </div>
