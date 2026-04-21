@@ -8,6 +8,7 @@ import EvidenceUpload from '../components/EvidenceUpload'
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
 const today    = new Date().toLocaleDateString('en-CA')
 const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('en-CA')
+const SELF_COLLECTION_NAME = 'self collection'
 
 function fmt(dateStr) {
   if (!dateStr) return '—'
@@ -22,6 +23,37 @@ function getWeekRange(offset = 0) {
   const sun = new Date(mon)
   sun.setDate(mon.getDate() + 6)
   return { from: mon.toLocaleDateString('en-CA'), to: sun.toLocaleDateString('en-CA') }
+}
+
+function isSelfCollectionName(name) {
+  return (name || '').toLowerCase().trim() === SELF_COLLECTION_NAME
+}
+
+function isSelfCollectionRun(run) {
+  return isSelfCollectionName(run?.job?.assigned_driver_name) || isSelfCollectionName(run?.driverName)
+}
+
+function getRunTone(runType, isSelfCollection = false) {
+  if (isSelfCollection) {
+    return {
+      badgeLabel: 'SC',
+      badgeBg: '#EEE5F9',
+      badgeText: '#6B2FB8',
+      cardBg: '#F5EFFB',
+      cardBorder: '#DDC8F0',
+      cardText: '#6B2FB8',
+    }
+  }
+  return runType === 'DEL'
+    ? { badgeLabel: 'DEL', badgeBg: '#EF4444', badgeText: '#FFFFFF', cardBg: '#FEF2F2', cardBorder: '#EF4444', cardText: '#991B1B' }
+    : { badgeLabel: 'COL', badgeBg: '#22C55E', badgeText: '#FFFFFF', cardBg: '#F0FDF4', cardBorder: '#22C55E', cardText: '#166534' }
+}
+
+function getDriverPillStyle(name, color, fallbackColor) {
+  if (isSelfCollectionName(name)) {
+    return { background: '#6B2FB8', color: '#FFFFFF' }
+  }
+  return { background: color || fallbackColor, color: 'white' }
 }
 
 // ── Build runs from jobs (include driver fields) ───────────────────────────────
@@ -720,12 +752,15 @@ export default function Schedule() {
             {/* Runs list */}
             <div>
               {reorderRuns.map((run, index) => (
+                (() => {
+                  const tones = getRunTone(run.runType, isSelfCollectionRun(run))
+                  return (
                 <div key={run.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 16px', borderBottom: '0.5px solid #EDE8E0' }}>
                   <div style={{ width: '20px', height: '20px', borderRadius: '50%', background: '#F7F3EE', border: '1px solid #DDD8CF', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: '600', color: '#6B6860', flexShrink: 0 }}>
                     {index + 1}
                   </div>
-                  <span style={{ background: run.runType === 'DEL' ? '#FCEBEB' : '#EAF3DE', color: run.runType === 'DEL' ? '#A32D2D' : '#3B6D11', fontSize: '10px', fontWeight: '700', padding: '2px 7px', borderRadius: '3px', flexShrink: 0 }}>
-                    {run.runType}
+                  <span style={{ background: tones.badgeBg, color: tones.badgeText, fontSize: '10px', fontWeight: '700', padding: '2px 7px', borderRadius: '3px', flexShrink: 0 }}>
+                    {tones.badgeLabel}
                   </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: '12px', fontWeight: '500', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{run.event || run.client}</div>
@@ -744,6 +779,8 @@ export default function Schedule() {
                     >▼</button>
                   </div>
                 </div>
+                  )
+                })()
               ))}
             </div>
 
@@ -873,8 +910,7 @@ function ListView({
                     </thead>
                     <tbody>
                       {dateRuns.map((run, index) => {
-                        const isDel = run.runType === 'DEL'
-                        const badgeBg = isDel ? '#EF4444' : '#22C55E'
+                        const tones = getRunTone(run.runType, isSelfCollectionRun(run))
                         return (
                           <tr key={run.id} style={{ cursor: 'pointer' }}>
                             <td style={S.td}>
@@ -915,8 +951,8 @@ function ListView({
                               </div>
                             </td>
                             <td style={S.td} onClick={() => setSelectedRun(run)}>
-                              <span style={{ background: badgeBg, color: 'white', fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '3px' }}>
-                                {run.runType}
+                              <span style={{ background: tones.badgeBg, color: tones.badgeText, fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '3px' }}>
+                                {tones.badgeLabel}
                               </span>
                               {run.isManualOverride && (
                                 <span style={{ background: '#EFF6FF', color: '#1D4ED8', fontSize: '9px', fontWeight: '600', padding: '1px 5px', borderRadius: '3px', marginLeft: '4px' }}>
@@ -937,12 +973,12 @@ function ListView({
                             <td style={S.td} onClick={() => setSelectedRun(run)}>
                               <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
                                 {run.driverName && (
-                                  <span style={{ background: run.driverColour || '#3D5A73', color: 'white', fontSize: '11px', fontWeight: '600', padding: '3px 10px', borderRadius: '10px' }}>
+                                  <span style={{ ...getDriverPillStyle(run.driverName, run.driverColour, '#3D5A73'), fontSize: '11px', fontWeight: '600', padding: '3px 10px', borderRadius: '10px' }}>
                                     {run.driverName}
                                   </span>
                                 )}
                                 {run.driverName2 && (
-                                  <span style={{ background: run.driverColour2 || '#5F5E5A', color: 'white', fontSize: '11px', fontWeight: '600', padding: '3px 10px', borderRadius: '10px' }}>
+                                  <span style={{ ...getDriverPillStyle(run.driverName2, run.driverColour2, '#5F5E5A'), fontSize: '11px', fontWeight: '600', padding: '3px 10px', borderRadius: '10px' }}>
                                     {run.driverName2}
                                   </span>
                                 )}
@@ -1005,14 +1041,12 @@ function DateGroup({ date, runs, onSelect, today, tomorrow, jobNotes }) {
 }
 
 function RunRow({ run, onSelect, jobNotes }) {
-  const colors = run.runType === 'DEL'
-    ? { badge: '#EF4444' }
-    : { badge: '#22C55E' }
+  const tones = getRunTone(run.runType, isSelfCollectionRun(run))
   return (
     <tr style={{ background: run.isUrgent ? '#FFF5F5' : run.missingTime ? '#FFFBEB' : 'white', cursor: 'pointer' }}
       onClick={() => onSelect(run)}>
       <td style={S.td}>
-        <span style={{ background: colors.badge, color: 'white', fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '3px' }}>{run.runType}</span>
+        <span style={{ background: tones.badgeBg, color: tones.badgeText, fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '3px' }}>{tones.badgeLabel}</span>
         {run.isManualOverride && (
           <span style={{ background: '#EFF6FF', color: '#1D4ED8', fontSize: '9px', fontWeight: '600', padding: '1px 5px', borderRadius: '3px', marginLeft: '4px' }}>
             MANUAL
@@ -1052,8 +1086,7 @@ function RunRow({ run, onSelect, jobNotes }) {
         <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
           {run.driverName && (
             <span style={{
-              background: run.driverColour || '#3D5A73',
-              color: 'white',
+              ...getDriverPillStyle(run.driverName, run.driverColour, '#3D5A73'),
               fontSize: '11px',
               fontWeight: '600',
               padding: '3px 10px',
@@ -1062,8 +1095,7 @@ function RunRow({ run, onSelect, jobNotes }) {
           )}
           {run.driverName2 && (
             <span style={{
-              background: run.driverColour2 || '#5F5E5A',
-              color: 'white',
+              ...getDriverPillStyle(run.driverName2, run.driverColour2, '#5F5E5A'),
               fontSize: '11px',
               fontWeight: '600',
               padding: '3px 10px',
@@ -1138,11 +1170,11 @@ function GroupedByDriverView({ runs, drivers, onSelect }) {
                 </thead>
                 <tbody>
                   {driverRuns.map((run, i) => {
-                    const colors = run.runType === 'DEL' ? { badge: '#EF4444' } : { badge: '#22C55E' }
+                    const tones = getRunTone(run.runType, isSelfCollectionRun(run))
                     return (
                       <tr key={i} style={{ cursor: 'pointer' }} onClick={() => onSelect(run)}>
                         <td style={S.td}>
-                          <span style={{ background: colors.badge, color: 'white', fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '3px' }}>{run.runType}</span>
+                          <span style={{ background: tones.badgeBg, color: tones.badgeText, fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '3px' }}>{tones.badgeLabel}</span>
                           {run.isManualOverride && (
                             <span style={{ background: '#EFF6FF', color: '#1D4ED8', fontSize: '9px', fontWeight: '600', padding: '1px 5px', borderRadius: '3px', marginLeft: '4px' }}>
                               MANUAL
@@ -1279,21 +1311,19 @@ function DispatchColumn({ title, colour, runs, drivers, onSelect, onAssign, driv
 }
 
 function DispatchCard({ run, drivers, onSelect, onAssign, isSaving }) {
-  const colors = run.runType === 'DEL'
-    ? { bg: '#FEF2F2', border: '#EF4444', badge: '#EF4444', text: '#991B1B' }
-    : { bg: '#F0FDF4', border: '#22C55E', badge: '#22C55E', text: '#166534' }
+  const colors = getRunTone(run.runType, isSelfCollectionRun(run))
 
   return (
     <div style={{
-      background: colors.bg,
-      border: `1.5px solid ${isSaving ? '#B8965A' : colors.border}`,
+      background: colors.cardBg,
+      border: `1.5px solid ${isSaving ? '#B8965A' : colors.cardBorder}`,
       borderRadius: '6px', padding: '12px', marginBottom: '8px',
       opacity: isSaving ? 0.75 : 1,
       transition: 'all 0.15s',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
-        <span style={{ background: colors.badge, color: 'white', fontSize: '10px', fontWeight: '700', padding: '2px 6px', borderRadius: '3px' }}>{run.runType}</span>
-        {run.runTime && <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '16px', fontWeight: '600', color: colors.text }}>{run.runTime.substring(0, 5)}</span>}
+        <span style={{ background: colors.badgeBg, color: colors.badgeText, fontSize: '10px', fontWeight: '700', padding: '2px 6px', borderRadius: '3px' }}>{colors.badgeLabel}</span>
+        {run.runTime && <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '16px', fontWeight: '600', color: colors.cardText }}>{run.runTime.substring(0, 5)}</span>}
         {run.isUrgent && <span style={{ background: '#EF4444', color: 'white', fontSize: '9px', fontWeight: '700', padding: '1px 5px', borderRadius: '2px' }}>URGENT</span>}
         {isSaving && <span style={{ fontSize: '10px', color: '#B8965A', marginLeft: 'auto' }}>Saving…</span>}
       </div>
@@ -1306,7 +1336,7 @@ function DispatchCard({ run, drivers, onSelect, onAssign, isSaving }) {
       {/* Current driver badge */}
       {run.driverName && (
         <div style={{ marginBottom: '8px' }}>
-          <span style={{ background: run.driverColour || '#3D5A73', color: 'white', padding: '3px 10px', borderRadius: '10px', fontSize: '11px', fontWeight: '600' }}>
+          <span style={{ ...getDriverPillStyle(run.driverName, run.driverColour, '#3D5A73'), padding: '3px 10px', borderRadius: '10px', fontSize: '11px', fontWeight: '600' }}>
             🚚 {run.driverName}
           </span>
         </div>
@@ -1493,17 +1523,15 @@ function RunDetailPanel({
 }) {
   const [tab, setTab] = useState('details')
   useEffect(() => { setTab('details') }, [run.id])
-  const colors = run.runType === 'DEL'
-    ? { border: '#EF4444', badge: '#EF4444', bg: '#FEF2F2' }
-    : { border: '#22C55E', badge: '#22C55E', bg: '#F0FDF4' }
+  const colors = getRunTone(run.runType, isSelfCollectionRun(run))
 
   return (
     <div style={S.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
       <div style={S.panel}>
-        <div style={{ ...S.panelHeader, borderBottom: `3px solid ${colors.border}` }}>
+        <div style={{ ...S.panelHeader, borderBottom: `3px solid ${colors.cardBorder}` }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px', flexWrap: 'wrap' }}>
-              <span style={{ background: colors.badge, color: 'white', fontSize: '12px', fontWeight: '700', padding: '4px 10px', borderRadius: '4px' }}>{run.runType}</span>
+              <span style={{ background: colors.badgeBg, color: colors.badgeText, fontSize: '12px', fontWeight: '700', padding: '4px 10px', borderRadius: '4px' }}>{colors.badgeLabel}</span>
               <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '20px', fontWeight: '600' }}>{run.event || run.client}</span>
               {run.isUrgent && <span style={{ background: '#EF4444', color: 'white', fontSize: '10px', fontWeight: '700', padding: '2px 8px', borderRadius: '3px' }}>⚠ URGENT</span>}
             </div>
@@ -1618,12 +1646,12 @@ function RunDetailPanel({
           {(run.driverName || run.driverName2) && (
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px' }}>
               {run.driverName && (
-                <span style={{ background: run.driverColour || '#3D5A73', color: 'white', padding: '6px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: '600' }}>
+                <span style={{ ...getDriverPillStyle(run.driverName, run.driverColour, '#3D5A73'), padding: '6px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: '600' }}>
                   🚚 {run.driverName}
                 </span>
               )}
               {run.driverName2 && (
-                <span style={{ background: run.driverColour2 || '#5F5E5A', color: 'white', padding: '6px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: '600' }}>
+                <span style={{ ...getDriverPillStyle(run.driverName2, run.driverColour2, '#5F5E5A'), padding: '6px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: '600' }}>
                   🚚 {run.driverName2}
                 </span>
               )}
@@ -2042,10 +2070,10 @@ function MonthView({ allRuns, monthDate, setMonthDate, onSelect, dragRun, dragOv
               <thead><tr>{['D/C','Date','Time','Event / Client','Venue','Driver','Status',''].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
               <tbody>
                 {monthRuns.map((run, i) => {
-                  const colors = run.runType === 'DEL' ? { badge: '#EF4444' } : { badge: '#22C55E' }
+                  const tones = getRunTone(run.runType, isSelfCollectionRun(run))
                   return (
                     <tr key={i} style={{ cursor: 'pointer' }} onClick={() => onSelect(run)}>
-                      <td style={S.td}><span style={{ background: colors.badge, color: 'white', fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '3px' }}>{run.runType}</span></td>
+                      <td style={S.td}><span style={{ background: tones.badgeBg, color: tones.badgeText, fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '3px' }}>{tones.badgeLabel}</span></td>
                       <td style={S.td}>{fmt(run.runDate)}</td>
                       <td style={{ ...S.td, fontFamily: "'Cormorant Garamond', serif", fontSize: '15px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
@@ -2077,8 +2105,7 @@ function MonthView({ allRuns, monthDate, setMonthDate, onSelect, dragRun, dragOv
                         <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
                           {run.driverName && (
                             <span style={{
-                              background: run.driverColour || '#3D5A73',
-                              color: 'white',
+                              ...getDriverPillStyle(run.driverName, run.driverColour, '#3D5A73'),
                               fontSize: '11px',
                               fontWeight: '600',
                               padding: '3px 10px',
@@ -2087,8 +2114,7 @@ function MonthView({ allRuns, monthDate, setMonthDate, onSelect, dragRun, dragOv
                           )}
                           {run.driverName2 && (
                             <span style={{
-                              background: run.driverColour2 || '#5F5E5A',
-                              color: 'white',
+                              ...getDriverPillStyle(run.driverName2, run.driverColour2, '#5F5E5A'),
                               fontSize: '11px',
                               fontWeight: '600',
                               padding: '3px 10px',
@@ -2134,6 +2160,7 @@ function YearView({ allRuns, yearDate, setYearDate, setMonthDate, setView }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
         {MONTHS.map((monthName, monthIdx) => {
           const monthRuns = allRuns.filter(r => { const d = new Date(r.runDate + 'T12:00:00'); return d.getFullYear() === yearDate.getFullYear() && d.getMonth() === monthIdx })
+          const scCount = monthRuns.filter(r => isSelfCollectionRun(r)).length
           const delCount = monthRuns.filter(r => r.runType === 'DEL').length
           const colCount = monthRuns.filter(r => r.runType === 'COL').length
           const isCurrentMonth = new Date().getFullYear() === yearDate.getFullYear() && new Date().getMonth() === monthIdx
@@ -2149,6 +2176,7 @@ function YearView({ allRuns, yearDate, setYearDate, setMonthDate, setView }) {
                 onClick={() => { setMonthDate(new Date(yearDate.getFullYear(), monthIdx)); setView('month') }}>
                 <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '16px', fontWeight: '600' }}>{monthName}</span>
                 <div style={{ display: 'flex', gap: '6px' }}>
+                  {scCount > 0 && <span style={{ background: '#EEE5F9', color: '#6B2FB8', fontSize: '10px', fontWeight: '700', padding: '2px 6px', borderRadius: '3px' }}>{scCount} SC</span>}
                   {delCount > 0 && <span style={{ background: '#EF4444', color: 'white', fontSize: '10px', fontWeight: '700', padding: '2px 6px', borderRadius: '3px' }}>{delCount} DEL</span>}
                   {colCount > 0 && <span style={{ background: '#22C55E', color: 'white', fontSize: '10px', fontWeight: '700', padding: '2px 6px', borderRadius: '3px' }}>{colCount} COL</span>}
                 </div>
@@ -2162,6 +2190,7 @@ function YearView({ allRuns, yearDate, setYearDate, setMonthDate, setView }) {
                     if (!date) return <div key={i} />
                     const ds = date.toLocaleDateString('en-CA')
                     const dayRuns = allRuns.filter(r => r.runDate === ds)
+                    const hasSc = dayRuns.some(r => isSelfCollectionRun(r))
                     const hasDel = dayRuns.some(r => r.runType === 'DEL')
                     const hasCol = dayRuns.some(r => r.runType === 'COL')
                     const isToday = ds === today
@@ -2170,6 +2199,7 @@ function YearView({ allRuns, yearDate, setYearDate, setMonthDate, setView }) {
                         onClick={() => dayRuns.length > 0 && (setMonthDate(new Date(yearDate.getFullYear(), monthIdx)), setView('month'))}>
                         <div style={{ fontSize: '10px', color: isToday ? '#B8965A' : '#1C1C1E', fontWeight: isToday ? '700' : '400' }}>{date.getDate()}</div>
                         <div style={{ display: 'flex', justifyContent: 'center', gap: '1px', marginTop: '1px' }}>
+                          {hasSc && <div style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#6B2FB8' }} />}
                           {hasDel && <div style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#EF4444' }} />}
                           {hasCol && <div style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#22C55E' }} />}
                         </div>
@@ -2182,7 +2212,12 @@ function YearView({ allRuns, yearDate, setYearDate, setMonthDate, setView }) {
                 <div style={{ borderTop: '1px solid #EDE8E0', padding: '8px' }}>
                   {monthRuns.slice(0, 3).map((run, j) => (
                     <div key={j} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '3px 0', fontSize: '11px' }}>
-                      <span style={{ background: run.runType === 'DEL' ? '#EF4444' : '#22C55E', color: 'white', fontSize: '9px', fontWeight: '700', padding: '1px 5px', borderRadius: '2px' }}>{run.runType}</span>
+                      {(() => {
+                        const tones = getRunTone(run.runType, isSelfCollectionRun(run))
+                        return (
+                          <span style={{ background: tones.badgeBg, color: tones.badgeText, fontSize: '9px', fontWeight: '700', padding: '1px 5px', borderRadius: '2px' }}>{tones.badgeLabel}</span>
+                        )
+                      })()}
                       <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{run.event || run.client}</span>
                       <span style={{ color: '#9CA3AF', flexShrink: 0 }}>{new Date(run.runDate + 'T12:00:00').getDate()}</span>
                     </div>
@@ -2200,9 +2235,7 @@ function YearView({ allRuns, yearDate, setYearDate, setMonthDate, setView }) {
 
 // ── MINI RUN CARD ─────────────────────────────────────────────────────────────
 function MiniRunCard({ run, onClick, compact = false, draggable = false, onDragStart, onDragEnd }) {
-  const colors = run.runType === 'DEL'
-    ? { bg: '#FEF2F2', border: '#EF4444', text: '#991B1B', badge: '#EF4444' }
-    : { bg: '#F0FDF4', border: '#22C55E', text: '#166534', badge: '#22C55E' }
+  const colors = getRunTone(run.runType, isSelfCollectionRun(run))
   const dragStyle = draggable ? { cursor: 'grab', userSelect: 'none' } : { cursor: 'pointer' }
   if (compact) return (
     <div
@@ -2210,11 +2243,11 @@ function MiniRunCard({ run, onClick, compact = false, draggable = false, onDragS
       onDragStart={draggable ? onDragStart : undefined}
       onDragEnd={draggable ? onDragEnd : undefined}
       onClick={onClick}
-      style={{ background: colors.bg, border: `1.5px solid ${colors.border}`, borderRadius: '3px', padding: '2px 5px', marginBottom: '2px', fontSize: '10px', ...dragStyle }}
+      style={{ background: colors.cardBg, border: `1.5px solid ${colors.cardBorder}`, borderRadius: '3px', padding: '2px 5px', marginBottom: '2px', fontSize: '10px', ...dragStyle }}
     >
       <div>
-        <span style={{ background: colors.badge, color: 'white', fontSize: '8px', fontWeight: '700', padding: '1px 3px', borderRadius: '2px', marginRight: '3px' }}>{run.runType}</span>
-        <span style={{ color: colors.text, fontWeight: '600' }}>{run.event || run.client}</span>
+        <span style={{ background: colors.badgeBg, color: colors.badgeText, fontSize: '8px', fontWeight: '700', padding: '1px 3px', borderRadius: '2px', marginRight: '3px' }}>{colors.badgeLabel}</span>
+        <span style={{ color: colors.cardText, fontWeight: '600' }}>{run.event || run.client}</span>
       </div>
       {(run.runTime || run.deliveryEndTime || run.collectionEndTime || run.isTimed) && (
         <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap', marginTop: '3px' }}>
@@ -2243,8 +2276,7 @@ function MiniRunCard({ run, onClick, compact = false, draggable = false, onDragS
       {(run.driverName || run.driverName2) && (
         <div style={{ marginTop: '4px' }}>
           <span style={{
-            background: run.driverColour || '#3D5A73',
-            color: 'white',
+            ...getDriverPillStyle(run.driverName, run.driverColour, '#3D5A73'),
             fontSize: '9px',
             fontWeight: '600',
             padding: '1px 6px',
@@ -2263,19 +2295,18 @@ function MiniRunCard({ run, onClick, compact = false, draggable = false, onDragS
       onDragStart={draggable ? onDragStart : undefined}
       onDragEnd={draggable ? onDragEnd : undefined}
       onClick={onClick}
-      style={{ background: colors.bg, border: `1.5px solid ${colors.border}`, borderRadius: '5px', padding: '7px 9px', marginBottom: '5px', ...dragStyle }}
+      style={{ background: colors.cardBg, border: `1.5px solid ${colors.cardBorder}`, borderRadius: '5px', padding: '7px 9px', marginBottom: '5px', ...dragStyle }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '3px' }}>
-        <span style={{ background: colors.badge, color: 'white', fontSize: '9px', fontWeight: '700', padding: '2px 5px', borderRadius: '2px' }}>{run.runType}</span>
-        <span style={{ fontSize: '11.5px', fontWeight: '600', color: colors.text, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{run.event || run.client}</span>
+        <span style={{ background: colors.badgeBg, color: colors.badgeText, fontSize: '9px', fontWeight: '700', padding: '2px 5px', borderRadius: '2px' }}>{colors.badgeLabel}</span>
+        <span style={{ fontSize: '11.5px', fontWeight: '600', color: colors.cardText, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{run.event || run.client}</span>
       </div>
       {run.runTime && <div style={{ fontSize: '10px', color: '#6B6860' }}>🕐 {run.runTime.substring(0, 5)}</div>}
       {(run.driverName || run.driverName2) && (
         <div style={{ marginTop: '4px', display: 'flex', gap: '4px' }}>
           {run.driverName && (
             <span style={{
-              background: run.driverColour || '#3D5A73',
-              color: 'white',
+              ...getDriverPillStyle(run.driverName, run.driverColour, '#3D5A73'),
               fontSize: '9px',
               fontWeight: '600',
               padding: '1px 6px',
@@ -2284,8 +2315,7 @@ function MiniRunCard({ run, onClick, compact = false, draggable = false, onDragS
           )}
           {run.driverName2 && (
             <span style={{
-              background: run.driverColour2 || '#5F5E5A',
-              color: 'white',
+              ...getDriverPillStyle(run.driverName2, run.driverColour2, '#5F5E5A'),
               fontSize: '9px',
               fontWeight: '600',
               padding: '1px 6px',

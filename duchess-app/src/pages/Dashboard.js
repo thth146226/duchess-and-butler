@@ -2,6 +2,24 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
 const today = new Date().toISOString().split('T')[0]
+const SELF_COLLECTION_NAME = 'self collection'
+
+function isSelfCollectionName(name) {
+  return (name || '').toLowerCase().trim() === SELF_COLLECTION_NAME
+}
+
+function getRunBadgeTone(run) {
+  const isSelfCollection = isSelfCollectionName(run?.job?.assigned_driver_name)
+  if (isSelfCollection) return { label: 'SC', background: '#EEE5F9', color: '#6B2FB8' }
+  return run.type === 'DEL'
+    ? { label: 'DEL', background: '#FCEBEB', color: '#A32D2D' }
+    : { label: 'COL', background: '#EAF3DE', color: '#3B6D11' }
+}
+
+function getDriverPillTone(driverName) {
+  if (isSelfCollectionName(driverName)) return { background: '#6B2FB8', color: '#FFFFFF' }
+  return { background: '#DBEAFE', color: '#1D4ED8' }
+}
 
 function getWeekDays() {
   const now = new Date()
@@ -358,7 +376,10 @@ export default function Dashboard({ onNavigate }) {
               <div style={{ padding: '24px 0', textAlign: 'center', color: '#9CA3AF', fontSize: '13px' }}>No runs scheduled today</div>
             ) : todayRuns.map((r, i) => (
               <div key={i} style={S.runRow}>
-                <span style={{ ...S.badge, ...(r.type === 'DEL' ? S.badgeDel : S.badgeCol) }}>{r.type}</span>
+                {(() => {
+                  const badgeTone = getRunBadgeTone(r)
+                  return <span style={{ ...S.badge, background: badgeTone.background, color: badgeTone.color }}>{badgeTone.label}</span>
+                })()}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: '13px', fontWeight: '500', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {r.job.event_name || r.job.client_name}
@@ -369,7 +390,7 @@ export default function Dashboard({ onNavigate }) {
                 </div>
                 <div style={{ fontSize: '12px', color: '#6B6860', flexShrink: 0 }}>{r.time || '—'}</div>
                 {r.job.assigned_driver_name ? (
-                  <span style={{ ...S.driverPill, background: '#DBEAFE', color: '#1D4ED8' }}>{r.job.assigned_driver_name}</span>
+                  <span style={{ ...S.driverPill, ...getDriverPillTone(r.job.assigned_driver_name) }}>{r.job.assigned_driver_name}</span>
                 ) : (
                   <span style={S.unassigned}>Unassigned</span>
                 )}
