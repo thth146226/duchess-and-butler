@@ -167,8 +167,10 @@ function mapOpportunity(o) {
   const deliveryISO    = o.deliver_starts_at || o.load_starts_at    || null
   const collectionISO  = o.collect_starts_at || o.unload_starts_at  || null
   const eventDateISO   = o.starts_at         || o.deliver_starts_at || null
+  const deliverySourceField = o.deliver_starts_at ? 'deliver_starts_at' : (o.load_starts_at ? 'load_starts_at' : null)
+  const collectionSourceField = o.collect_starts_at ? 'collect_starts_at' : (o.unload_starts_at ? 'unload_starts_at' : null)
 
-  return {
+  const mapped = {
     crms_id:          String(o.id),
     crms_ref:         o.number || o.reference || String(o.id),
     event_name:       o.name   || o.subject   || '',
@@ -218,6 +220,16 @@ function mapOpportunity(o) {
     last_synced_at:   new Date().toISOString(),
     crms_updated_at:  o.updated_at || null,
   }
+
+  console.log('[sync-diag] field mapping', {
+    crms_ref: mapped.crms_ref,
+    chosen_delivery_source_field: deliverySourceField,
+    chosen_delivery_value: mapped.delivery_date,
+    chosen_collection_source_field: collectionSourceField,
+    chosen_collection_value: mapped.collection_date,
+  })
+
+  return mapped
 }
 
 function mapItem(item, crmsOpportunityId, jobId) {
@@ -326,6 +338,25 @@ export default async function handler(req, res) {
     stats.fetched = allOpportunities.length
     stats.skipped_quotes = allOpportunities.length - opportunities.length
 
+    // Run once per sync process to inspect exact CRMS date/time keys and values.
+    if (!global.__syncFieldsDumped) {
+      const sample = opportunities?.[0] || {}
+      console.log('[sync-diag] CRMS raw opportunity field map', {
+        keys: Object.keys(sample).filter(k =>
+          k.includes('date') || k.includes('time') ||
+          k.includes('start') || k.includes('end') ||
+          k.includes('deliver') || k.includes('collect')
+        ),
+        sample_values: Object.fromEntries(
+          Object.entries(sample).filter(([k]) =>
+            k.includes('date') || k.includes('time') ||
+            k.includes('start') || k.includes('end')
+          )
+        ),
+      })
+      global.__syncFieldsDumped = true
+    }
+
     // ── 2. Load existing Supabase records ────────────────────────────────────
     const { data: existingRecords } = await supabase
       .from('crms_jobs')
@@ -368,6 +399,23 @@ export default async function handler(req, res) {
 
         } else {
           // ── EXISTING job ───────────────────────────────────────────────────
+          // Log date comparison outcome to diagnose detection vs update path.
+          const dateChanged =
+            existing.delivery_date !== mapped.delivery_date ||
+            existing.collection_date !== mapped.collection_date
+
+          if (dateChanged) {
+            console.log('[sync-diag] DATE CHANGE DETECTED', {
+              crms_ref: mapped.crms_ref,
+              existing_delivery: existing.delivery_date,
+              new_delivery: mapped.delivery_date,
+              existing_collection: existing.collection_date,
+              new_collection: mapped.collection_date,
+              existingRaw: typeof existing.delivery_date,
+              newRaw: typeof mapped.delivery_date,
+            })
+          }
+
           // Only update if data actually changed
           const hasChanged = !existing ||
             existing.status !== mapped.status ||
