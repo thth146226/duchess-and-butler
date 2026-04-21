@@ -164,7 +164,7 @@ function applyFilter(runs, filter, weekOffset = 0, driverFilter = 'all') {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function Schedule() {
+export default function Schedule({ refreshKey = 0 }) {
   const { profile } = useAuth()
   const [jobs, setJobs]             = useState([])
   const [drivers, setDrivers]       = useState([])
@@ -308,6 +308,31 @@ export default function Schedule() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'job_notes' }, fetchJobs)
       .subscribe()
     return () => supabase.removeChannel(channel)
+  }, [])
+
+  useEffect(() => {
+    if (!refreshKey) return
+    console.log('[schedule] external refresh trigger, refreshing jobs')
+    fetchJobs()
+  }, [refreshKey])
+
+  useEffect(() => {
+    function handleFocus() {
+      console.log('[schedule] tab focused, refreshing jobs')
+      fetchJobs()
+    }
+    window.addEventListener('focus', handleFocus)
+    return () => window.removeEventListener('focus', handleFocus)
+  }, [])
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        console.log('[schedule] 2min interval refresh')
+        fetchJobs()
+      }
+    }, 2 * 60 * 1000)
+    return () => clearInterval(interval)
   }, [])
 
   useEffect(() => {

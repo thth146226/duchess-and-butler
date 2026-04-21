@@ -50,7 +50,7 @@ function timeAgo(ts) {
   return `${Math.floor(hrs / 24)}d ago`
 }
 
-export default function Dashboard({ onNavigate }) {
+export default function Dashboard({ onNavigate, onForceScheduleRefresh }) {
   const { profile } = useAuth()
   const [jobs, setJobs]         = useState([])
   const [changes, setChanges]   = useState([])
@@ -100,6 +100,7 @@ export default function Dashboard({ onNavigate }) {
         time: new Date().toLocaleTimeString('en-GB'),
       })
       await fetchAll()
+      if (typeof onForceScheduleRefresh === 'function') onForceScheduleRefresh()
     } catch (e) {
       setForceSyncResult({ ok: false, error: e.message || 'unknown' })
     }
