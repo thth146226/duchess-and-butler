@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../contexts/AuthContext'
 
 const today = new Date().toISOString().split('T')[0]
 const SELF_COLLECTION_NAME = 'self collection'
@@ -50,12 +51,15 @@ function timeAgo(ts) {
 }
 
 export default function Dashboard({ onNavigate }) {
+  const { profile } = useAuth()
   const [jobs, setJobs]         = useState([])
   const [changes, setChanges]   = useState([])
   const [syncInfo, setSyncInfo] = useState(null)
   const [fleetAlerts, setFleetAlerts] = useState([])
   const [loading, setLoading]   = useState(true)
   const [viewMonth, setViewMonth] = useState(new Date())
+  const [forceSyncing, setForceSyncing] = useState(false)
+  const [forceSyncResult, setForceSyncResult] = useState(null)
 
   useEffect(() => {
     fetchAll()
@@ -77,6 +81,29 @@ export default function Dashboard({ onNavigate }) {
     if (syncData) setSyncInfo(syncData)
     await fetchFleetAlerts()
     setLoading(false)
+  }
+
+  async function handleForceSync() {
+    if (forceSyncing) return
+    setForceSyncing(true)
+    setForceSyncResult(null)
+    try {
+      const res = await fetch('/api/sync', {
+        method: 'GET',
+        headers: { 'X-Force-Sync': 'manual' },
+      })
+      const data = await res.json()
+      setForceSyncResult({
+        ok: !!data.success,
+        stats: data.stats,
+        error: data.error || null,
+        time: new Date().toLocaleTimeString('en-GB'),
+      })
+      await fetchAll()
+    } catch (e) {
+      setForceSyncResult({ ok: false, error: e.message || 'unknown' })
+    }
+    setForceSyncing(false)
   }
 
   async function fetchFleetAlerts() {
@@ -165,6 +192,7 @@ export default function Dashboard({ onNavigate }) {
 
   const syncOk = syncInfo?.status === 'success'
   const lastSync = syncInfo ? new Date(syncInfo.completed_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '—'
+  const canForceSync = profile?.role === 'admin' || profile?.role === 'operations'
 
   if (loading) return (
     <div style={{ padding: '48px', textAlign: 'center', color: '#6B6860', fontFamily: "'DM Sans', sans-serif" }}>
@@ -174,6 +202,7 @@ export default function Dashboard({ onNavigate }) {
 
   return (
     <div style={{ fontFamily: "'DM Sans', sans-serif" }}>
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
 
       {/* Sync bar */}
       <div style={S.syncBar}>
@@ -182,6 +211,45 @@ export default function Dashboard({ onNavigate }) {
           <span style={{ fontSize: '12px', color: '#6B6860' }}>
             Live — synced with Current RMS · last sync {lastSync} · {jobs.length} jobs
           </span>
+          {canForceSync && (
+            <>
+              <button
+                onClick={handleForceSync}
+                disabled={forceSyncing}
+                style={{
+                  fontSize: '11px', padding: '6px 12px',
+                  borderRadius: '6px', border: '1px solid #DDD8CF',
+                  background: forceSyncing ? '#F7F3EE' : '#fff',
+                  color: '#1C1C1E', cursor: forceSyncing ? 'default' : 'pointer',
+                  fontFamily: "'DM Sans', sans-serif",
+                  fontWeight: '500',
+                  display: 'inline-flex', alignItems: 'center', gap: '6px',
+                  marginLeft: '12px',
+                }}
+              >
+                {forceSyncing ? (
+                  <>
+                    <span style={{ display: 'inline-block', width: '10px', height: '10px', border: '2px solid #C4A882', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+                    Syncing...
+                  </>
+                ) : (
+                  '↻ Force sync now'
+                )}
+              </button>
+              {forceSyncResult && (
+                <div style={{
+                  fontSize: '11px',
+                  color: forceSyncResult.ok ? '#3B6D11' : '#A32D2D',
+                  marginLeft: '12px',
+                  fontFamily: "'DM Sans', sans-serif",
+                }}>
+                  {forceSyncResult.ok
+                    ? `✓ Synced at ${forceSyncResult.time} · ${forceSyncResult.stats?.updated || 0} updated`
+                    : `✗ Sync failed: ${forceSyncResult.error || 'unknown'}`}
+                </div>
+              )}
+            </>
+          )}
         </div>
         <span style={{ fontSize: '12px', color: '#6B6860' }}>{fmt(today)}</span>
       </div>

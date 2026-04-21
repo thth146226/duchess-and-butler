@@ -300,6 +300,19 @@ async function syncItems(supabase, oppId, jobUuid) {
 // ── main handler ──────────────────────────────────────────────────────────────
 
 export default async function handler(req, res) {
+  const forceHeader = req.headers['x-force-sync']
+  const isManual = typeof forceHeader === 'string' && forceHeader.toLowerCase() === 'manual'
+  const userAgent = req.headers['user-agent'] || ''
+  const cronHeader = req.headers['x-vercel-cron-signature'] || req.headers['x-vercel-cron']
+  const authHeader = req.headers.authorization || ''
+  const cronSecret = process.env.CRON_SECRET
+  const hasValidCronSecret = !!(cronSecret && authHeader === `Bearer ${cronSecret}`)
+  const isCron = !!cronHeader || userAgent.includes('vercel-cron') || hasValidCronSecret
+
+  if (!isManual && !isCron) {
+    return res.status(401).json({ error: 'Unauthorized sync trigger' })
+  }
+
   const supabase  = createClient(SUPABASE_URL, SUPABASE_KEY)
   const startedAt = new Date().toISOString()
   const stats     = {
