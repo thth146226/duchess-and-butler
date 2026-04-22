@@ -48,8 +48,8 @@ function AppInner() {
       const saved = sessionStorage.getItem('totp_verified')
       if (!saved) return false
       const { verified, timestamp } = JSON.parse(saved)
-      const oneHour = 60 * 60 * 1000
-      if (verified && Date.now() - timestamp < oneHour) return true
+      const threeHours = 3 * 60 * 60 * 1000
+      if (verified && Date.now() - timestamp < threeHours) return true
       sessionStorage.removeItem('totp_verified')
       return false
     } catch {
