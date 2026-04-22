@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
+import jsPDF from 'jspdf'
+import html2canvas from 'html2canvas'
 
 const CATEGORIES = ['glassware', 'charger_plates', 'dinnerware', 'cutlery', 'linens', 'furniture', 'other']
 const CAT_STYLE = {
@@ -239,8 +241,7 @@ export default function ATACarnet() {
   }
 
   async function printCalc(calc) {
-    // Fetch fresh items from DB to guarantee
-    // the printed document is always accurate
+    // Fetch fresh items from DB
     const { data: items, error } = await supabase
       .from('ata_calculation_items')
       .select('*')
@@ -257,6 +258,8 @@ export default function ATACarnet() {
       return
     }
 
+    showToast('Generating PDF…')
+
     const rows = items.map(i => `
       <tr>
         <td style="padding:10px 14px;border-bottom:1px solid #EDE8E0;font-size:12px;font-weight:500">${i.item_name}</td>
@@ -269,176 +272,134 @@ export default function ATACarnet() {
     `).join('')
 
     const html = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <title>ATA Carnet — ${calc.event_name}</title>
-        <style>
-          @page { margin: 20mm; }
-          body { 
-            font-family: Arial, 'Helvetica Neue', sans-serif; 
-            color: #1C1C1E; 
-            padding: 0; 
-            max-width: 800px; 
-            margin: 0 auto; 
-            font-size: 13px;
-            line-height: 1.5;
-          }
-          .header { text-align: center; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 2px solid #B8965A; }
-          .header img { height: 48px; }
-          .header-sub { font-size: 10px; letter-spacing: 0.2em; color: #B8965A; text-transform: uppercase; margin-top: 8px; }
-          h1 { font-size: 18px; margin: 24px 0 6px 0; font-weight: 600; letter-spacing: 0.02em; }
-          .meta-box {
-            background: #F7F3EE;
-            border: 1px solid #DDD8CF;
-            border-radius: 6px;
-            padding: 14px 18px;
-            margin-bottom: 24px;
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px 24px;
-            font-size: 12px;
-          }
-          .meta-label { color: #6B6860; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
-          .meta-value { color: #1C1C1E; font-weight: 500; margin-top: 2px; }
-          .section-title { 
-            font-size: 11px; 
-            font-weight: 600; 
-            text-transform: uppercase; 
-            letter-spacing: 0.1em; 
-            color: #B8965A; 
-            margin: 24px 0 10px 0;
-          }
-          table { 
-            width: 100%; 
-            border-collapse: collapse; 
-            margin-bottom: 16px;
-            page-break-inside: auto;
-          }
-          tr { page-break-inside: avoid; page-break-after: auto; }
-          thead { display: table-header-group; }
-          th { 
-            background: #1C1C1E; 
-            color: #fff;
-            padding: 10px 14px; 
-            text-align: left; 
-            font-size: 10px; 
-            text-transform: uppercase; 
-            letter-spacing: 0.08em;
-            font-weight: 500;
-          }
-          th:not(:first-child) { text-align: center; }
-          th:last-child { text-align: right; }
-          .total { 
-            background: #1C1C1E; 
-            color: #fff; 
-            padding: 18px 22px; 
-            border-radius: 8px; 
-            display: flex; 
-            justify-content: space-between; 
-            align-items: center;
-            margin-top: 20px;
-            page-break-inside: avoid;
-          }
-          .total-label { 
-            font-size: 10px; 
-            opacity: 0.7; 
-            text-transform: uppercase; 
-            letter-spacing: 0.08em; 
-            margin-bottom: 4px; 
-          }
-          .total-val { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; }
-          .footer { 
-            margin-top: 40px; 
-            padding-top: 16px; 
-            border-top: 1px solid #DDD8CF; 
-            text-align: center; 
-            font-size: 10px; 
-            color: #9CA3AF;
-            line-height: 1.6;
-          }
-          .summary-note {
-            margin-top: 16px;
-            padding: 12px 14px;
-            background: #FEF9F0;
-            border-left: 3px solid #B8965A;
-            border-radius: 4px;
-            font-size: 11px;
-            color: #6B6860;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <img src="https://duchessandbutler.com/wp-content/uploads/2025/02/duchess-butler-logo.png" alt="Duchess & Butler" />
-          <div class="header-sub">Luxury Tablescapes & Event Decor</div>
+      <div style="font-family:Arial,'Helvetica Neue',sans-serif;color:#1C1C1E;padding:40px;width:760px;font-size:13px;line-height:1.5;background:#fff">
+        <div style="text-align:center;margin-bottom:24px;padding-bottom:16px;border-bottom:2px solid #B8965A">
+          <img src="https://duchessandbutler.com/wp-content/uploads/2025/02/duchess-butler-logo.png" alt="Duchess & Butler" style="height:48px" crossorigin="anonymous" />
+          <div style="font-size:10px;letter-spacing:0.2em;color:#B8965A;text-transform:uppercase;margin-top:8px">Luxury Tablescapes & Event Decor</div>
         </div>
         
-        <h1>ATA Carnet Weight Declaration</h1>
+        <h1 style="font-size:18px;margin:24px 0 6px 0;font-weight:600;letter-spacing:0.02em">ATA Carnet Weight Declaration</h1>
         
-        <div class="meta-box">
+        <div style="background:#F7F3EE;border:1px solid #DDD8CF;border-radius:6px;padding:14px 18px;margin-bottom:24px;display:grid;grid-template-columns:1fr 1fr;gap:8px 24px;font-size:12px">
           <div>
-            <div class="meta-label">Event</div>
-            <div class="meta-value">${calc.event_name}</div>
+            <div style="color:#6B6860;font-size:10px;text-transform:uppercase;letter-spacing:0.06em">Event</div>
+            <div style="color:#1C1C1E;font-weight:500;margin-top:2px">${calc.event_name}</div>
           </div>
           <div>
-            <div class="meta-label">Destination</div>
-            <div class="meta-value">${calc.destination || '—'}</div>
+            <div style="color:#6B6860;font-size:10px;text-transform:uppercase;letter-spacing:0.06em">Destination</div>
+            <div style="color:#1C1C1E;font-weight:500;margin-top:2px">${calc.destination || '—'}</div>
           </div>
           <div>
-            <div class="meta-label">Prepared on</div>
-            <div class="meta-value">${new Date(calc.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</div>
+            <div style="color:#6B6860;font-size:10px;text-transform:uppercase;letter-spacing:0.06em">Prepared on</div>
+            <div style="color:#1C1C1E;font-weight:500;margin-top:2px">${new Date(calc.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</div>
           </div>
           <div>
-            <div class="meta-label">Prepared by</div>
-            <div class="meta-value">${calc.created_by_name || 'Duchess & Butler'}</div>
+            <div style="color:#6B6860;font-size:10px;text-transform:uppercase;letter-spacing:0.06em">Prepared by</div>
+            <div style="color:#1C1C1E;font-weight:500;margin-top:2px">${calc.created_by_name || 'Duchess & Butler'}</div>
           </div>
         </div>
         
-        <div class="section-title">Item Breakdown</div>
-        <table>
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:#B8965A;margin:24px 0 10px 0">Item Breakdown</div>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:16px">
           <thead>
             <tr>
-              <th>Item</th>
-              <th style="text-align:center">Unit type</th>
-              <th style="text-align:center">Pcs / unit</th>
-              <th style="text-align:center">kg / unit</th>
-              <th style="text-align:center">Units</th>
-              <th style="text-align:right">Total kg</th>
+              <th style="background:#1C1C1E;color:#fff;padding:10px 14px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:500">Item</th>
+              <th style="background:#1C1C1E;color:#fff;padding:10px 14px;text-align:center;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:500">Unit type</th>
+              <th style="background:#1C1C1E;color:#fff;padding:10px 14px;text-align:center;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:500">Pcs / unit</th>
+              <th style="background:#1C1C1E;color:#fff;padding:10px 14px;text-align:center;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:500">kg / unit</th>
+              <th style="background:#1C1C1E;color:#fff;padding:10px 14px;text-align:center;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:500">Units</th>
+              <th style="background:#1C1C1E;color:#fff;padding:10px 14px;text-align:right;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:500">Total kg</th>
             </tr>
           </thead>
           <tbody>${rows}</tbody>
         </table>
         
-        <div class="summary-note">
-          Each line shows: pieces packed per unit, weight per unit, 
-          number of units, and the resulting total weight. The sum 
-          of all total weights equals the overall declared weight below.
+        <div style="margin-top:16px;padding:12px 14px;background:#FEF9F0;border-left:3px solid #B8965A;border-radius:4px;font-size:11px;color:#6B6860">
+          Each line shows: pieces packed per unit, weight per unit, number of units, and the resulting total weight. The sum of all total weights equals the overall declared weight below.
         </div>
         
-        <div class="total">
+        <div style="background:#1C1C1E;color:#fff;padding:18px 22px;border-radius:8px;display:flex;justify-content:space-between;align-items:center;margin-top:20px">
           <div>
-            <div class="total-label">Total weight</div>
-            <div class="total-val">${parseFloat(calc.total_weight).toFixed(2)} kg</div>
+            <div style="font-size:10px;opacity:0.7;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Total weight</div>
+            <div style="font-size:26px;font-weight:600;letter-spacing:-0.02em">${parseFloat(calc.total_weight).toFixed(2)} kg</div>
           </div>
           <div style="text-align:right">
-            <div class="total-label">Total units</div>
-            <div class="total-val">${calc.total_boxes}</div>
+            <div style="font-size:10px;opacity:0.7;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Total units</div>
+            <div style="font-size:26px;font-weight:600;letter-spacing:-0.02em">${calc.total_boxes}</div>
           </div>
         </div>
         
-        <div class="footer">
+        <div style="margin-top:40px;padding-top:16px;border-top:1px solid #DDD8CF;text-align:center;font-size:10px;color:#9CA3AF;line-height:1.6">
           Duchess & Butler Ltd · Unit 7 Oakengrove Yard · Hemel Hempstead · HP2 6EZ<br>
           T: 01442 262772 · recon@duchessandbutler.com · duchessandbutler.com
         </div>
-      </body>
-      </html>
+      </div>
     `
-    const win = window.open('', '_blank')
-    win.document.write(html)
-    win.document.close()
-    setTimeout(() => win.print(), 500)
+
+    // Create a hidden container and render
+    const container = document.createElement('div')
+    container.style.position = 'absolute'
+    container.style.left = '-9999px'
+    container.style.top = '0'
+    container.style.width = '760px'
+    container.innerHTML = html
+    document.body.appendChild(container)
+
+    try {
+      // Capture as high-resolution canvas
+      const canvas = await html2canvas(container, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+      })
+
+      const imgData = canvas.toDataURL('image/png')
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4',
+      })
+
+      const pageWidth = pdf.internal.pageSize.getWidth()
+      const pageHeight = pdf.internal.pageSize.getHeight()
+      const imgWidth = pageWidth - 20 // 10mm margin each side
+      const imgHeight = (canvas.height * imgWidth) / canvas.width
+
+      // If content fits in one page
+      if (imgHeight <= pageHeight - 20) {
+        pdf.addImage(imgData, 'PNG', 10, 10, imgWidth, imgHeight)
+      } else {
+        // Split across pages
+        let heightLeft = imgHeight
+        let position = 10
+
+        pdf.addImage(imgData, 'PNG', 10, position, imgWidth, imgHeight)
+        heightLeft -= (pageHeight - 20)
+
+        while (heightLeft > 0) {
+          position = heightLeft - imgHeight + 10
+          pdf.addPage()
+          pdf.addImage(imgData, 'PNG', 10, position, imgWidth, imgHeight)
+          heightLeft -= (pageHeight - 20)
+        }
+      }
+
+      // Generate filename from event name
+      const safeFilename = (calc.event_name || 'ATA_Carnet')
+        .replace(/[^a-z0-9]/gi, '_')
+        .replace(/_+/g, '_')
+        .slice(0, 60)
+
+      pdf.save(`ATA_Carnet_${safeFilename}.pdf`)
+      showToast('PDF downloaded')
+    } catch (err) {
+      console.error('PDF generation error:', err)
+      showToast('Error generating PDF: ' + err.message, 'error')
+    } finally {
+      // Clean up the hidden container
+      document.body.removeChild(container)
+    }
   }
 
   async function saveItem() {
