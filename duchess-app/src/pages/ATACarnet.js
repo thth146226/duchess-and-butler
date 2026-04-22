@@ -238,15 +238,33 @@ export default function ATACarnet() {
     fetchCalcs()
   }
 
-  function printCalc(calc) {
-    const rows = (calc.ata_calculation_items || []).map(i => `
+  async function printCalc(calc) {
+    // Fetch fresh items from DB to guarantee
+    // the printed document is always accurate
+    const { data: items, error } = await supabase
+      .from('ata_calculation_items')
+      .select('*')
+      .eq('calculation_id', calc.id)
+      .order('item_name', { ascending: true })
+
+    if (error) {
+      showToast('Error loading items: ' + error.message, 'error')
+      return
+    }
+
+    if (!items || items.length === 0) {
+      showToast('No items found for this calculation', 'error')
+      return
+    }
+
+    const rows = items.map(i => `
       <tr>
-        <td style="padding:8px 12px;border-bottom:1px solid #EDE8E0;font-size:13px">${i.item_name}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #EDE8E0;font-size:13px;text-align:center">${i.unit_name}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #EDE8E0;font-size:13px;text-align:center">${i.pieces_per_unit}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #EDE8E0;font-size:13px;text-align:center">${i.weight_per_unit} kg</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #EDE8E0;font-size:13px;text-align:center">${i.boxes}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #EDE8E0;font-size:13px;font-weight:600;text-align:right">${parseFloat(i.total_weight).toFixed(2)} kg</td>
+        <td style="padding:10px 14px;border-bottom:1px solid #EDE8E0;font-size:12px;font-weight:500">${i.item_name}</td>
+        <td style="padding:10px 14px;border-bottom:1px solid #EDE8E0;font-size:12px;text-align:center;color:#6B6860">${i.unit_name || '—'}</td>
+        <td style="padding:10px 14px;border-bottom:1px solid #EDE8E0;font-size:12px;text-align:center">${i.pieces_per_unit || 0}</td>
+        <td style="padding:10px 14px;border-bottom:1px solid #EDE8E0;font-size:12px;text-align:center">${parseFloat(i.weight_per_unit || 0).toFixed(2)} kg</td>
+        <td style="padding:10px 14px;border-bottom:1px solid #EDE8E0;font-size:12px;text-align:center">${i.boxes || 0}</td>
+        <td style="padding:10px 14px;border-bottom:1px solid #EDE8E0;font-size:12px;font-weight:600;text-align:right;color:#1C1C1E">${parseFloat(i.total_weight || 0).toFixed(2)} kg</td>
       </tr>
     `).join('')
 
@@ -257,43 +275,148 @@ export default function ATACarnet() {
         <meta charset="utf-8">
         <title>ATA Carnet — ${calc.event_name}</title>
         <style>
-          body { font-family: Arial, sans-serif; color: #1C1C1E; padding: 40px; max-width: 800px; margin: 0 auto; }
-          h1 { font-size: 22px; margin-bottom: 4px; }
-          .meta { color: #6B6860; font-size: 13px; margin-bottom: 32px; }
-          table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
-          th { background: #F7F3EE; padding: 10px 12px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #6B6860; }
+          @page { margin: 20mm; }
+          body { 
+            font-family: Arial, 'Helvetica Neue', sans-serif; 
+            color: #1C1C1E; 
+            padding: 0; 
+            max-width: 800px; 
+            margin: 0 auto; 
+            font-size: 13px;
+            line-height: 1.5;
+          }
+          .header { text-align: center; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 2px solid #B8965A; }
+          .header img { height: 48px; }
+          .header-sub { font-size: 10px; letter-spacing: 0.2em; color: #B8965A; text-transform: uppercase; margin-top: 8px; }
+          h1 { font-size: 18px; margin: 24px 0 6px 0; font-weight: 600; letter-spacing: 0.02em; }
+          .meta-box {
+            background: #F7F3EE;
+            border: 1px solid #DDD8CF;
+            border-radius: 6px;
+            padding: 14px 18px;
+            margin-bottom: 24px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px 24px;
+            font-size: 12px;
+          }
+          .meta-label { color: #6B6860; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
+          .meta-value { color: #1C1C1E; font-weight: 500; margin-top: 2px; }
+          .section-title { 
+            font-size: 11px; 
+            font-weight: 600; 
+            text-transform: uppercase; 
+            letter-spacing: 0.1em; 
+            color: #B8965A; 
+            margin: 24px 0 10px 0;
+          }
+          table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin-bottom: 16px;
+            page-break-inside: auto;
+          }
+          tr { page-break-inside: avoid; page-break-after: auto; }
+          thead { display: table-header-group; }
+          th { 
+            background: #1C1C1E; 
+            color: #fff;
+            padding: 10px 14px; 
+            text-align: left; 
+            font-size: 10px; 
+            text-transform: uppercase; 
+            letter-spacing: 0.08em;
+            font-weight: 500;
+          }
           th:not(:first-child) { text-align: center; }
           th:last-child { text-align: right; }
-          .total { background: #1C1C1E; color: #fff; padding: 16px 20px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; }
-          .total-label { font-size: 12px; opacity: 0.7; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
-          .total-val { font-size: 28px; font-weight: 600; }
-          .footer { margin-top: 40px; padding-top: 20px; border-top: 2px solid #B8965A; text-align: center; font-size: 11px; color: #9CA3AF; }
+          .total { 
+            background: #1C1C1E; 
+            color: #fff; 
+            padding: 18px 22px; 
+            border-radius: 8px; 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center;
+            margin-top: 20px;
+            page-break-inside: avoid;
+          }
+          .total-label { 
+            font-size: 10px; 
+            opacity: 0.7; 
+            text-transform: uppercase; 
+            letter-spacing: 0.08em; 
+            margin-bottom: 4px; 
+          }
+          .total-val { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; }
+          .footer { 
+            margin-top: 40px; 
+            padding-top: 16px; 
+            border-top: 1px solid #DDD8CF; 
+            text-align: center; 
+            font-size: 10px; 
+            color: #9CA3AF;
+            line-height: 1.6;
+          }
+          .summary-note {
+            margin-top: 16px;
+            padding: 12px 14px;
+            background: #FEF9F0;
+            border-left: 3px solid #B8965A;
+            border-radius: 4px;
+            font-size: 11px;
+            color: #6B6860;
+          }
         </style>
       </head>
       <body>
-        <div style="text-align:center;margin-bottom:24px">
-          <img src="https://duchessandbutler.com/wp-content/uploads/2025/02/duchess-butler-logo.png" style="height:50px" />
+        <div class="header">
+          <img src="https://duchessandbutler.com/wp-content/uploads/2025/02/duchess-butler-logo.png" alt="Duchess & Butler" />
+          <div class="header-sub">Luxury Tablescapes & Event Decor</div>
         </div>
+        
         <h1>ATA Carnet Weight Declaration</h1>
-        <div class="meta">
-          Event: ${calc.event_name} · 
-          ${calc.destination ? `Destination: ${calc.destination} · ` : ''}
-          Date: ${new Date(calc.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })} · 
-          Prepared by: ${calc.created_by_name || 'Duchess & Butler'}
+        
+        <div class="meta-box">
+          <div>
+            <div class="meta-label">Event</div>
+            <div class="meta-value">${calc.event_name}</div>
+          </div>
+          <div>
+            <div class="meta-label">Destination</div>
+            <div class="meta-value">${calc.destination || '—'}</div>
+          </div>
+          <div>
+            <div class="meta-label">Prepared on</div>
+            <div class="meta-value">${new Date(calc.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</div>
+          </div>
+          <div>
+            <div class="meta-label">Prepared by</div>
+            <div class="meta-value">${calc.created_by_name || 'Duchess & Butler'}</div>
+          </div>
         </div>
+        
+        <div class="section-title">Item Breakdown</div>
         <table>
           <thead>
             <tr>
               <th>Item</th>
-              <th style="text-align:center">Unit</th>
-              <th style="text-align:center">Pcs/Unit</th>
-              <th style="text-align:center">kg/Unit</th>
+              <th style="text-align:center">Unit type</th>
+              <th style="text-align:center">Pcs / unit</th>
+              <th style="text-align:center">kg / unit</th>
               <th style="text-align:center">Units</th>
               <th style="text-align:right">Total kg</th>
             </tr>
           </thead>
           <tbody>${rows}</tbody>
         </table>
+        
+        <div class="summary-note">
+          Each line shows: pieces packed per unit, weight per unit, 
+          number of units, and the resulting total weight. The sum 
+          of all total weights equals the overall declared weight below.
+        </div>
+        
         <div class="total">
           <div>
             <div class="total-label">Total weight</div>
@@ -304,9 +427,10 @@ export default function ATACarnet() {
             <div class="total-val">${calc.total_boxes}</div>
           </div>
         </div>
+        
         <div class="footer">
           Duchess & Butler Ltd · Unit 7 Oakengrove Yard · Hemel Hempstead · HP2 6EZ<br>
-          T: 01442 262772 · recon@duchessandbutler.com
+          T: 01442 262772 · recon@duchessandbutler.com · duchessandbutler.com
         </div>
       </body>
       </html>
