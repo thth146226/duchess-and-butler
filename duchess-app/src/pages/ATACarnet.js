@@ -42,6 +42,7 @@ export default function ATACarnet() {
   const [savedCalcs, setSavedCalcs]     = useState([])
   const [viewCalc, setViewCalc]         = useState(null)
   const [savingCalc, setSavingCalc]     = useState(false)
+  const [editingCalcId, setEditingCalcId] = useState(null)
   const [calcCatFilter, setCalcCatFilter] = useState('all')
   const [calcSearch, setCalcSearch]       = useState('')
 
@@ -126,10 +127,107 @@ export default function ATACarnet() {
     clearCalc()
   }
 
+  async function openEdit(calc) {
+    // Fetch the calc items from DB to get latest
+    const { data: calcDbItems, error } = await supabase
+      .from('ata_calculation_items')
+      .select('*')
+      .eq('calculation_id', calc.id)
+
+    if (error) {
+      showToast('Error loading calculation: ' + error.message, 'error')
+      return
+    }
+
+    // Populate the form
+    setEventName(calc.event_name || '')
+    setDestination(calc.destination || '')
+
+    // Map DB items back to calcItems shape (used by activeCalcItems)
+    const mappedSelected = (calcDbItems || []).map(i => ({
+      id:              i.ata_item_id,
+      name:            i.item_name,
+      weight_per_unit: i.weight_per_unit,
+      unit_name:       i.unit_name,
+      pieces_per_unit: i.pieces_per_unit,
+      boxes:           i.boxes,
+      total_weight:    i.total_weight,
+      category:        'other',
+      notes:           '',
+    }))
+
+    // Keep full library visible while marking selected rows with loaded quantities.
+    setCalcItems(
+      items.map(item => {
+        const selected = mappedSelected.find(s => s.id === item.id)
+        return selected
+          ? { ...item, boxes: selected.boxes, total_weight: selected.total_weight }
+          : { ...item, boxes: 0, total_weight: 0 }
+      })
+    )
+
+    setEditingCalcId(calc.id)
+
+    // Scroll to top so user sees the form
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+    showToast('Calculation loaded for editing')
+  }
+
+  async function updateCalculation() {
+    if (!eventName) { showToast('Please enter an event name', 'error'); return }
+    if (activeCalcItems.length === 0) { showToast('Please add at least one item', 'error'); return }
+    if (!editingCalcId) return
+
+    setSavingCalc(true)
+
+    // Update the header
+    const { error: updateError } = await supabase
+      .from('ata_calculations')
+      .update({
+        event_name:   eventName,
+        destination:  destination || null,
+        total_weight: parseFloat(totalWeight.toFixed(3)),
+        total_boxes:  totalBoxes,
+      })
+      .eq('id', editingCalcId)
+
+    if (updateError) {
+      showToast('Error updating: ' + updateError.message, 'error')
+      setSavingCalc(false)
+      return
+    }
+
+    // Replace all items for this calculation.
+    await supabase
+      .from('ata_calculation_items')
+      .delete()
+      .eq('calculation_id', editingCalcId)
+
+    await supabase.from('ata_calculation_items').insert(
+      activeCalcItems.map(i => ({
+        calculation_id:  editingCalcId,
+        ata_item_id:     i.id,
+        item_name:       i.name,
+        weight_per_unit: i.weight_per_unit,
+        unit_name:       i.unit_name,
+        pieces_per_unit: i.pieces_per_unit,
+        boxes:           i.boxes,
+        total_weight:    i.total_weight,
+      }))
+    )
+
+    showToast('Calculation updated successfully')
+    setSavingCalc(false)
+    setEditingCalcId(null)
+    clearCalc()
+    fetchCalcs()
+  }
+
   function clearCalc() {
     setEventName('')
     setDestination('')
     setCalcItems(prev => prev.map(i => ({ ...i, boxes: 0, total_weight: 0 })))
+    setEditingCalcId(null)
   }
 
   async function deleteCalc(id) {
@@ -275,6 +373,34 @@ export default function ATACarnet() {
       {/* ── CALCULATOR TAB ── */}
       {tab === 'calculator' && (
         <div>
+          {editingCalcId && (
+            <div style={{
+              background: '#FEF3C7',
+              border: '1px solid #FDE68A',
+              borderLeft: '3px solid #D97706',
+              padding: '10px 14px',
+              borderRadius: '6px',
+              marginBottom: '14px',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              fontFamily: "'DM Sans', sans-serif"
+            }}>
+              <div style={{ fontSize: '12px', color: '#92400E' }}>
+                <strong>Editing calculation.</strong> Changes will replace the saved version.
+              </div>
+              <button
+                onClick={() => { clearCalc(); showToast('Edit cancelled') }}
+                style={{
+                  fontSize: '11px', padding: '4px 10px',
+                  borderRadius: '4px', border: '1px solid #FDE68A',
+                  background: '#fff', color: '#92400E', cursor: 'pointer',
+                  fontFamily: "'DM Sans', sans-serif"
+                }}
+              >
+                Cancel edit
+              </button>
+            </div>
+          )}
+
           {/* Event info */}
           <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '16px 20px', marginBottom: '16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
             <div>
@@ -386,9 +512,9 @@ export default function ATACarnet() {
 
           {/* Actions */}
           <div style={{ display: 'flex', gap: '10px' }}>
-            <button onClick={saveCalculation} disabled={savingCalc || activeCalcItems.length === 0}
+            <button onClick={editingCalcId ? updateCalculation : saveCalculation} disabled={savingCalc || activeCalcItems.length === 0}
               style={{ flex: 1, padding: '11px', background: activeCalcItems.length === 0 ? '#DDD8CF' : '#B8965A', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '13px', fontWeight: '500', cursor: activeCalcItems.length === 0 ? 'default' : 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
-              {savingCalc ? 'Saving…' : 'Save Calculation'}
+              {savingCalc ? (editingCalcId ? 'Updating…' : 'Saving…') : (editingCalcId ? 'Update calculation' : 'Save calculation')}
             </button>
             <button onClick={clearCalc}
               style={{ padding: '11px 20px', background: 'transparent', color: '#6B6860', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
@@ -485,6 +611,10 @@ export default function ATACarnet() {
                     <button onClick={() => printCalc(calc)}
                       style={{ fontSize: '11px', padding: '5px 12px', borderRadius: '6px', border: 'none', background: '#B8965A', color: '#fff', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", fontWeight: '500' }}>
                       Print / PDF
+                    </button>
+                    <button onClick={() => openEdit(calc)}
+                      style={{ fontSize: '11px', padding: '5px 10px', borderRadius: '6px', border: '1px solid #DDD8CF', background: '#F7F3EE', color: '#6B6860', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
+                      Edit
                     </button>
                     <button onClick={() => deleteCalc(calc.id)}
                       style={{ fontSize: '11px', padding: '5px 10px', borderRadius: '6px', border: '1px solid #FECACA', background: '#FEF2F2', color: '#DC2626', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
