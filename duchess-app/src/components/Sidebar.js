@@ -18,6 +18,7 @@ const navItems = [
   { section: 'Documents', items: [
     { id: 'fleet', icon: '🚐', label: 'Fleet', roles: ['admin', 'operations'] },
     { id: 'atacarnet', icon: '⚖️', label: 'ATA Carnet', roles: ['admin', 'operations'] },
+    { id: 'labelGenerator', icon: '🏷️', label: 'Labels', roles: ['admin'] },
     { id: 'paperwork', icon: '📄', label: 'Paperwork', roles: ['admin','operations'] },
     { id: 'reports', icon: '📊', label: 'Reports', roles: ['admin'] },
   ]},
