@@ -189,6 +189,10 @@ export default function LabelGenerator() {
       const resolvedRule = resolveJobItemRule(candidate, ataCapacityMap)
 
       if (!resolvedRule.matched) {
+        devLog('[labels-phase3b] unmatched item remained', {
+          item_name: candidate.item_name,
+          quantity: candidate.quantity,
+        })
         outOfScopeItems.push({
           ...candidate,
           reason: resolvedRule.reason || 'No ATA rule found',
@@ -196,7 +200,19 @@ export default function LabelGenerator() {
         continue
       }
 
-      eligibleMatchedItems.push(generateLabelsForItem(candidate, resolvedRule))
+      if (resolvedRule.matchedBy && resolvedRule.matchedBy !== 'exact') {
+        devLog('[labels-phase3b] alias match used', {
+          item_name: candidate.item_name,
+          matchedBy: resolvedRule.matchedBy,
+          ata_name: resolvedRule.rule?.name,
+        })
+      }
+      const generated = generateLabelsForItem(candidate, resolvedRule)
+      devLog('[labels-phase3b] category resolved', {
+        item_name: generated.productName,
+        category: generated.category,
+      })
+      eligibleMatchedItems.push(generated)
     }
 
     return { ignoredItems, eligibleMatchedItems, outOfScopeItems }
@@ -542,8 +558,12 @@ export default function LabelGenerator() {
             ) : (
               <div style={{ display: 'grid', gap: '6px' }}>
                 {processing.outOfScopeItems.map(item => (
-                  <div key={item.itemKey} style={{ fontSize: '12px', color: '#854F0B' }}>
-                    {item.item_name || '—'} · qty: {item.quantity ?? 0} · {item.reason}. Analysis check recommended — no ATA rule found.
+                  <div key={item.itemKey} style={{ border: '1px solid #FDE68A', background: '#FFFBEB', borderRadius: '8px', padding: '10px 12px' }}>
+                    <div style={{ fontSize: '12px', color: '#1C1C1E', fontWeight: '600' }}>{item.item_name || '—'}</div>
+                    <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '2px' }}>qty: {item.quantity ?? 0}</div>
+                    <div style={{ fontSize: '11px', color: '#854F0B', marginTop: '4px' }}>
+                      {item.reason || 'No ATA rule found'} · Analysis check recommended.
+                    </div>
                   </div>
                 ))}
               </div>
@@ -574,32 +594,32 @@ export default function LabelGenerator() {
             {previewLabels.length === 0 ? (
               <div style={{ fontSize: '12px', color: '#6B6860' }}>No preview labels generated yet.</div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '12px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '14px' }}>
                 {previewLabels.map(label => (
-                  <div key={label.id} style={{ background: '#fff', border: '1px solid #D9D9D9', borderRadius: '8px', padding: '14px 12px' }}>
-                    <div style={{ textAlign: 'center', fontFamily: "'Cormorant Garamond', serif", fontWeight: '600', fontSize: '18px', color: '#1C1C1E' }}>
+                  <div key={label.id} style={{ background: '#fff', border: '1px solid #D3CEC3', borderRadius: '10px', padding: '18px 16px', minHeight: '268px', display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ textAlign: 'center', fontFamily: "'Cormorant Garamond', serif", fontWeight: '600', fontSize: '20px', color: '#1C1C1E', lineHeight: 1.05 }}>
                       Duchess & Butler
                     </div>
-                    <div style={{ textAlign: 'center', marginTop: '4px', fontSize: '11px', fontWeight: '700', letterSpacing: '0.05em', color: '#1C1C1E' }}>
+                    <div style={{ textAlign: 'center', marginTop: '8px', fontSize: '11px', fontWeight: '700', letterSpacing: '0.08em', color: '#1C1C1E' }}>
                       {(selectedOrder.event_name || '').toUpperCase()}
                     </div>
-                    <div style={{ textAlign: 'center', marginTop: '2px', fontSize: '11px', color: '#6B6860' }}>
+                    <div style={{ textAlign: 'center', marginTop: '5px', fontSize: '11px', color: '#1C1C1E' }}>
                       {selectedOrder.client_name || '—'}
                     </div>
-                    <div style={{ textAlign: 'center', marginTop: '2px', fontSize: '11px', color: '#6B6860' }}>
+                    <div style={{ textAlign: 'center', marginTop: '4px', fontSize: '11px', color: '#1C1C1E' }}>
                       {postcodeDiagnostic.value || '—'}
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '10px', fontSize: '10px', color: '#6B6860' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '14px', fontSize: '10px', color: '#1C1C1E', letterSpacing: '0.03em' }}>
                       <span>Ref: {selectedOrder.crms_ref || '—'}</span>
                       <span>{(label.packagingType || 'unit').toUpperCase()}</span>
                     </div>
-                    <div style={{ marginTop: '8px', border: '1.5px solid #1C1C1E', borderRadius: '6px', padding: '8px 6px', textAlign: 'center' }}>
-                      <span style={{ fontSize: '14px', fontWeight: '700', color: orderColour.color }}>
+                    <div style={{ marginTop: '12px', border: '1.5px solid #1C1C1E', borderRadius: '6px', padding: '16px 10px', textAlign: 'center', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <span style={{ fontSize: '15px', fontWeight: '700', color: orderColour.color, lineHeight: 1.35 }}>
                         {label.quantity}x {label.productName}
                       </span>
                     </div>
-                    <div style={{ marginTop: '8px', display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#6B6860', textTransform: 'uppercase' }}>
-                      <span>{label.category || 'other'}</span>
+                    <div style={{ marginTop: '12px', display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#1C1C1E', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                      <span>{label.category || 'OTHER'}</span>
                       <span>{(label.packagingType || 'unit').toUpperCase()}</span>
                     </div>
                   </div>

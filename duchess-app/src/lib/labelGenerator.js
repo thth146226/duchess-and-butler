@@ -22,6 +22,10 @@ const NON_LABEL_EXACT_BLOCKLIST = new Set([
   'delivery',
 ])
 
+// Keep this small and explicit. Add only observed, justified aliases.
+const CURATED_JOB_TO_ATA_ALIAS = {
+}
+
 export function normalizeItemName(name) {
   if (!name) return ''
   return String(name)
@@ -32,6 +36,22 @@ export function normalizeItemName(name) {
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase()
+}
+
+function normalizeAliasKey(normalizedName) {
+  if (!normalizedName) return ''
+  return normalizeItemName(normalizedName)
+    .replace(/\s*&\s*/g, ' and ')
+    .replace(/\s*\/\s*/g, '/')
+    .replace(/\s*-\s*/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function toDisplayCategory(category) {
+  const raw = normalizeItemName(category)
+  if (!raw) return 'OTHER'
+  return raw.toUpperCase()
 }
 
 export function extractPackagingFromUnitName(unitName) {
@@ -86,15 +106,31 @@ export function isNonLabelJobItem(itemName, quantity) {
 export function resolveJobItemRule(jobItem, ataCapacityMap) {
   const normalizedName = normalizeItemName(jobItem?.item_name)
   if (!normalizedName) {
-    return { matched: false, rule: null, reason: 'No ATA rule found' }
+    return { matched: false, rule: null, reason: 'No ATA rule found', matchedBy: null }
   }
 
-  const rule = ataCapacityMap.get(normalizedName)
-  if (!rule) {
-    return { matched: false, rule: null, reason: 'No ATA rule found' }
+  const exactRule = ataCapacityMap.get(normalizedName)
+  if (exactRule) {
+    return { matched: true, rule: exactRule, reason: null, matchedBy: 'exact' }
   }
 
-  return { matched: true, rule, reason: null }
+  const aliasKey = normalizeAliasKey(normalizedName)
+
+  const curatedTarget = CURATED_JOB_TO_ATA_ALIAS[aliasKey]
+  if (curatedTarget) {
+    const curatedRule = ataCapacityMap.get(curatedTarget)
+    if (curatedRule) {
+      return { matched: true, rule: curatedRule, reason: null, matchedBy: 'curated-alias' }
+    }
+  }
+
+  for (const [ataName, ataRule] of ataCapacityMap.entries()) {
+    if (normalizeAliasKey(ataName) === aliasKey) {
+      return { matched: true, rule: ataRule, reason: null, matchedBy: 'safe-alias' }
+    }
+  }
+
+  return { matched: false, rule: null, reason: 'No ATA rule found', matchedBy: null }
 }
 
 export function generateLabelsForQuantity(totalQty, capacity) {
@@ -116,7 +152,9 @@ export function generateLabelsForItem(jobItem, resolvedRule) {
   const totalQty = Number.parseInt(jobItem?.quantity, 10)
   const itemKey = jobItem?.itemKey || ''
   const productName = jobItem?.item_name || 'Unnamed item'
-  const category = jobItem?.category || 'other'
+  const ataCategory = resolvedRule?.rule?.category
+  const jobCategory = jobItem?.category
+  const category = toDisplayCategory(ataCategory || jobCategory || 'other')
 
   if (!resolvedRule?.matched || !resolvedRule.rule) {
     return {
@@ -129,6 +167,7 @@ export function generateLabelsForItem(jobItem, resolvedRule) {
       autoLabels: [],
       confidence: 'low',
       flags: [{ level: 'error', message: 'No ATA rule found' }],
+      matchedBy: resolvedRule?.matchedBy || null,
     }
   }
 
@@ -163,6 +202,7 @@ export function generateLabelsForItem(jobItem, resolvedRule) {
     autoLabels,
     confidence,
     flags,
+    matchedBy: resolvedRule.matchedBy || 'exact',
   }
 }
 
