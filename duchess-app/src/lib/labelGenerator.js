@@ -22,10 +22,6 @@ const NON_LABEL_EXACT_BLOCKLIST = new Set([
   'delivery',
 ])
 
-// Keep this small and explicit. Add only observed, justified aliases.
-const CURATED_JOB_TO_ATA_ALIAS = {
-}
-
 export function normalizeItemName(name) {
   if (!name) return ''
   return String(name)
@@ -47,6 +43,41 @@ function normalizeAliasKey(normalizedName) {
     .replace(/\s+/g, ' ')
     .trim()
 }
+
+// Phase 3E: first controlled RMS-first reconciliation round.
+// Keys are normalized legacy/divergent names; values are canonical RMS names.
+const RAW_CURATED_RMS_CANONICAL_NAME_MAP = {
+  ' audrey gold flute ': ' Audrey Gold Rimmed Champagne Flute ',
+  ' audrey gold red wine ': ' Audrey Gold Rimmed Red Wine Glass ',
+  ' audrey gold white ': ' Audrey Gold Rimmed White Wine Glass ',
+  ' baroque side plate ( 50 ) ': ' Baroque Side Plate ',
+  ' diva green dessert plate ': ' Diva Dessert Plate 21cm - Green ',
+  ' diva green dinner plate ': ' Diva Starter / Dinner Plate 26cm - Green ',
+  ' etoile white dessert plate ': ' Etoile White & Gold Dessert Plate ',
+  ' etoile white dinner plate ': ' Etoile White & Gold Dinner Plate ',
+  ' etoile white side plate ': ' Etoile White & Gold Side Plate ',
+  ' hydrangea leaf bread plate - small ': ' Hydrangea Leaf Bread Plate Small ',
+  ' nude flute ': ' Nude Champagne Flute ',
+  ' nude red wine ': ' Nude Red Wine Glass ',
+  ' nude white wine ': ' Nude White Wine Glass ',
+  ' scalloped tea cup ( 5 ) ': ' Scalloped Tea Cup ',
+  ' scalloped tea saucer ( 20 ) ': ' Scalloped Tea Saucer ',
+  ' tortoiseshell butter knife ( 60 ) ': ' Tortoiseshell Butter Knife ',
+  ' tortoiseshell dessert spoon ( 35 ) ': ' Tortoiseshell Dessert Spoon ',
+  ' tortoiseshell dinner fork ( 40 ) ': ' Tortoiseshell Dinner Fork ',
+  ' tortoiseshell dinner knife ( 35 ) ': ' Tortoiseshell Dinner Knife ',
+  ' tulip green ': ' Tulip Water Glass - Green ',
+  ' tulip pink ': ' Tulip Water Glass - Dusty Rose ',
+  ' valentina peony charger plate ': ' Valentina Peony ',
+  ' valentina sage green gold charger plate ': ' Valentina Sage Green and Gold Charger Plate ',
+  ' valentina sage green gold charger plate ( 5 ) ': ' Valentina Sage Green and Gold Charger Plate ',
+}
+
+const CURATED_RMS_CANONICAL_NAME_MAP = Object.entries(RAW_CURATED_RMS_CANONICAL_NAME_MAP).reduce((acc, [legacyName, canonicalName]) => {
+  const normalizedLegacy = normalizeAliasKey(normalizeItemName(legacyName))
+  if (normalizedLegacy) acc[normalizedLegacy] = String(canonicalName || '').trim()
+  return acc
+}, {})
 
 function toDisplayCategory(category) {
   const raw = normalizeItemName(category)
@@ -106,31 +137,40 @@ export function isNonLabelJobItem(itemName, quantity) {
 export function resolveJobItemRule(jobItem, ataCapacityMap) {
   const normalizedName = normalizeItemName(jobItem?.item_name)
   if (!normalizedName) {
-    return { matched: false, rule: null, reason: 'No ATA rule found', matchedBy: null }
+    return { matched: false, rule: null, reason: 'No ATA rule found', matchedBy: null, canonicalNameUsed: null }
   }
 
+  // Layer 1: exact normalized match.
   const exactRule = ataCapacityMap.get(normalizedName)
   if (exactRule) {
-    return { matched: true, rule: exactRule, reason: null, matchedBy: 'exact' }
+    return { matched: true, rule: exactRule, reason: null, matchedBy: 'exact', canonicalNameUsed: null }
   }
 
+  // Layer 2: safe alias normalization match.
   const aliasKey = normalizeAliasKey(normalizedName)
-
-  const curatedTarget = CURATED_JOB_TO_ATA_ALIAS[aliasKey]
-  if (curatedTarget) {
-    const curatedRule = ataCapacityMap.get(curatedTarget)
-    if (curatedRule) {
-      return { matched: true, rule: curatedRule, reason: null, matchedBy: 'curated-alias' }
-    }
-  }
-
   for (const [ataName, ataRule] of ataCapacityMap.entries()) {
     if (normalizeAliasKey(ataName) === aliasKey) {
-      return { matched: true, rule: ataRule, reason: null, matchedBy: 'safe-alias' }
+      return { matched: true, rule: ataRule, reason: null, matchedBy: 'safe-alias', canonicalNameUsed: null }
     }
   }
 
-  return { matched: false, rule: null, reason: 'No ATA rule found', matchedBy: null }
+  // Layer 3: curated RMS-first canonical reconciliation.
+  const canonicalName = CURATED_RMS_CANONICAL_NAME_MAP[aliasKey]
+  if (canonicalName) {
+    const normalizedCanonical = normalizeItemName(canonicalName)
+    const curatedRule = ataCapacityMap.get(normalizedCanonical)
+    if (curatedRule) {
+      return {
+        matched: true,
+        rule: curatedRule,
+        reason: null,
+        matchedBy: 'curated-rms-canonical',
+        canonicalNameUsed: canonicalName,
+      }
+    }
+  }
+
+  return { matched: false, rule: null, reason: 'No ATA rule found', matchedBy: null, canonicalNameUsed: null }
 }
 
 export function generateLabelsForQuantity(totalQty, capacity) {
