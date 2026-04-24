@@ -22,6 +22,33 @@ const NON_LABEL_EXACT_BLOCKLIST = new Set([
   'delivery',
 ])
 
+const LINEN_CATEGORY_MARKERS = new Set([
+  'linen',
+  'linens',
+  'fine napkins',
+  'classic napkins',
+  'duchess drape tablecloths',
+  'tailored tablecloths',
+  'place mats',
+  'placemats',
+  'tablecloths',
+  'napkins',
+])
+
+const LINEN_NAME_MARKERS = [
+  'napkin',
+  'napkins',
+  'tablecloth',
+  'tablecloths',
+  'placemat',
+  'place mat',
+  'placemats',
+  'place mats',
+  'drape tablecloth',
+  'tailored tablecloth',
+  'linen',
+]
+
 export function normalizeItemName(name) {
   if (!name) return ''
   return String(name)
@@ -133,6 +160,16 @@ export function isNonLabelJobItem(itemName, quantity) {
   const normalized = normalizeItemName(itemName)
   if (!normalized) return true
   return NON_LABEL_EXACT_BLOCKLIST.has(normalized)
+}
+
+export function isDbLinenStudioItem(jobItem) {
+  // Phase 3G: conservative first round. If uncertain, do not exclude.
+  const category = normalizeItemName(jobItem?.category)
+  if (category && LINEN_CATEGORY_MARKERS.has(category)) return true
+
+  const itemName = normalizeItemName(jobItem?.item_name)
+  if (!itemName) return false
+  return LINEN_NAME_MARKERS.some(marker => itemName.includes(marker))
 }
 
 export function resolveJobItemRule(jobItem, ataCapacityMap) {

@@ -7,6 +7,7 @@ import {
   generateLabelsForItem,
   getLabelOrderColour,
   isManualSplitValid,
+  isDbLinenStudioItem,
   isNonLabelJobItem,
   normalizeItemName,
   normalizeManualLabels,
@@ -160,6 +161,7 @@ export default function LabelGenerator() {
   const processing = useMemo(() => {
     const ataCapacityMap = buildAtaCapacityMap(ataItems)
     const ignoredItems = []
+    const linenStudioItems = []
     const eligibleMatchedItems = []
     const outOfScopeItems = []
 
@@ -172,6 +174,19 @@ export default function LabelGenerator() {
       }
       const itemKey = `${selectedOrder?.id || 'order'}:${normalizeItemName(item.item_name)}:${idx}`
       const candidate = { ...item, itemKey }
+
+      if (isDbLinenStudioItem(candidate)) {
+        devLog('[labels-linen] excluded for DB Linen Studio', {
+          item_name: candidate.item_name,
+          quantity: candidate.quantity,
+        })
+        linenStudioItems.push({
+          ...candidate,
+          exclusionReason: 'db-linen-studio',
+        })
+        continue
+      }
+
       const resolvedRule = resolveJobItemRule(candidate, ataCapacityMap)
 
       if (!resolvedRule.matched) {
@@ -186,7 +201,7 @@ export default function LabelGenerator() {
       devLog('[labels-phase3b] category resolved', { item_name: generated.productName, category: generated.category })
       eligibleMatchedItems.push(generated)
     }
-    return { ignoredItems, eligibleMatchedItems, outOfScopeItems }
+    return { ignoredItems, linenStudioItems, eligibleMatchedItems, outOfScopeItems }
   }, [ataItems, jobItems, selectedOrder])
 
   useEffect(() => {
@@ -566,6 +581,25 @@ export default function LabelGenerator() {
                     <div style={{ fontSize: '12px', color: '#1C1C1E', fontWeight: '600' }}>{item.item_name || '—'}</div>
                     <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '2px', lineHeight: 1.4 }}>qty: {item.quantity ?? 0}</div>
                     <div style={{ fontSize: '11px', color: '#86653A', marginTop: '3px', lineHeight: 1.4 }}>{item.reason || 'No ATA rule found'} · Analysis check recommended.</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={{ background: '#FFFDF9', border: '1px solid #EEE7DD', borderRadius: '10px', padding: '12px 13px', marginBottom: '10px' }}>
+            <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#B8965A', marginBottom: '8px' }}>
+              Linen items handled in DB Linen Studio
+            </div>
+            {processing.linenStudioItems.length === 0 ? (
+              <div style={{ fontSize: '12px', color: '#6B6860' }}>No linen exclusions for this order.</div>
+            ) : (
+              <div style={{ display: 'grid', gap: '6px' }}>
+                {processing.linenStudioItems.map(item => (
+                  <div key={item.itemKey} style={{ border: '1px solid #ECE5D9', background: '#FFFEFA', borderRadius: '8px', padding: '9px 10px' }}>
+                    <div style={{ fontSize: '12px', color: '#1C1C1E', fontWeight: '600' }}>{item.item_name || '—'}</div>
+                    <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '2px', lineHeight: 1.4 }}>qty: {item.quantity ?? 0}</div>
+                    <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '3px', lineHeight: 1.4 }}>Handled in DB Linen Studio.</div>
                   </div>
                 ))}
               </div>
