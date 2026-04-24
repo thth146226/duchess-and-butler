@@ -54,13 +54,10 @@ export default function LabelGenerator() {
   const today = new Date().toISOString().slice(0, 10)
   const orderColour = getLabelOrderColour(orderColourKey)
 
-  // Defense in depth — only admin role
   if (profile?.role !== 'admin') {
     return (
       <div style={{ padding: '40px', fontFamily: "'DM Sans', sans-serif", textAlign: 'center' }}>
-        <div style={{ fontSize: '14px', color: '#6B6860' }}>
-          Access restricted to administrators.
-        </div>
+        <div style={{ fontSize: '14px', color: '#6B6860' }}>Access restricted to administrators.</div>
       </div>
     )
   }
@@ -72,11 +69,7 @@ export default function LabelGenerator() {
       .from('crms_jobs')
       .select('id, crms_ref, event_name, client_name, venue, venue_address, delivery_date, collection_date, assigned_driver_name, status')
       .order('delivery_date', { ascending: true, nullsFirst: false })
-
-    if (!includePast) {
-      query = query.gte('delivery_date', today)
-    }
-
+    if (!includePast) query = query.gte('delivery_date', today)
     const { data, error: ordersError } = await query
     if (ordersError) {
       setError('Error loading orders: ' + ordersError.message)
@@ -84,7 +77,6 @@ export default function LabelGenerator() {
       setOrdersLoading(false)
       return
     }
-
     setOrders(data || [])
     setOrdersLoading(false)
     devLog('[labels-phase2] orders loaded', { count: (data || []).length, includePast })
@@ -123,7 +115,6 @@ export default function LabelGenerator() {
       setSelectedOrder(orderData || null)
       devLog('[labels-phase2] order selected', { id: orderData?.id, crms_ref: orderData?.crms_ref })
     }
-
     if (itemsError) {
       setError('Error loading job items: ' + itemsError.message)
       setJobItems([])
@@ -131,7 +122,6 @@ export default function LabelGenerator() {
       setJobItems(itemsData || [])
       devLog('[labels-phase2] job items loaded', { count: (itemsData || []).length, orderId })
     }
-
     if (ataError) {
       setError('Error loading ATA items: ' + ataError.message)
       setAtaItems([])
@@ -139,7 +129,6 @@ export default function LabelGenerator() {
       setAtaItems(ataData || [])
       devLog('[labels-phase2] ata items loaded', { count: (ataData || []).length })
     }
-
     setSelectedOrderLoading(false)
     setJobItemsLoading(false)
     setAtaItemsLoading(false)
@@ -162,9 +151,7 @@ export default function LabelGenerator() {
   const postcodeDiagnostic = useMemo(() => {
     if (!selectedOrder) return { status: 'postcode unresolved', value: null }
     const driver = (selectedOrder.assigned_driver_name || '').toLowerCase().trim()
-    if (driver === 'self collection') {
-      return { status: 'postcode resolved from self collection default', value: SELF_COLLECTION_DEFAULT_POSTCODE }
-    }
+    if (driver === 'self collection') return { status: 'postcode resolved from self collection default', value: SELF_COLLECTION_DEFAULT_POSTCODE }
     const resolved = extractUkPostcode(selectedOrder.venue_address)
     if (resolved) return { status: 'postcode resolved from venue_address', value: resolved }
     return { status: 'postcode unresolved', value: null }
@@ -183,38 +170,22 @@ export default function LabelGenerator() {
         ignoredItems.push(item)
         continue
       }
-
       const itemKey = `${selectedOrder?.id || 'order'}:${normalizeItemName(item.item_name)}:${idx}`
       const candidate = { ...item, itemKey }
       const resolvedRule = resolveJobItemRule(candidate, ataCapacityMap)
 
       if (!resolvedRule.matched) {
-        devLog('[labels-phase3b] unmatched item remained', {
-          item_name: candidate.item_name,
-          quantity: candidate.quantity,
-        })
-        outOfScopeItems.push({
-          ...candidate,
-          reason: resolvedRule.reason || 'No ATA rule found',
-        })
+        devLog('[labels-phase3b] unmatched item remained', { item_name: candidate.item_name, quantity: candidate.quantity })
+        outOfScopeItems.push({ ...candidate, reason: resolvedRule.reason || 'No ATA rule found' })
         continue
       }
-
       if (resolvedRule.matchedBy && resolvedRule.matchedBy !== 'exact') {
-        devLog('[labels-phase3b] alias match used', {
-          item_name: candidate.item_name,
-          matchedBy: resolvedRule.matchedBy,
-          ata_name: resolvedRule.rule?.name,
-        })
+        devLog('[labels-phase3b] alias match used', { item_name: candidate.item_name, matchedBy: resolvedRule.matchedBy, ata_name: resolvedRule.rule?.name })
       }
       const generated = generateLabelsForItem(candidate, resolvedRule)
-      devLog('[labels-phase3b] category resolved', {
-        item_name: generated.productName,
-        category: generated.category,
-      })
+      devLog('[labels-phase3b] category resolved', { item_name: generated.productName, category: generated.category })
       eligibleMatchedItems.push(generated)
     }
-
     return { ignoredItems, eligibleMatchedItems, outOfScopeItems }
   }, [ataItems, jobItems, selectedOrder])
 
@@ -222,11 +193,9 @@ export default function LabelGenerator() {
     setManualLabelsByItem(prev => {
       const next = {}
       for (const item of processing.eligibleMatchedItems) {
-        if (Array.isArray(prev[item.itemKey]) && prev[item.itemKey].length > 0) {
-          next[item.itemKey] = prev[item.itemKey]
-        } else {
-          next[item.itemKey] = item.autoLabels.map(l => ({ id: l.id, quantity: l.quantity }))
-        }
+        next[item.itemKey] = Array.isArray(prev[item.itemKey]) && prev[item.itemKey].length > 0
+          ? prev[item.itemKey]
+          : item.autoLabels.map(l => ({ id: l.id, quantity: l.quantity }))
       }
       return next
     })
@@ -236,9 +205,7 @@ export default function LabelGenerator() {
     const map = {}
     for (const item of processing.eligibleMatchedItems) {
       const normalized = normalizeManualLabels(manualLabelsByItem[item.itemKey] || item.autoLabels, item.totalQty)
-      const total = sumManualLabels(normalized)
-      const valid = isManualSplitValid(normalized, item.totalQty)
-      map[item.itemKey] = { labels: normalized, total, valid }
+      map[item.itemKey] = { labels: normalized, total: sumManualLabels(normalized), valid: isManualSplitValid(normalized, item.totalQty) }
     }
     return map
   }, [manualLabelsByItem, processing.eligibleMatchedItems])
@@ -260,6 +227,35 @@ export default function LabelGenerator() {
     return labels
   }, [manualStateByItem, processing.eligibleMatchedItems])
 
+  const itemsSummaryRows = useMemo(() => (
+    processing.eligibleMatchedItems.map(item => {
+      const manual = manualStateByItem[item.itemKey] || { labels: [] }
+      return {
+        itemKey: item.itemKey,
+        productName: item.productName,
+        category: item.category || 'OTHER',
+        totalQty: item.totalQty,
+        packagingType: (item.packagingType || 'unit').toUpperCase(),
+        capacity: item.capacity || 0,
+        labelsCount: (manual.labels || []).length,
+      }
+    })
+  ), [manualStateByItem, processing.eligibleMatchedItems])
+
+  const outputSummary = useMemo(() => {
+    const autoLabelsCount = processing.eligibleMatchedItems.reduce((sum, item) => sum + item.autoLabels.length, 0)
+    const invalidManualCount = processing.eligibleMatchedItems.reduce((sum, item) => {
+      const manual = manualStateByItem[item.itemKey]
+      return sum + (manual && !manual.valid ? 1 : 0)
+    }, 0)
+    return {
+      eligibleItems: processing.eligibleMatchedItems.length,
+      generatedLabels: previewLabels.length,
+      autoLabels: autoLabelsCount,
+      needsAttention: invalidManualCount + processing.outOfScopeItems.length,
+    }
+  }, [manualStateByItem, previewLabels.length, processing.eligibleMatchedItems, processing.outOfScopeItems.length])
+
   useEffect(() => {
     if (!selectedOrder) return
     devLog('[labels-phase2] postcode diagnostic', {
@@ -271,108 +267,79 @@ export default function LabelGenerator() {
   }, [postcodeDiagnostic, selectedOrder])
 
   function setItemManualQuantity(itemKey, labelId, value) {
-    setManualLabelsByItem(prev => ({
-      ...prev,
-      [itemKey]: (prev[itemKey] || []).map(label => (
-        label.id === labelId ? { ...label, quantity: value } : label
-      )),
-    }))
+    setManualLabelsByItem(prev => ({ ...prev, [itemKey]: (prev[itemKey] || []).map(label => (label.id === labelId ? { ...label, quantity: value } : label)) }))
   }
-
   function addManualLabelRow(itemKey) {
     setManualLabelsByItem(prev => {
       const current = prev[itemKey] || []
-      return {
-        ...prev,
-        [itemKey]: [...current, { id: `${itemKey}-manual-${Date.now()}`, quantity: '' }],
-      }
+      return { ...prev, [itemKey]: [...current, { id: `${itemKey}-manual-${Date.now()}`, quantity: '' }] }
     })
   }
-
   function removeManualLabelRow(itemKey, labelId) {
-    setManualLabelsByItem(prev => {
-      const current = prev[itemKey] || []
-      return {
-        ...prev,
-        [itemKey]: current.filter(label => label.id !== labelId),
-      }
-    })
+    setManualLabelsByItem(prev => ({ ...prev, [itemKey]: (prev[itemKey] || []).filter(label => label.id !== labelId) }))
   }
-
   function resetItemToAutomatic(item) {
-    setManualLabelsByItem(prev => ({
-      ...prev,
-      [item.itemKey]: item.autoLabels.map(l => ({ id: l.id, quantity: l.quantity })),
-    }))
+    setManualLabelsByItem(prev => ({ ...prev, [item.itemKey]: item.autoLabels.map(l => ({ id: l.id, quantity: l.quantity })) }))
   }
-
   function resetAllToAutomatic() {
     const next = {}
-    for (const item of processing.eligibleMatchedItems) {
-      next[item.itemKey] = item.autoLabels.map(l => ({ id: l.id, quantity: l.quantity }))
-    }
+    for (const item of processing.eligibleMatchedItems) next[item.itemKey] = item.autoLabels.map(l => ({ id: l.id, quantity: l.quantity }))
     setManualLabelsByItem(next)
   }
 
   return (
-    <div style={{ padding: '40px', fontFamily: "'DM Sans', sans-serif", maxWidth: '1280px', margin: '0 auto' }}>
-      <div style={{ marginBottom: '24px' }}>
-        <h1 style={{ fontSize: '24px', fontWeight: '600', color: '#1C1C1E', margin: 0, letterSpacing: '-0.01em' }}>
+    <div style={{ padding: '34px 40px 44px', fontFamily: "'DM Sans', sans-serif", maxWidth: '1320px', margin: '0 auto', background: '#FCFAF7' }}>
+      <div style={{ marginBottom: '20px' }}>
+        <h1 style={{ fontSize: '30px', fontWeight: '600', color: '#1C1C1E', margin: 0, letterSpacing: '-0.01em', fontFamily: "'Cormorant Garamond', serif", lineHeight: 1 }}>
           Label Generator
         </h1>
-        <div style={{ fontSize: '13px', color: '#6B6860', marginTop: '6px' }}>
-          Build and validate label splits from real order + ATA rule data.
+        <div style={{ fontSize: '13px', color: '#6B6860', marginTop: '8px' }}>
+          Generate premium operational labels from real orders with controlled manual adjustments.
         </div>
       </div>
 
-      <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '16px', marginBottom: '16px' }}>
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '12px', padding: '16px', marginBottom: '16px' }}>
+        <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.12em', color: '#B8965A', marginBottom: '10px' }}>Select order</div>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' }}>
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search by ref, event or client"
-            style={{ flex: 1, minWidth: '240px', padding: '9px 12px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '13px' }}
+            style={{ flex: 1, minWidth: '240px', padding: '10px 12px', border: '1px solid #DDD8CF', borderRadius: '8px', fontSize: '13px', background: '#FFFEFC' }}
           />
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#6B6860' }}>
             <input type="checkbox" checked={showPastOrders} onChange={e => setShowPastOrders(e.target.checked)} />
             Show past orders
           </label>
         </div>
-      </div>
-
-      <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', overflow: 'hidden', marginBottom: '16px' }}>
-        <div style={{ padding: '12px 16px', background: '#F7F3EE', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#6B6860', fontWeight: '600' }}>
-          Order selection ({filteredOrders.length})
+        <div style={{ border: '1px solid #E6E0D6', borderRadius: '8px', overflow: 'hidden' }}>
+          <div style={{ padding: '9px 12px', background: '#F7F3EE', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#6B6860', fontWeight: '600' }}>
+            Orders ({filteredOrders.length})
+          </div>
+          <div style={{ maxHeight: '220px', overflowY: 'auto', background: '#fff' }}>
+            {ordersLoading ? (
+              <div style={{ padding: '20px 16px', fontSize: '13px', color: '#6B6860' }}>orders loading...</div>
+            ) : filteredOrders.length === 0 ? (
+              <div style={{ padding: '20px 16px', fontSize: '13px', color: '#9CA3AF' }}>empty state: no orders found.</div>
+            ) : (
+              filteredOrders.map(order => {
+                const isSelected = selectedOrder?.id === order.id
+                return (
+                  <button
+                    key={order.id}
+                    onClick={() => loadOrderData(order.id)}
+                    style={{ width: '100%', textAlign: 'left', border: 'none', borderTop: '1px solid #F1EFE8', background: isSelected ? '#FFF8ED' : '#fff', padding: '11px 14px', cursor: 'pointer' }}
+                  >
+                    <div style={{ fontSize: '13px', fontWeight: '600', color: '#1C1C1E' }}>{order.crms_ref || '—'} · {order.event_name || '—'}</div>
+                    <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '3px' }}>
+                      {order.client_name || '—'} · DEL {order.delivery_date || '—'} · COL {order.collection_date || '—'}
+                    </div>
+                  </button>
+                )
+              })
+            )}
+          </div>
         </div>
-        {ordersLoading ? (
-          <div style={{ padding: '20px 16px', fontSize: '13px', color: '#6B6860' }}>orders loading...</div>
-        ) : filteredOrders.length === 0 ? (
-          <div style={{ padding: '20px 16px', fontSize: '13px', color: '#9CA3AF' }}>empty state: no orders found.</div>
-        ) : (
-          filteredOrders.map(order => {
-            const isSelected = selectedOrder?.id === order.id
-            return (
-              <button
-                key={order.id}
-                onClick={() => loadOrderData(order.id)}
-                style={{
-                  width: '100%',
-                  textAlign: 'left',
-                  border: 'none',
-                  borderTop: '1px solid #F1EFE8',
-                  background: isSelected ? '#FFFEF8' : '#fff',
-                  padding: '12px 16px',
-                  cursor: 'pointer',
-                }}
-              >
-                <div style={{ fontSize: '13px', fontWeight: '600', color: '#1C1C1E' }}>{order.crms_ref || '—'} · {order.event_name || '—'}</div>
-                <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '3px' }}>
-                  {order.client_name || '—'} · DEL {order.delivery_date || '—'} · COL {order.collection_date || '—'} · {order.status || '—'}
-                </div>
-              </button>
-            )
-          })
-        )}
       </div>
 
       {!selectedOrder && !selectedOrderLoading && (
@@ -380,13 +347,11 @@ export default function LabelGenerator() {
           No selection state: choose an order to run the label engine.
         </div>
       )}
-
       {selectedOrderLoading && (
         <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '16px', fontSize: '13px', color: '#6B6860', marginBottom: '16px' }}>
           selected order loading...
         </div>
       )}
-
       {error && (
         <div style={{ marginBottom: '16px', fontSize: '12px', color: '#A32D2D', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: '6px', padding: '10px 12px' }}>
           {error}
@@ -395,88 +360,104 @@ export default function LabelGenerator() {
 
       {selectedOrder && (
         <>
-          <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '16px', marginBottom: '16px' }}>
-            <div style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#B8965A', marginBottom: '10px' }}>
-              Selected order summary
+          <div style={{ background: '#fff', border: '1px solid #D9D2C7', borderRadius: '12px', padding: '18px', marginBottom: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '30px', fontWeight: '600', lineHeight: 1, color: '#1C1C1E' }}>
+                  {selectedOrder.event_name || 'Untitled event'}
+                </div>
+                <div style={{ marginTop: '6px', fontSize: '12px', color: '#6B6860' }}>Ref {selectedOrder.crms_ref || '—'}</div>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <button onClick={resetAllToAutomatic} style={{ fontSize: '11px', padding: '7px 10px', borderRadius: '7px', border: '1px solid #DDD8CF', background: '#fff', color: '#6B6860', cursor: 'pointer' }}>
+                  Reset all to automatic
+                </button>
+                <button disabled style={{ fontSize: '11px', padding: '7px 10px', borderRadius: '7px', border: '1px solid #E4DED4', background: '#F7F3EE', color: '#A39B8E', cursor: 'not-allowed' }}>
+                  Print
+                </button>
+                <button disabled style={{ fontSize: '11px', padding: '7px 10px', borderRadius: '7px', border: '1px solid #E4DED4', background: '#F7F3EE', color: '#A39B8E', cursor: 'not-allowed' }}>
+                  Export PDF
+                </button>
+              </div>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 24px', fontSize: '12px', color: '#6B6860' }}>
-              <div><strong style={{ color: '#1C1C1E' }}>ref:</strong> {selectedOrder.crms_ref || '—'}</div>
-              <div><strong style={{ color: '#1C1C1E' }}>event:</strong> {selectedOrder.event_name || '—'}</div>
-              <div><strong style={{ color: '#1C1C1E' }}>client:</strong> {selectedOrder.client_name || '—'}</div>
-              <div><strong style={{ color: '#1C1C1E' }}>venue:</strong> {selectedOrder.venue || '—'}</div>
-              <div style={{ gridColumn: '1 / -1' }}><strong style={{ color: '#1C1C1E' }}>venue_address:</strong> {selectedOrder.venue_address || '—'}</div>
-              <div><strong style={{ color: '#1C1C1E' }}>delivery date:</strong> {selectedOrder.delivery_date || '—'}</div>
-              <div><strong style={{ color: '#1C1C1E' }}>collection date:</strong> {selectedOrder.collection_date || '—'}</div>
+            <div style={{ marginTop: '14px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px 18px', fontSize: '12px', color: '#6B6860' }}>
+              <div><strong style={{ color: '#1C1C1E' }}>Client:</strong> {selectedOrder.client_name || '—'}</div>
+              <div><strong style={{ color: '#1C1C1E' }}>Event Date:</strong> {selectedOrder.delivery_date || '—'}</div>
+              <div><strong style={{ color: '#1C1C1E' }}>Venue:</strong> {selectedOrder.venue || '—'}</div>
+              <div><strong style={{ color: '#1C1C1E' }}>Venue Address:</strong> {selectedOrder.venue_address || '—'}</div>
+              <div><strong style={{ color: '#1C1C1E' }}>Collection Date:</strong> {selectedOrder.collection_date || '—'}</div>
+              <div><strong style={{ color: '#1C1C1E' }}>Order Colour:</strong> {orderColour.label}</div>
             </div>
-            <div style={{ marginTop: '12px', display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ marginTop: '10px', display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
               <span style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '20px', border: '1px solid #DDD8CF', background: '#fff', color: '#6B6860' }}>
                 {postcodeDiagnostic.status}
               </span>
-              <span style={{ fontSize: '12px', color: '#1C1C1E' }}>
-                {postcodeDiagnostic.value ? `postcode: ${postcodeDiagnostic.value}` : 'postcode: —'}
-              </span>
+              <span style={{ fontSize: '12px', color: '#1C1C1E', fontWeight: '500' }}>Postcode: {postcodeDiagnostic.value || '—'}</span>
             </div>
-          </div>
-
-          <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '16px', marginBottom: '16px' }}>
-            <div style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#B8965A', marginBottom: '10px' }}>
-              Processing summary
-            </div>
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: '12px', background: '#F7F3EE', border: '1px solid #DDD8CF', borderRadius: '20px', padding: '4px 10px', color: '#6B6860' }}>
-                ignored rows: {processing.ignoredItems.length}
-              </span>
-              <span style={{ fontSize: '12px', background: '#EAF3DE', border: '1px solid #C8E0A8', borderRadius: '20px', padding: '4px 10px', color: '#3B6D11' }}>
-                matched label items: {processing.eligibleMatchedItems.length}
-              </span>
-              <span style={{ fontSize: '12px', background: '#FEF3C7', border: '1px solid #FDE68A', borderRadius: '20px', padding: '4px 10px', color: '#854F0B' }}>
-                out-of-scope items: {processing.outOfScopeItems.length}
-              </span>
-              <span style={{ fontSize: '12px', background: '#EEEDFE', border: '1px solid #DDD8CF', borderRadius: '20px', padding: '4px 10px', color: '#3C3489' }}>
-                total preview labels: {previewLabels.length}
-              </span>
-              <span style={{ fontSize: '12px', background: '#F0F9FF', border: '1px solid #DDD8CF', borderRadius: '20px', padding: '4px 10px', color: '#1D4ED8' }}>
-                ata items loaded: {ataItemsLoading ? 'loading...' : ataItems.length}
-              </span>
-            </div>
-          </div>
-
-          <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '16px', marginBottom: '16px' }}>
-            <div style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#B8965A', marginBottom: '10px' }}>
-              Order colour
-            </div>
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {Object.values(LABEL_ORDER_COLOURS).map(c => (
-                <button
-                  key={c.key}
-                  onClick={() => setOrderColourKey(c.key)}
-                  style={{
-                    fontSize: '12px',
-                    padding: '5px 10px',
-                    borderRadius: '20px',
-                    border: `1px solid ${orderColourKey === c.key ? c.color : '#DDD8CF'}`,
-                    background: orderColourKey === c.key ? '#F7F3EE' : '#fff',
-                    color: orderColourKey === c.key ? c.color : '#6B6860',
-                    cursor: 'pointer',
-                  }}
-                >
-                  {c.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '16px', marginBottom: '16px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-              <div style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#B8965A' }}>
-                Eligible matched items editor
+            <div style={{ marginTop: '14px' }}>
+              <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.12em', color: '#B8965A', marginBottom: '8px' }}>Order colour</div>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                {Object.values(LABEL_ORDER_COLOURS).map(c => (
+                  <button
+                    key={c.key}
+                    onClick={() => setOrderColourKey(c.key)}
+                    style={{ fontSize: '12px', padding: '6px 10px', borderRadius: '20px', border: `1px solid ${orderColourKey === c.key ? c.color : '#DDD8CF'}`, background: orderColourKey === c.key ? '#F7F3EE' : '#fff', color: orderColourKey === c.key ? c.color : '#6B6860', cursor: 'pointer' }}
+                  >
+                    {c.label}
+                  </button>
+                ))}
               </div>
-              <button
-                onClick={resetAllToAutomatic}
-                style={{ fontSize: '11px', padding: '5px 10px', borderRadius: '6px', border: '1px solid #DDD8CF', background: '#fff', color: '#6B6860', cursor: 'pointer' }}
-              >
-                Reset all to automatic
-              </button>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '16px', marginBottom: '16px' }}>
+            <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '12px', padding: '16px' }}>
+              <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.12em', color: '#B8965A', marginBottom: '10px' }}>Items summary</div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                  <thead>
+                    <tr style={{ background: '#F7F3EE', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: '10px' }}>
+                      <th style={{ textAlign: 'left', padding: '8px 10px' }}>Product</th>
+                      <th style={{ textAlign: 'left', padding: '8px 10px' }}>Category</th>
+                      <th style={{ textAlign: 'center', padding: '8px 10px' }}>Total Qty</th>
+                      <th style={{ textAlign: 'center', padding: '8px 10px' }}>Packaging</th>
+                      <th style={{ textAlign: 'center', padding: '8px 10px' }}>Capacity</th>
+                      <th style={{ textAlign: 'center', padding: '8px 10px' }}>Labels</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {itemsSummaryRows.length === 0 ? (
+                      <tr><td colSpan={6} style={{ padding: '12px 10px', color: '#9CA3AF' }}>No matched items yet.</td></tr>
+                    ) : (
+                      itemsSummaryRows.map(row => (
+                        <tr key={row.itemKey} style={{ borderTop: '1px solid #F1EFE8', color: '#1C1C1E' }}>
+                          <td style={{ padding: '9px 10px' }}>{row.productName}</td>
+                          <td style={{ padding: '9px 10px', color: '#6B6860' }}>{row.category}</td>
+                          <td style={{ padding: '9px 10px', textAlign: 'center' }}>{row.totalQty}</td>
+                          <td style={{ padding: '9px 10px', textAlign: 'center' }}>{row.packagingType}</td>
+                          <td style={{ padding: '9px 10px', textAlign: 'center' }}>{row.capacity}</td>
+                          <td style={{ padding: '9px 10px', textAlign: 'center' }}>{row.labelsCount}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '12px', padding: '16px' }}>
+              <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.12em', color: '#B8965A', marginBottom: '10px' }}>Output summary</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                <div style={{ border: '1px solid #E6E0D6', borderRadius: '8px', padding: '10px' }}><div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase' }}>Eligible Items</div><div style={{ fontSize: '22px', color: '#1C1C1E', fontWeight: '600', marginTop: '4px' }}>{outputSummary.eligibleItems}</div></div>
+                <div style={{ border: '1px solid #E6E0D6', borderRadius: '8px', padding: '10px' }}><div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase' }}>Generated Labels</div><div style={{ fontSize: '22px', color: '#1C1C1E', fontWeight: '600', marginTop: '4px' }}>{outputSummary.generatedLabels}</div></div>
+                <div style={{ border: '1px solid #E6E0D6', borderRadius: '8px', padding: '10px' }}><div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase' }}>Auto Labels</div><div style={{ fontSize: '22px', color: '#1C1C1E', fontWeight: '600', marginTop: '4px' }}>{outputSummary.autoLabels}</div></div>
+                <div style={{ border: '1px solid #E6E0D6', borderRadius: '8px', padding: '10px' }}><div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase' }}>Needs Attention</div><div style={{ fontSize: '22px', color: outputSummary.needsAttention > 0 ? '#A32D2D' : '#1C1C1E', fontWeight: '600', marginTop: '4px' }}>{outputSummary.needsAttention}</div></div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '12px', padding: '16px', marginBottom: '16px' }}>
+            <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.12em', color: '#B8965A', marginBottom: '10px' }}>
+              Generated labels editor
             </div>
             {jobItemsLoading || ataItemsLoading ? (
               <div style={{ fontSize: '13px', color: '#6B6860' }}>job items loading...</div>
@@ -488,15 +469,13 @@ export default function LabelGenerator() {
                   const conf = confidenceStyle(item.confidence)
                   const manual = manualStateByItem[item.itemKey] || { labels: [], total: 0, valid: false }
                   return (
-                    <div key={item.itemKey} style={{ border: '1px solid #EDE8E0', borderRadius: '8px', padding: '12px' }}>
+                    <div key={item.itemKey} style={{ border: '1px solid #E8E3D9', borderRadius: '10px', padding: '13px', background: '#FFFEFC' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '8px' }}>
-                        <div style={{ fontSize: '13px', fontWeight: '600', color: '#1C1C1E' }}>{item.productName}</div>
-                        <span style={{ fontSize: '10px', fontWeight: '600', padding: '2px 8px', borderRadius: '12px', background: conf.bg, color: conf.color }}>
-                          {item.confidence}
-                        </span>
+                        <div style={{ fontSize: '14px', fontWeight: '600', color: '#1C1C1E' }}>{item.productName}</div>
+                        <span style={{ fontSize: '10px', fontWeight: '600', padding: '2px 8px', borderRadius: '12px', background: conf.bg, color: conf.color }}>{item.confidence}</span>
                       </div>
-                      <div style={{ fontSize: '11px', color: '#6B6860', marginBottom: '8px' }}>
-                        total: {item.totalQty} · capacity: {item.capacity} · packaging: {(item.packagingType || 'unit').toUpperCase()} · category: {(item.category || 'other').toUpperCase()}
+                      <div style={{ fontSize: '11px', color: '#6B6860', marginBottom: '10px' }}>
+                        total: {item.totalQty} · capacity: {item.capacity} · packaging: {(item.packagingType || 'unit').toUpperCase()} · category: {item.category || 'OTHER'}
                       </div>
                       {item.flags.length > 0 && (
                         <div style={{ marginBottom: '8px', display: 'grid', gap: '4px' }}>
@@ -507,39 +486,26 @@ export default function LabelGenerator() {
                           ))}
                         </div>
                       )}
-                      <div style={{ display: 'grid', gap: '6px' }}>
+                      <div style={{ display: 'grid', gap: '7px' }}>
                         {manualLabelsByItem[item.itemKey]?.map(label => (
                           <div key={label.id} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <input
-                              value={label.quantity}
-                              onChange={e => setItemManualQuantity(item.itemKey, label.id, e.target.value)}
-                              style={{ width: '80px', padding: '6px 8px', border: '1px solid #DDD8CF', borderRadius: '6px', fontSize: '12px' }}
-                            />
+                            <input value={label.quantity} onChange={e => setItemManualQuantity(item.itemKey, label.id, e.target.value)} style={{ width: '90px', padding: '7px 8px', border: '1px solid #DDD8CF', borderRadius: '7px', fontSize: '12px', background: '#fff' }} />
                             <span style={{ fontSize: '11px', color: '#6B6860' }}>{item.productName}</span>
-                            <button
-                              onClick={() => removeManualLabelRow(item.itemKey, label.id)}
-                              style={{ marginLeft: 'auto', fontSize: '11px', padding: '4px 8px', borderRadius: '4px', border: '1px solid #FECACA', background: '#FEF2F2', color: '#DC2626', cursor: 'pointer' }}
-                            >
+                            <button onClick={() => removeManualLabelRow(item.itemKey, label.id)} style={{ marginLeft: 'auto', fontSize: '11px', padding: '4px 8px', borderRadius: '4px', border: '1px solid #FECACA', background: '#FEF2F2', color: '#DC2626', cursor: 'pointer' }}>
                               Remove
                             </button>
                           </div>
                         ))}
                       </div>
-                      <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
-                        <button
-                          onClick={() => addManualLabelRow(item.itemKey)}
-                          style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '4px', border: '1px solid #DDD8CF', background: '#fff', color: '#6B6860', cursor: 'pointer' }}
-                        >
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
+                        <button onClick={() => addManualLabelRow(item.itemKey)} style={{ fontSize: '11px', padding: '5px 9px', borderRadius: '5px', border: '1px solid #DDD8CF', background: '#fff', color: '#6B6860', cursor: 'pointer' }}>
                           Add label row
                         </button>
-                        <button
-                          onClick={() => resetItemToAutomatic(item)}
-                          style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '4px', border: '1px solid #DDD8CF', background: '#F7F3EE', color: '#6B6860', cursor: 'pointer' }}
-                        >
+                        <button onClick={() => resetItemToAutomatic(item)} style={{ fontSize: '11px', padding: '5px 9px', borderRadius: '5px', border: '1px solid #DDD8CF', background: '#F7F3EE', color: '#6B6860', cursor: 'pointer' }}>
                           Reset item to automatic
                         </button>
                       </div>
-                      <div style={{ marginTop: '8px', fontSize: '11px', color: manual.valid ? '#3B6D11' : '#A32D2D' }}>
+                      <div style={{ marginTop: '8px', fontSize: '11px', color: manual.valid ? '#3B6D11' : '#A32D2D', fontWeight: '500' }}>
                         {manual.valid ? `Valid split (${manual.total}/${item.totalQty})` : `Mismatch (${manual.total}/${item.totalQty})`}
                       </div>
                     </div>
@@ -549,46 +515,8 @@ export default function LabelGenerator() {
             )}
           </div>
 
-          <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '16px', marginBottom: '16px' }}>
-            <div style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#B8965A', marginBottom: '10px' }}>
-              Out-of-scope items
-            </div>
-            {processing.outOfScopeItems.length === 0 ? (
-              <div style={{ fontSize: '12px', color: '#6B6860' }}>No out-of-scope items.</div>
-            ) : (
-              <div style={{ display: 'grid', gap: '6px' }}>
-                {processing.outOfScopeItems.map(item => (
-                  <div key={item.itemKey} style={{ border: '1px solid #FDE68A', background: '#FFFBEB', borderRadius: '8px', padding: '10px 12px' }}>
-                    <div style={{ fontSize: '12px', color: '#1C1C1E', fontWeight: '600' }}>{item.item_name || '—'}</div>
-                    <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '2px' }}>qty: {item.quantity ?? 0}</div>
-                    <div style={{ fontSize: '11px', color: '#854F0B', marginTop: '4px' }}>
-                      {item.reason || 'No ATA rule found'} · Analysis check recommended.
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <details style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '12px', marginBottom: '16px' }}>
-            <summary style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#B8965A', cursor: 'pointer' }}>
-              Ignored rows
-            </summary>
-            <div style={{ marginTop: '10px', display: 'grid', gap: '6px' }}>
-              {processing.ignoredItems.length === 0 ? (
-                <div style={{ fontSize: '12px', color: '#6B6860' }}>No ignored rows.</div>
-              ) : (
-                processing.ignoredItems.map((item, idx) => (
-                  <div key={`${item.id || idx}`} style={{ fontSize: '12px', color: '#9CA3AF' }}>
-                    {item.item_name || '—'} · qty: {item.quantity ?? 0}
-                  </div>
-                ))
-              )}
-            </div>
-          </details>
-
-          <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', padding: '16px' }}>
-            <div style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#B8965A', marginBottom: '10px' }}>
+          <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '12px', padding: '16px', marginBottom: '16px' }}>
+            <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.12em', color: '#B8965A', marginBottom: '10px' }}>
               Labels preview
             </div>
             {previewLabels.length === 0 ? (
@@ -603,12 +531,8 @@ export default function LabelGenerator() {
                     <div style={{ textAlign: 'center', marginTop: '8px', fontSize: '11px', fontWeight: '700', letterSpacing: '0.08em', color: '#1C1C1E' }}>
                       {(selectedOrder.event_name || '').toUpperCase()}
                     </div>
-                    <div style={{ textAlign: 'center', marginTop: '5px', fontSize: '11px', color: '#1C1C1E' }}>
-                      {selectedOrder.client_name || '—'}
-                    </div>
-                    <div style={{ textAlign: 'center', marginTop: '4px', fontSize: '11px', color: '#1C1C1E' }}>
-                      {postcodeDiagnostic.value || '—'}
-                    </div>
+                    <div style={{ textAlign: 'center', marginTop: '5px', fontSize: '11px', color: '#1C1C1E' }}>{selectedOrder.client_name || '—'}</div>
+                    <div style={{ textAlign: 'center', marginTop: '4px', fontSize: '11px', color: '#1C1C1E' }}>{postcodeDiagnostic.value || '—'}</div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '14px', fontSize: '10px', color: '#1C1C1E', letterSpacing: '0.03em' }}>
                       <span>Ref: {selectedOrder.crms_ref || '—'}</span>
                       <span>{(label.packagingType || 'unit').toUpperCase()}</span>
@@ -626,10 +550,44 @@ export default function LabelGenerator() {
                 ))}
               </div>
             )}
-            <div style={{ marginTop: '12px', fontSize: '11px', color: '#9CA3AF' }}>
-              Print and PDF export will be added in the next phase.
-            </div>
+            <div style={{ marginTop: '12px', fontSize: '11px', color: '#9CA3AF' }}>Print and PDF export will be added in the next phase.</div>
           </div>
+
+          <div style={{ background: '#FFFEFC', border: '1px solid #ECE5D9', borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
+            <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#B8965A', marginBottom: '10px' }}>
+              Out-of-scope items
+            </div>
+            {processing.outOfScopeItems.length === 0 ? (
+              <div style={{ fontSize: '12px', color: '#6B6860' }}>No out-of-scope items.</div>
+            ) : (
+              <div style={{ display: 'grid', gap: '6px' }}>
+                {processing.outOfScopeItems.map(item => (
+                  <div key={item.itemKey} style={{ border: '1px solid #FDE68A', background: '#FFFBEB', borderRadius: '8px', padding: '10px 12px' }}>
+                    <div style={{ fontSize: '12px', color: '#1C1C1E', fontWeight: '600' }}>{item.item_name || '—'}</div>
+                    <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '2px' }}>qty: {item.quantity ?? 0}</div>
+                    <div style={{ fontSize: '11px', color: '#854F0B', marginTop: '4px' }}>{item.reason || 'No ATA rule found'} · Analysis check recommended.</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <details style={{ background: '#FFFEFC', border: '1px solid #ECE5D9', borderRadius: '10px', padding: '12px', marginBottom: '8px' }}>
+            <summary style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#B8965A', cursor: 'pointer' }}>
+              Ignored rows
+            </summary>
+            <div style={{ marginTop: '10px', display: 'grid', gap: '6px' }}>
+              {processing.ignoredItems.length === 0 ? (
+                <div style={{ fontSize: '12px', color: '#6B6860' }}>No ignored rows.</div>
+              ) : (
+                processing.ignoredItems.map((item, idx) => (
+                  <div key={`${item.id || idx}`} style={{ fontSize: '12px', color: '#9CA3AF' }}>
+                    {item.item_name || '—'} · qty: {item.quantity ?? 0}
+                  </div>
+                ))
+              )}
+            </div>
+          </details>
         </>
       )}
     </div>
