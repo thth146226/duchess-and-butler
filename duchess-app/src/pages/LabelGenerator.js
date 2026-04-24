@@ -288,31 +288,31 @@ export default function LabelGenerator() {
   }
 
   return (
-    <div style={{ padding: '34px 40px 44px', fontFamily: "'DM Sans', sans-serif", maxWidth: '1320px', margin: '0 auto', background: '#FCFAF7' }}>
-      <div style={{ marginBottom: '20px' }}>
+    <div style={{ padding: '36px 42px 52px', fontFamily: "'DM Sans', sans-serif", maxWidth: '1320px', margin: '0 auto', background: '#FCFAF7' }}>
+      <div style={{ marginBottom: '24px' }}>
         <h1 style={{ fontSize: '30px', fontWeight: '600', color: '#1C1C1E', margin: 0, letterSpacing: '-0.01em', fontFamily: "'Cormorant Garamond', serif", lineHeight: 1 }}>
           Label Generator
         </h1>
-        <div style={{ fontSize: '13px', color: '#6B6860', marginTop: '8px' }}>
+        <div style={{ fontSize: '13px', color: '#6B6860', marginTop: '10px', lineHeight: 1.5 }}>
           Generate premium operational labels from real orders with controlled manual adjustments.
         </div>
       </div>
 
-      <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '12px', padding: '16px', marginBottom: '16px' }}>
-        <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.12em', color: '#B8965A', marginBottom: '10px' }}>Select order</div>
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' }}>
+      <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '14px', padding: '18px', marginBottom: '18px' }}>
+        <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.12em', color: '#B8965A', marginBottom: '12px' }}>Select order</div>
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '12px' }}>
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search by ref, event or client"
-            style={{ flex: 1, minWidth: '240px', padding: '10px 12px', border: '1px solid #DDD8CF', borderRadius: '8px', fontSize: '13px', background: '#FFFEFC' }}
+            style={{ flex: 1, minWidth: '240px', padding: '11px 13px', border: '1px solid #DDD8CF', borderRadius: '9px', fontSize: '13px', background: '#FFFEFC' }}
           />
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#6B6860' }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#6B6860' }}>
             <input type="checkbox" checked={showPastOrders} onChange={e => setShowPastOrders(e.target.checked)} />
             Show past orders
           </label>
         </div>
-        <div style={{ border: '1px solid #E6E0D6', borderRadius: '8px', overflow: 'hidden' }}>
+        <div style={{ border: '1px solid #E6E0D6', borderRadius: '10px', overflow: 'hidden' }}>
           <div style={{ padding: '9px 12px', background: '#F7F3EE', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#6B6860', fontWeight: '600' }}>
             Orders ({filteredOrders.length})
           </div>
@@ -328,11 +328,11 @@ export default function LabelGenerator() {
                   <button
                     key={order.id}
                     onClick={() => loadOrderData(order.id)}
-                    style={{ width: '100%', textAlign: 'left', border: 'none', borderTop: '1px solid #F1EFE8', background: isSelected ? '#FFF8ED' : '#fff', padding: '11px 14px', cursor: 'pointer' }}
+                    style={{ width: '100%', textAlign: 'left', border: 'none', borderTop: '1px solid #F3EFE7', background: isSelected ? '#FFFBF3' : '#fff', boxShadow: isSelected ? 'inset 3px 0 0 #C4A882' : 'none', padding: '12px 14px', cursor: 'pointer' }}
                   >
-                    <div style={{ fontSize: '13px', fontWeight: '600', color: '#1C1C1E' }}>{order.crms_ref || '—'} · {order.event_name || '—'}</div>
-                    <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '3px' }}>
-                      {order.client_name || '—'} · DEL {order.delivery_date || '—'} · COL {order.collection_date || '—'}
+                    <div style={{ fontSize: '13px', fontWeight: '600', color: '#1C1C1E', lineHeight: 1.35 }}>{order.crms_ref || '—'} · {order.event_name || '—'}</div>
+                    <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '4px', lineHeight: 1.4 }}>
+                      {order.client_name || '—'} · DEL {order.delivery_date || '—'} · COL {order.collection_date || '—'} · {order.status || '—'}
                     </div>
                   </button>
                 )
@@ -360,27 +360,27 @@ export default function LabelGenerator() {
 
       {selectedOrder && (
         <>
-          <div style={{ background: '#fff', border: '1px solid #D9D2C7', borderRadius: '12px', padding: '18px', marginBottom: '16px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
+          <div style={{ background: '#fff', border: '1px solid #D9D2C7', borderRadius: '14px', padding: '20px', marginBottom: '18px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '14px', flexWrap: 'wrap' }}>
               <div>
                 <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '30px', fontWeight: '600', lineHeight: 1, color: '#1C1C1E' }}>
                   {selectedOrder.event_name || 'Untitled event'}
                 </div>
-                <div style={{ marginTop: '6px', fontSize: '12px', color: '#6B6860' }}>Ref {selectedOrder.crms_ref || '—'}</div>
+                <div style={{ marginTop: '7px', fontSize: '12px', color: '#6B6860' }}>Ref {selectedOrder.crms_ref || '—'}</div>
               </div>
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                <button onClick={resetAllToAutomatic} style={{ fontSize: '11px', padding: '7px 10px', borderRadius: '7px', border: '1px solid #DDD8CF', background: '#fff', color: '#6B6860', cursor: 'pointer' }}>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                <button onClick={resetAllToAutomatic} style={{ fontSize: '11px', padding: '7px 11px', borderRadius: '8px', border: '1px solid #DDD8CF', background: '#fff', color: '#6B6860', cursor: 'pointer' }}>
                   Reset all to automatic
                 </button>
-                <button disabled style={{ fontSize: '11px', padding: '7px 10px', borderRadius: '7px', border: '1px solid #E4DED4', background: '#F7F3EE', color: '#A39B8E', cursor: 'not-allowed' }}>
+                <button disabled style={{ fontSize: '11px', padding: '7px 11px', borderRadius: '8px', border: '1px solid #E4DED4', background: '#F7F3EE', color: '#A39B8E', cursor: 'not-allowed' }}>
                   Print
                 </button>
-                <button disabled style={{ fontSize: '11px', padding: '7px 10px', borderRadius: '7px', border: '1px solid #E4DED4', background: '#F7F3EE', color: '#A39B8E', cursor: 'not-allowed' }}>
+                <button disabled style={{ fontSize: '11px', padding: '7px 11px', borderRadius: '8px', border: '1px solid #E4DED4', background: '#F7F3EE', color: '#A39B8E', cursor: 'not-allowed' }}>
                   Export PDF
                 </button>
               </div>
             </div>
-            <div style={{ marginTop: '14px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px 18px', fontSize: '12px', color: '#6B6860' }}>
+            <div style={{ marginTop: '16px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '11px 20px', fontSize: '12px', color: '#6B6860', lineHeight: 1.45 }}>
               <div><strong style={{ color: '#1C1C1E' }}>Client:</strong> {selectedOrder.client_name || '—'}</div>
               <div><strong style={{ color: '#1C1C1E' }}>Event Date:</strong> {selectedOrder.delivery_date || '—'}</div>
               <div><strong style={{ color: '#1C1C1E' }}>Venue:</strong> {selectedOrder.venue || '—'}</div>
@@ -394,14 +394,14 @@ export default function LabelGenerator() {
               </span>
               <span style={{ fontSize: '12px', color: '#1C1C1E', fontWeight: '500' }}>Postcode: {postcodeDiagnostic.value || '—'}</span>
             </div>
-            <div style={{ marginTop: '14px' }}>
+            <div style={{ marginTop: '16px' }}>
               <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.12em', color: '#B8965A', marginBottom: '8px' }}>Order colour</div>
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                 {Object.values(LABEL_ORDER_COLOURS).map(c => (
                   <button
                     key={c.key}
                     onClick={() => setOrderColourKey(c.key)}
-                    style={{ fontSize: '12px', padding: '6px 10px', borderRadius: '20px', border: `1px solid ${orderColourKey === c.key ? c.color : '#DDD8CF'}`, background: orderColourKey === c.key ? '#F7F3EE' : '#fff', color: orderColourKey === c.key ? c.color : '#6B6860', cursor: 'pointer' }}
+                    style={{ fontSize: '12px', padding: '6px 10px', borderRadius: '20px', border: `1px solid ${orderColourKey === c.key ? c.color : '#DDD8CF'}`, background: orderColourKey === c.key ? '#F7F3EE' : '#fff', color: orderColourKey === c.key ? c.color : '#6B6860', cursor: 'pointer', lineHeight: 1.2 }}
                   >
                     {c.label}
                   </button>
@@ -410,11 +410,11 @@ export default function LabelGenerator() {
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '16px', marginBottom: '16px' }}>
-            <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '12px', padding: '16px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '16px', marginBottom: '18px', alignItems: 'stretch' }}>
+            <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '14px', padding: '18px' }}>
               <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.12em', color: '#B8965A', marginBottom: '10px' }}>Items summary</div>
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', lineHeight: 1.4 }}>
                   <thead>
                     <tr style={{ background: '#F7F3EE', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: '10px' }}>
                       <th style={{ textAlign: 'left', padding: '8px 10px' }}>Product</th>
@@ -444,18 +444,18 @@ export default function LabelGenerator() {
                 </table>
               </div>
             </div>
-            <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '12px', padding: '16px' }}>
+            <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '14px', padding: '18px', display: 'flex', flexDirection: 'column' }}>
               <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.12em', color: '#B8965A', marginBottom: '10px' }}>Output summary</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                <div style={{ border: '1px solid #E6E0D6', borderRadius: '8px', padding: '10px' }}><div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase' }}>Eligible Items</div><div style={{ fontSize: '22px', color: '#1C1C1E', fontWeight: '600', marginTop: '4px' }}>{outputSummary.eligibleItems}</div></div>
-                <div style={{ border: '1px solid #E6E0D6', borderRadius: '8px', padding: '10px' }}><div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase' }}>Generated Labels</div><div style={{ fontSize: '22px', color: '#1C1C1E', fontWeight: '600', marginTop: '4px' }}>{outputSummary.generatedLabels}</div></div>
-                <div style={{ border: '1px solid #E6E0D6', borderRadius: '8px', padding: '10px' }}><div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase' }}>Auto Labels</div><div style={{ fontSize: '22px', color: '#1C1C1E', fontWeight: '600', marginTop: '4px' }}>{outputSummary.autoLabels}</div></div>
-                <div style={{ border: '1px solid #E6E0D6', borderRadius: '8px', padding: '10px' }}><div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase' }}>Needs Attention</div><div style={{ fontSize: '22px', color: outputSummary.needsAttention > 0 ? '#A32D2D' : '#1C1C1E', fontWeight: '600', marginTop: '4px' }}>{outputSummary.needsAttention}</div></div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', flex: 1 }}>
+                <div style={{ border: '1px solid #E6E0D6', borderRadius: '9px', padding: '12px', background: '#FFFEFC' }}><div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Eligible Items</div><div style={{ fontSize: '24px', color: '#1C1C1E', fontWeight: '600', marginTop: '6px', lineHeight: 1 }}>{outputSummary.eligibleItems}</div></div>
+                <div style={{ border: '1px solid #E6E0D6', borderRadius: '9px', padding: '12px', background: '#FFFEFC' }}><div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Generated Labels</div><div style={{ fontSize: '24px', color: '#1C1C1E', fontWeight: '600', marginTop: '6px', lineHeight: 1 }}>{outputSummary.generatedLabels}</div></div>
+                <div style={{ border: '1px solid #E6E0D6', borderRadius: '9px', padding: '12px', background: '#FFFEFC' }}><div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Auto Labels</div><div style={{ fontSize: '24px', color: '#1C1C1E', fontWeight: '600', marginTop: '6px', lineHeight: 1 }}>{outputSummary.autoLabels}</div></div>
+                <div style={{ border: '1px solid #E6E0D6', borderRadius: '9px', padding: '12px', background: '#FFFEFC' }}><div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Needs Attention</div><div style={{ fontSize: '24px', color: outputSummary.needsAttention > 0 ? '#A32D2D' : '#1C1C1E', fontWeight: '600', marginTop: '6px', lineHeight: 1 }}>{outputSummary.needsAttention}</div></div>
               </div>
             </div>
           </div>
 
-          <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '12px', padding: '16px', marginBottom: '16px' }}>
+          <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '14px', padding: '18px', marginBottom: '18px' }}>
             <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.12em', color: '#B8965A', marginBottom: '10px' }}>
               Generated labels editor
             </div>
@@ -464,17 +464,17 @@ export default function LabelGenerator() {
             ) : processing.eligibleMatchedItems.length === 0 ? (
               <div style={{ fontSize: '13px', color: '#9CA3AF' }}>empty state: no matched items to generate labels.</div>
             ) : (
-              <div style={{ display: 'grid', gap: '14px' }}>
+              <div style={{ display: 'grid', gap: '16px' }}>
                 {processing.eligibleMatchedItems.map(item => {
                   const conf = confidenceStyle(item.confidence)
                   const manual = manualStateByItem[item.itemKey] || { labels: [], total: 0, valid: false }
                   return (
-                    <div key={item.itemKey} style={{ border: '1px solid #E8E3D9', borderRadius: '10px', padding: '13px', background: '#FFFEFC' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '8px' }}>
-                        <div style={{ fontSize: '14px', fontWeight: '600', color: '#1C1C1E' }}>{item.productName}</div>
-                        <span style={{ fontSize: '10px', fontWeight: '600', padding: '2px 8px', borderRadius: '12px', background: conf.bg, color: conf.color }}>{item.confidence}</span>
+                    <div key={item.itemKey} style={{ border: '1px solid #E8E3D9', borderRadius: '11px', padding: '15px', background: '#FFFEFC' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' }}>
+                        <div style={{ fontSize: '15px', fontWeight: '600', color: '#1C1C1E', lineHeight: 1.35 }}>{item.productName}</div>
+                        <span style={{ fontSize: '10px', fontWeight: '600', padding: '3px 9px', borderRadius: '12px', background: conf.bg, color: conf.color }}>{item.confidence}</span>
                       </div>
-                      <div style={{ fontSize: '11px', color: '#6B6860', marginBottom: '10px' }}>
+                      <div style={{ fontSize: '11px', color: '#6B6860', marginBottom: '12px', lineHeight: 1.5 }}>
                         total: {item.totalQty} · capacity: {item.capacity} · packaging: {(item.packagingType || 'unit').toUpperCase()} · category: {item.category || 'OTHER'}
                       </div>
                       {item.flags.length > 0 && (
@@ -486,26 +486,26 @@ export default function LabelGenerator() {
                           ))}
                         </div>
                       )}
-                      <div style={{ display: 'grid', gap: '7px' }}>
+                      <div style={{ display: 'grid', gap: '8px' }}>
                         {manualLabelsByItem[item.itemKey]?.map(label => (
-                          <div key={label.id} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <input value={label.quantity} onChange={e => setItemManualQuantity(item.itemKey, label.id, e.target.value)} style={{ width: '90px', padding: '7px 8px', border: '1px solid #DDD8CF', borderRadius: '7px', fontSize: '12px', background: '#fff' }} />
-                            <span style={{ fontSize: '11px', color: '#6B6860' }}>{item.productName}</span>
-                            <button onClick={() => removeManualLabelRow(item.itemKey, label.id)} style={{ marginLeft: 'auto', fontSize: '11px', padding: '4px 8px', borderRadius: '4px', border: '1px solid #FECACA', background: '#FEF2F2', color: '#DC2626', cursor: 'pointer' }}>
+                          <div key={label.id} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <input value={label.quantity} onChange={e => setItemManualQuantity(item.itemKey, label.id, e.target.value)} style={{ width: '96px', padding: '8px 9px', border: '1px solid #DDD8CF', borderRadius: '8px', fontSize: '12px', background: '#fff' }} />
+                            <span style={{ fontSize: '11px', color: '#6B6860', lineHeight: 1.4 }}>{item.productName}</span>
+                            <button onClick={() => removeManualLabelRow(item.itemKey, label.id)} style={{ marginLeft: 'auto', fontSize: '11px', padding: '4px 8px', borderRadius: '6px', border: '1px solid #FECACA', background: '#FFF7F7', color: '#C24141', cursor: 'pointer' }}>
                               Remove
                             </button>
                           </div>
                         ))}
                       </div>
-                      <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
-                        <button onClick={() => addManualLabelRow(item.itemKey)} style={{ fontSize: '11px', padding: '5px 9px', borderRadius: '5px', border: '1px solid #DDD8CF', background: '#fff', color: '#6B6860', cursor: 'pointer' }}>
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
+                        <button onClick={() => addManualLabelRow(item.itemKey)} style={{ fontSize: '11px', padding: '5px 9px', borderRadius: '6px', border: '1px solid #DDD8CF', background: '#fff', color: '#6B6860', cursor: 'pointer' }}>
                           Add label row
                         </button>
-                        <button onClick={() => resetItemToAutomatic(item)} style={{ fontSize: '11px', padding: '5px 9px', borderRadius: '5px', border: '1px solid #DDD8CF', background: '#F7F3EE', color: '#6B6860', cursor: 'pointer' }}>
+                        <button onClick={() => resetItemToAutomatic(item)} style={{ fontSize: '11px', padding: '5px 9px', borderRadius: '6px', border: '1px solid #DDD8CF', background: '#F7F3EE', color: '#6B6860', cursor: 'pointer' }}>
                           Reset item to automatic
                         </button>
                       </div>
-                      <div style={{ marginTop: '8px', fontSize: '11px', color: manual.valid ? '#3B6D11' : '#A32D2D', fontWeight: '500' }}>
+                      <div style={{ marginTop: '10px', fontSize: '11px', color: manual.valid ? '#2F6A18' : '#A32D2D', fontWeight: '600', lineHeight: 1.4 }}>
                         {manual.valid ? `Valid split (${manual.total}/${item.totalQty})` : `Mismatch (${manual.total}/${item.totalQty})`}
                       </div>
                     </div>
@@ -515,14 +515,14 @@ export default function LabelGenerator() {
             )}
           </div>
 
-          <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '12px', padding: '16px', marginBottom: '16px' }}>
-            <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.12em', color: '#B8965A', marginBottom: '10px' }}>
+          <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '14px', padding: '20px', marginBottom: '18px' }}>
+            <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.12em', color: '#B8965A', marginBottom: '12px' }}>
               Labels preview
             </div>
             {previewLabels.length === 0 ? (
               <div style={{ fontSize: '12px', color: '#6B6860' }}>No preview labels generated yet.</div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '14px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '16px' }}>
                 {previewLabels.map(label => (
                   <div key={label.id} style={{ background: '#fff', border: '1px solid #D3CEC3', borderRadius: '10px', padding: '18px 16px', minHeight: '268px', display: 'flex', flexDirection: 'column' }}>
                     <div style={{ textAlign: 'center', fontFamily: "'Cormorant Garamond', serif", fontWeight: '600', fontSize: '20px', color: '#1C1C1E', lineHeight: 1.05 }}>
@@ -550,11 +550,11 @@ export default function LabelGenerator() {
                 ))}
               </div>
             )}
-            <div style={{ marginTop: '12px', fontSize: '11px', color: '#9CA3AF' }}>Print and PDF export will be added in the next phase.</div>
+            <div style={{ marginTop: '14px', fontSize: '11px', color: '#9CA3AF' }}>Print and PDF export will be added in the next phase.</div>
           </div>
 
-          <div style={{ background: '#FFFEFC', border: '1px solid #ECE5D9', borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
-            <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#B8965A', marginBottom: '10px' }}>
+          <div style={{ background: '#FFFDF9', border: '1px solid #EEE7DD', borderRadius: '10px', padding: '12px 13px', marginBottom: '10px' }}>
+            <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#B8965A', marginBottom: '8px' }}>
               Out-of-scope items
             </div>
             {processing.outOfScopeItems.length === 0 ? (
@@ -562,17 +562,17 @@ export default function LabelGenerator() {
             ) : (
               <div style={{ display: 'grid', gap: '6px' }}>
                 {processing.outOfScopeItems.map(item => (
-                  <div key={item.itemKey} style={{ border: '1px solid #FDE68A', background: '#FFFBEB', borderRadius: '8px', padding: '10px 12px' }}>
+                  <div key={item.itemKey} style={{ border: '1px solid #F2E7C8', background: '#FFFCF4', borderRadius: '8px', padding: '9px 10px' }}>
                     <div style={{ fontSize: '12px', color: '#1C1C1E', fontWeight: '600' }}>{item.item_name || '—'}</div>
-                    <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '2px' }}>qty: {item.quantity ?? 0}</div>
-                    <div style={{ fontSize: '11px', color: '#854F0B', marginTop: '4px' }}>{item.reason || 'No ATA rule found'} · Analysis check recommended.</div>
+                    <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '2px', lineHeight: 1.4 }}>qty: {item.quantity ?? 0}</div>
+                    <div style={{ fontSize: '11px', color: '#86653A', marginTop: '3px', lineHeight: 1.4 }}>{item.reason || 'No ATA rule found'} · Analysis check recommended.</div>
                   </div>
                 ))}
               </div>
             )}
           </div>
 
-          <details style={{ background: '#FFFEFC', border: '1px solid #ECE5D9', borderRadius: '10px', padding: '12px', marginBottom: '8px' }}>
+          <details style={{ background: '#FFFDF9', border: '1px solid #EEE7DD', borderRadius: '10px', padding: '11px 12px', marginBottom: '8px' }}>
             <summary style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#B8965A', cursor: 'pointer' }}>
               Ignored rows
             </summary>
