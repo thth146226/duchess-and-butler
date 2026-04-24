@@ -48,7 +48,8 @@ function normalizeAliasKey(normalizedName) {
 // Keys are normalized legacy/divergent names; values are canonical RMS names.
 const RAW_CURATED_RMS_CANONICAL_NAME_MAP = {
   ' audrey gold flute ': ' Audrey Gold Rimmed Champagne Flute ',
-  ' audrey gold red wine ': ' Audrey Gold Rimmed Red Wine Glass ',
+  ' audrey gold g.vin ': ' Audrey Gold Rimmed Water/ Grand Vin Glass ',
+  ' audrey gold red wine ': ' Audrey Gold Rimmed Red Wine ',
   ' audrey gold white ': ' Audrey Gold Rimmed White Wine Glass ',
   ' baroque side plate ( 50 ) ': ' Baroque Side Plate ',
   ' diva green dessert plate ': ' Diva Dessert Plate 21cm - Green ',
