@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
+import jsPDF from 'jspdf'
+import html2canvas from 'html2canvas'
 import {
   LABEL_ORDER_COLOURS,
   buildAtaCapacityMap,
@@ -45,6 +47,8 @@ export default function LabelGenerator() {
   const [error, setError] = useState(null)
   const [manualLabelsByItem, setManualLabelsByItem] = useState({})
   const [orderColourKey, setOrderColourKey] = useState('black')
+  const [isPrinting, setIsPrinting] = useState(false)
+  const [isExportingPdf, setIsExportingPdf] = useState(false)
 
   const isDev = process.env.NODE_ENV === 'development'
   function devLog(message, payload) {
@@ -271,6 +275,11 @@ export default function LabelGenerator() {
     }
   }, [manualStateByItem, previewLabels.length, processing.eligibleMatchedItems, processing.outOfScopeItems.length])
 
+  const hasInvalidManualItems = useMemo(
+    () => processing.eligibleMatchedItems.some(item => !manualStateByItem[item.itemKey]?.valid),
+    [manualStateByItem, processing.eligibleMatchedItems]
+  )
+
   useEffect(() => {
     if (!selectedOrder) return
     devLog('[labels-phase2] postcode diagnostic', {
@@ -300,6 +309,238 @@ export default function LabelGenerator() {
     const next = {}
     for (const item of processing.eligibleMatchedItems) next[item.itemKey] = item.autoLabels.map(l => ({ id: l.id, quantity: l.quantity }))
     setManualLabelsByItem(next)
+  }
+
+  function getOutputBlockReason() {
+    if (!selectedOrder) return 'Select an order before printing or exporting.'
+    if (hasInvalidManualItems) return 'Cannot export while there are invalid manual splits.'
+    if (!previewLabels.length) return 'No valid labels available to print or export.'
+    return null
+  }
+
+  function renderLabelCardHtml(label, order, postcode, itemColour) {
+    return `
+      <div class="label-card">
+        <div class="brand">Duchess & Butler</div>
+        <div class="event-name">${(order?.event_name || '').toUpperCase()}</div>
+        <div class="client-name">${order?.client_name || '—'}</div>
+        <div class="postcode">${postcode || '—'}</div>
+        <div class="support-row">
+          <span>Ref: ${order?.crms_ref || '—'}</span>
+          <span>${(label.packagingType || 'unit').toUpperCase()}</span>
+        </div>
+        <div class="item-box">
+          <span class="item-text" style="color:${itemColour};">${label.quantity}x ${label.productName}</span>
+        </div>
+        <div class="footer-row">
+          <span>${(label.category || 'OTHER').toUpperCase()}</span>
+          <span>${(label.packagingType || 'unit').toUpperCase()}</span>
+        </div>
+      </div>
+    `
+  }
+
+  function renderOutputMarkup(labels) {
+    const cards = labels
+      .map(label => renderLabelCardHtml(label, selectedOrder, postcodeDiagnostic.value, orderColour.color))
+      .join('')
+
+    return `
+      <style>
+        @page { size: A4; margin: 10mm; }
+        body {
+          margin: 0;
+          font-family: 'DM Sans', Arial, sans-serif;
+          background: #ffffff;
+          color: #1C1C1E;
+        }
+        .sheet {
+          width: 100%;
+          box-sizing: border-box;
+          padding: 8px;
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+        }
+        .label-card {
+          border: 1px solid #D3CEC3;
+          border-radius: 10px;
+          padding: 16px 14px;
+          min-height: 250px;
+          display: flex;
+          flex-direction: column;
+          break-inside: avoid;
+          page-break-inside: avoid;
+        }
+        .brand {
+          text-align: center;
+          font-family: 'Times New Roman', serif;
+          font-size: 20px;
+          font-weight: 600;
+          line-height: 1.05;
+        }
+        .event-name {
+          text-align: center;
+          margin-top: 8px;
+          font-size: 11px;
+          font-weight: 700;
+          letter-spacing: 0.08em;
+        }
+        .client-name, .postcode {
+          text-align: center;
+          margin-top: 4px;
+          font-size: 11px;
+        }
+        .support-row {
+          display: flex;
+          justify-content: space-between;
+          margin-top: 14px;
+          font-size: 10px;
+          letter-spacing: 0.03em;
+        }
+        .item-box {
+          margin-top: 12px;
+          border: 1.5px solid #1C1C1E;
+          border-radius: 6px;
+          padding: 16px 10px;
+          text-align: center;
+          flex: 1;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .item-text {
+          font-size: 15px;
+          font-weight: 700;
+          line-height: 1.35;
+        }
+        .footer-row {
+          margin-top: 12px;
+          display: flex;
+          justify-content: space-between;
+          font-size: 10px;
+          text-transform: uppercase;
+          letter-spacing: 0.03em;
+        }
+      </style>
+      <div class="sheet">${cards}</div>
+    `
+  }
+
+  function renderOutputHtml(labels) {
+    const markup = renderOutputMarkup(labels)
+
+    return `
+      <!doctype html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>Duchess Labels - ${selectedOrder?.crms_ref || 'Order'}</title>
+        </head>
+        <body>
+          ${markup}
+        </body>
+      </html>
+    `
+  }
+
+  async function handlePrint() {
+    const reason = getOutputBlockReason()
+    if (reason) {
+      setError(reason)
+      return
+    }
+
+    devLog('[labels-output] print requested', { count: previewLabels.length })
+    setIsPrinting(true)
+    setError(null)
+
+    const printWindow = window.open('', '_blank', 'noopener,noreferrer')
+    if (!printWindow) {
+      devLog('[labels-output] print blocked', {})
+      setError('Printing was blocked by the browser. Please allow pop-ups for this site.')
+      setIsPrinting(false)
+      return
+    }
+
+    try {
+      printWindow.document.write('<!doctype html><html><body style="font-family: Arial, sans-serif; padding: 20px;">Preparing labels...</body></html>')
+      printWindow.document.close()
+      const html = renderOutputHtml(previewLabels)
+      printWindow.document.open()
+      printWindow.document.write(html)
+      printWindow.document.close()
+      printWindow.focus()
+      printWindow.print()
+    } catch (err) {
+      setError('Could not prepare print output: ' + err.message)
+    } finally {
+      setIsPrinting(false)
+    }
+  }
+
+  async function handleExportPdf() {
+    const reason = getOutputBlockReason()
+    if (reason) {
+      setError(reason)
+      return
+    }
+
+    devLog('[labels-output] pdf requested', { count: previewLabels.length })
+    setIsExportingPdf(true)
+    setError(null)
+
+    const container = document.createElement('div')
+    container.style.position = 'absolute'
+    container.style.left = '-9999px'
+    container.style.top = '0'
+    container.style.width = '794px' // A4 width at ~96dpi
+    container.style.background = '#fff'
+    container.innerHTML = renderOutputMarkup(previewLabels)
+    document.body.appendChild(container)
+
+    try {
+      const canvas = await html2canvas(container, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+      })
+      const imgData = canvas.toDataURL('image/png')
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+      const pageWidth = pdf.internal.pageSize.getWidth()
+      const pageHeight = pdf.internal.pageSize.getHeight()
+      const margin = 10
+      const imgWidth = pageWidth - margin * 2
+      const imgHeight = (canvas.height * imgWidth) / canvas.width
+
+      if (imgHeight <= pageHeight - margin * 2) {
+        pdf.addImage(imgData, 'PNG', margin, margin, imgWidth, imgHeight)
+      } else {
+        let heightLeft = imgHeight
+        let position = margin
+        pdf.addImage(imgData, 'PNG', margin, position, imgWidth, imgHeight)
+        heightLeft -= (pageHeight - margin * 2)
+        while (heightLeft > 0) {
+          position = heightLeft - imgHeight + margin
+          pdf.addPage()
+          pdf.addImage(imgData, 'PNG', margin, position, imgWidth, imgHeight)
+          heightLeft -= (pageHeight - margin * 2)
+        }
+      }
+
+      const safeFilename = (selectedOrder?.event_name || selectedOrder?.crms_ref || 'labels')
+        .replace(/[^a-z0-9]/gi, '_')
+        .replace(/_+/g, '_')
+        .slice(0, 60)
+      pdf.save(`Duchess_Labels_${safeFilename}.pdf`)
+      devLog('[labels-output] pdf exported', { count: previewLabels.length })
+    } catch (err) {
+      setError('Error exporting PDF: ' + err.message)
+    } finally {
+      document.body.removeChild(container)
+      setIsExportingPdf(false)
+    }
   }
 
   return (
@@ -387,11 +628,19 @@ export default function LabelGenerator() {
                 <button onClick={resetAllToAutomatic} style={{ fontSize: '11px', padding: '7px 11px', borderRadius: '8px', border: '1px solid #DDD8CF', background: '#fff', color: '#6B6860', cursor: 'pointer' }}>
                   Reset all to automatic
                 </button>
-                <button disabled style={{ fontSize: '11px', padding: '7px 11px', borderRadius: '8px', border: '1px solid #E4DED4', background: '#F7F3EE', color: '#A39B8E', cursor: 'not-allowed' }}>
-                  Print
+                <button
+                  onClick={handlePrint}
+                  disabled={isPrinting || isExportingPdf}
+                  style={{ fontSize: '11px', padding: '7px 11px', borderRadius: '8px', border: '1px solid #DDD8CF', background: isPrinting ? '#F7F3EE' : '#fff', color: '#6B6860', cursor: isPrinting || isExportingPdf ? 'not-allowed' : 'pointer' }}
+                >
+                  {isPrinting ? 'Preparing print...' : 'Print'}
                 </button>
-                <button disabled style={{ fontSize: '11px', padding: '7px 11px', borderRadius: '8px', border: '1px solid #E4DED4', background: '#F7F3EE', color: '#A39B8E', cursor: 'not-allowed' }}>
-                  Export PDF
+                <button
+                  onClick={handleExportPdf}
+                  disabled={isExportingPdf || isPrinting}
+                  style={{ fontSize: '11px', padding: '7px 11px', borderRadius: '8px', border: '1px solid #DDD8CF', background: isExportingPdf ? '#F7F3EE' : '#fff', color: '#6B6860', cursor: isExportingPdf || isPrinting ? 'not-allowed' : 'pointer' }}
+                >
+                  {isExportingPdf ? 'Exporting PDF...' : 'Export PDF'}
                 </button>
               </div>
             </div>
