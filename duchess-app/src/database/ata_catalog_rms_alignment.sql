@@ -37,6 +37,46 @@ where active = true and name = 'Picadilly';
 update public.ata_items set name = 'French Helios'
 where active = true and name = 'French Hellios';
 
+-- Second-pass explicit fixes for legacy "French Hellios" rows that remained.
+update public.ata_items set name = 'French Helios Dinner Fork'
+where active = true and name = 'French Hellios Dinner Fork';
+
+update public.ata_items set name = 'French Helios Dinner Knife'
+where active = true and name = 'French Hellios Dinner Knife';
+
+update public.ata_items set name = 'French Helios Dessert Fork'
+where active = true and name = 'French Hellios Dessert Fork';
+
+update public.ata_items set name = 'French Helios Dessert Spoon'
+where active = true and name = 'French Hellios Dessert Spoon';
+
+update public.ata_items set name = 'French Helios Starter Knife'
+where active = true and name = 'French Hellios Starter Knife';
+
+update public.ata_items set name = 'French Helios Tea Spoon'
+where active = true and name = 'French Hellios Tea Spoon';
+
+update public.ata_items set name = 'French Helios Butter Knife'
+where active = true and name = 'French Hellios Butter Knife';
+
+update public.ata_items set name = 'French Helios Cherry Dinner Fork'
+where active = true and name = 'French Hellios Cherry Dinner Fork';
+
+update public.ata_items set name = 'French Helios Cherry Dinner Knife'
+where active = true and name = 'French Hellios Cherry Dinner Knife';
+
+update public.ata_items set name = 'French Helios Cherry Dessert Fork'
+where active = true and name = 'French Hellios Cherry Dessert Fork';
+
+update public.ata_items set name = 'French Helios Cherry Dessert Spoon'
+where active = true and name = 'French Hellios Cherry Dessert Spoon';
+
+update public.ata_items set name = 'French Helios Cherry Butter Knife'
+where active = true and name = 'French Hellios Cherry Butter Knife';
+
+update public.ata_items set name = 'French Helios Cherry Starter Knife'
+where active = true and name = 'French Hellios Cherry Starter Knife';
+
 update public.ata_items set name = 'Gaia White Dessert Spoon'
 where active = true and name = 'Gaia White Desser Spon';
 
@@ -116,9 +156,9 @@ where active = true
 -- 3) Add explicit missing RMS items (idempotent inserts, kg = 0)
 --    Family packing rules:
 --      - Botanica/Botanica Fleur Rattan Charger: 40 pcs/box
---      - Valentina/Peony: 15 pcs/box
 --      - Table Lamps: 8 pcs/box
 --      - Hurricane Candle Sleeves: 7 pcs/box
+--    Existing rows remain untouched: no existing weight/capacity/category changes.
 -- ============================================================
 
 insert into public.ata_items (name, category, unit_name, pieces_per_unit, weight_per_unit, notes, active)
@@ -128,13 +168,7 @@ where not exists (
 );
 
 insert into public.ata_items (name, category, unit_name, pieces_per_unit, weight_per_unit, notes, active)
-select 'Valentina Peony Charger Plate', 'charger_plates', 'box', 15, 0, 'RMS-aligned canonical ATA name', true
-where not exists (
-  select 1 from public.ata_items where lower(trim(name)) = lower(trim('Valentina Peony Charger Plate'))
-);
-
-insert into public.ata_items (name, category, unit_name, pieces_per_unit, weight_per_unit, notes, active)
-select 'Table Lamp', 'other', 'box', 8, 0, 'RMS-aligned canonical ATA name', true
+select 'Table Lamp', 'table_lamps', 'box', 8, 0, 'RMS-aligned canonical ATA name', true
 where not exists (
   select 1 from public.ata_items where lower(trim(name)) = lower(trim('Table Lamp'))
 );
