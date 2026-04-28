@@ -21,6 +21,15 @@ where active = true and name = 'Bronte Gold Charger Plate';
 update public.ata_items set name = 'Diva Charger/ Dinner Plate 29cm - Yellow'
 where active = true and name = 'Diva Yellow Charger Plate';
 
+update public.ata_items set name = 'Valentina Sage Green and Gold Charger Plate'
+where active = true and name = 'Valentina Sage Green Gold Charger Plate';
+
+update public.ata_items set name = 'Valentina Sage Green and Gold Charger Plate'
+where active = true and name = 'Valentina Sage Green Gold Charger Plate ( 5 )';
+
+update public.ata_items set name = 'Clear Beaded Charger Plate'
+where active = true and name = 'Clear Beadead Charger Plate';
+
 -- Cutlery typo fixes and RMS wording
 update public.ata_items set name = 'Piccadilly'
 where active = true and name = 'Picadilly';
@@ -44,6 +53,24 @@ where active = true and name = 'Tumbler Brgundy';
 update public.ata_items set name = 'Nude Grand Vin'
 where active = true and name = 'Nude G.vin';
 
+update public.ata_items set name = 'Nude Champagne Flute'
+where active = true and name = 'Nude Flute';
+
+update public.ata_items set name = 'Nude Red Wine Glass'
+where active = true and name = 'Nude Red Wine';
+
+update public.ata_items set name = 'Nude White Wine Glass'
+where active = true and name = 'Nude White Wine';
+
+update public.ata_items set name = 'Tulip Water Glass - Green'
+where active = true and name = 'Tulip Green';
+
+update public.ata_items set name = 'Tulip Water Glass - Dusty Rose'
+where active = true and name = 'Tulip Pink';
+
+update public.ata_items set name = 'Tulip Water Glass - Nude'
+where active = true and name = 'Tulipe Nude';
+
 -- Other typo/format fixes
 update public.ata_items set name = 'Pebble Jug'
 where active = true and name = 'Peble Jug';
@@ -51,12 +78,30 @@ where active = true and name = 'Peble Jug';
 update public.ata_items set name = 'Primrose Green Tea Cup'
 where active = true and name = 'Primrose green Tea Cup';
 
+update public.ata_items set name = 'Mini Tulip Candle Holder'
+where active = true and name = 'Mini Tulio Candle Holder';
+
+update public.ata_items set name = 'Hydrangea Leaf Bread Plate Small'
+where active = true and name = 'Hydrangea Leaf Bread Plate - Small';
+
+update public.ata_items set name = 'Hydrangea Leaf Bread Plate Small'
+where active = true and name = 'Hydrangea Leaf Bread Plate - Small ( 32 )';
+
 -- Dinnerware plural normalization
 update public.ata_items set name = 'Burleigh Dinner Plate'
 where active = true and name = 'Burleigh Dinner Plates';
 
 update public.ata_items set name = 'Pearl Dinner Plate'
 where active = true and name = 'Pearl Dinner Plates';
+
+update public.ata_items set name = 'Etoile White & Gold Dessert Plate'
+where active = true and name = 'Etoile White Dessert Plate';
+
+update public.ata_items set name = 'Etoile White & Gold Dinner Plate'
+where active = true and name = 'Etoile White Dinner Plate';
+
+update public.ata_items set name = 'Etoile White & Gold Side Plate'
+where active = true and name = 'Etoile White Side Plate';
 
 -- ============================================================
 -- 2) Remove operational suffixes from canonical name only
