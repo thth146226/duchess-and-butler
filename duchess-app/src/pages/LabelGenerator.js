@@ -451,27 +451,46 @@ export default function LabelGenerator() {
       return
     }
 
-    devLog('[labels-output] print requested', { count: previewLabels.length })
+    devLog('[labels-print-fix] print requested', { count: previewLabels.length })
     setIsPrinting(true)
     setError(null)
 
     const printWindow = window.open('', '_blank', 'noopener,noreferrer')
     if (!printWindow) {
-      devLog('[labels-output] print blocked', {})
+      devLog('[labels-print-fix] popup blocked', {})
       setError('Printing was blocked by the browser. Please allow pop-ups for this site.')
       setIsPrinting(false)
       return
     }
 
     try {
-      printWindow.document.write('<!doctype html><html><body style="font-family: Arial, sans-serif; padding: 20px;">Preparing labels...</body></html>')
-      printWindow.document.close()
       const html = renderOutputHtml(previewLabels)
+
+      // 1) Write an immediate placeholder into the same window.
+      printWindow.document.open()
+      printWindow.document.write(
+        '<!doctype html><html><head><meta charset="utf-8" /></head><body style="font-family: Arial, sans-serif; padding: 20px;">Preparing labels...</body></html>'
+      )
+      printWindow.document.close()
+
+      // 2) Replace the contents of the same window with final printable HTML.
       printWindow.document.open()
       printWindow.document.write(html)
       printWindow.document.close()
+      devLog('[labels-print-fix] printable html injected', {})
+
+      // 3) Wait briefly to allow DOM/layout/paint before printing.
+      await new Promise(resolve => setTimeout(resolve, 250))
+      await new Promise(resolve => {
+        const raf = printWindow.requestAnimationFrame || window.requestAnimationFrame
+        if (!raf) return resolve()
+        raf(() => raf(() => resolve()))
+      })
+
+      // 4) Trigger print only after the final HTML is injected and rendered.
       printWindow.focus()
       printWindow.print()
+      devLog('[labels-print-fix] print triggered', {})
     } catch (err) {
       setError('Could not prepare print output: ' + err.message)
     } finally {
