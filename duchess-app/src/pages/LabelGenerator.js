@@ -455,7 +455,7 @@ export default function LabelGenerator() {
     setIsPrinting(true)
     setError(null)
 
-    const printWindow = window.open('', '_blank', 'noopener,noreferrer')
+    const printWindow = window.open('', '_blank')
     if (!printWindow) {
       devLog('[labels-print-fix] popup blocked', {})
       setError('Printing was blocked by the browser. Please allow pop-ups for this site.')
@@ -480,18 +480,12 @@ export default function LabelGenerator() {
       printWindow.document.close()
       devLog('[labels-print-fix] printable html injected', {})
 
-      // 3) Wait briefly to allow DOM/layout/paint before printing.
-      await new Promise(resolve => setTimeout(resolve, 250))
-      await new Promise(resolve => {
-        const raf = printWindow.requestAnimationFrame || window.requestAnimationFrame
-        if (!raf) return resolve()
-        raf(() => raf(() => resolve()))
-      })
-
-      // 4) Trigger print only after the final HTML is injected and rendered.
-      printWindow.focus()
-      printWindow.print()
-      devLog('[labels-print-fix] print triggered', {})
+      // 3) Wait briefly to allow browser rendering before print.
+      setTimeout(() => {
+        printWindow.focus()
+        printWindow.print()
+        devLog('[labels-print-fix] print triggered', {})
+      }, 300)
     } catch (err) {
       setError('Could not prepare print output: ' + err.message)
     } finally {
