@@ -464,14 +464,15 @@ export default function LabelGenerator() {
     }
 
     try {
-      const html = renderOutputHtml(previewLabels)
-
       // 1) Write an immediate placeholder into the same window.
       printWindow.document.open()
       printWindow.document.write(
         '<!doctype html><html><head><meta charset="utf-8" /></head><body style="font-family: Arial, sans-serif; padding: 20px;">Preparing labels...</body></html>'
       )
       printWindow.document.close()
+      devLog('[labels-print-fix] placeholder injected', {})
+
+      const html = renderOutputHtml(previewLabels)
 
       // 2) Replace the contents of the same window with final printable HTML.
       printWindow.document.open()
