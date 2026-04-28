@@ -212,10 +212,10 @@ export function resolveJobItemRule(jobItem, ataCapacityMap) {
 }
 
 export function generateLabelsForQuantity(totalQty, capacity) {
-  const qty = Number.parseInt(totalQty, 10)
-  const cap = Number.parseInt(capacity, 10)
-  if (!Number.isFinite(qty) || qty <= 0) return []
-  if (!Number.isFinite(cap) || cap <= 0) return []
+  const qty = Number(totalQty)
+  const cap = Number(capacity)
+  if (!Number.isFinite(qty) || qty <= 0 || !Number.isInteger(qty)) return []
+  if (!Number.isFinite(cap) || cap <= 0 || !Number.isInteger(cap)) return []
 
   const labels = []
   const full = Math.floor(qty / cap)
@@ -229,7 +229,7 @@ export function generateLabelsForQuantity(totalQty, capacity) {
 export function generateLabelsForItem(jobItem, resolvedRule) {
   const totalQty = Number.parseInt(jobItem?.quantity, 10)
   const itemKey = jobItem?.itemKey || ''
-  const productName = jobItem?.item_name || 'Unnamed item'
+  const productName = resolvedRule?.canonicalNameUsed || resolvedRule?.rule?.name || jobItem?.item_name || 'Unnamed item'
   const ataCategory = resolvedRule?.rule?.category
   const jobCategory = jobItem?.category
   const category = toDisplayCategory(ataCategory || jobCategory || 'other')
@@ -281,6 +281,7 @@ export function generateLabelsForItem(jobItem, resolvedRule) {
     confidence,
     flags,
     matchedBy: resolvedRule.matchedBy || 'exact',
+    canonicalNameUsed: resolvedRule.canonicalNameUsed || null,
   }
 }
 
