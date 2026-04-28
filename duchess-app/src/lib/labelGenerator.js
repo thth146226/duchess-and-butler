@@ -122,8 +122,17 @@ export function extractPackagingFromUnitName(unitName) {
   return tokens[tokens.length - 1] || ''
 }
 
+function buildRuleDeterministicKey(item) {
+  return [
+    String(item?.id || ''),
+    String(item?.name || ''),
+    String(item?.unit_name || ''),
+    String(item?.category || ''),
+  ].join('|')
+}
+
 export function buildAtaCapacityMap(ataItems) {
-  const map = new Map()
+  const byName = new Map()
 
   for (const item of ataItems || []) {
     if (!item?.active) continue
@@ -142,12 +151,38 @@ export function buildAtaCapacityMap(ataItems) {
       capacity,
       packaging: extractPackagingFromUnitName(item.unit_name),
       unitName: item.unit_name || '',
+      sourceId: item.id || null,
+      deterministicKey: buildRuleDeterministicKey(item),
     }
 
-    const existing = map.get(normalizedName)
-    if (!existing || next.capacity > existing.capacity) {
-      map.set(normalizedName, next)
+    const existing = byName.get(normalizedName)
+    if (!existing) {
+      byName.set(normalizedName, {
+        selected: next,
+        capacitySet: new Set([capacity]),
+      })
+      continue
     }
+
+    existing.capacitySet.add(capacity)
+    const selected = existing.selected
+    if (next.capacity > selected.capacity) {
+      existing.selected = next
+      continue
+    }
+    if (next.capacity === selected.capacity && next.deterministicKey < selected.deterministicKey) {
+      existing.selected = next
+    }
+  }
+
+  const map = new Map()
+  for (const [normalizedName, entry] of byName.entries()) {
+    const selected = entry.selected
+    map.set(normalizedName, {
+      ...selected,
+      capacityOptions: [...entry.capacitySet].sort((a, b) => b - a),
+      selectedCapacity: selected.capacity,
+    })
   }
 
   return map
