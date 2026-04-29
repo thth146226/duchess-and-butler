@@ -64,6 +64,53 @@ const NON_LINEN_OPERATIONAL_NAME_MARKERS = [
   'starter plate',
 ]
 
+const DIRECT_LINEN_MARKERS = [
+  'tablecloth',
+  'napkin',
+  'placemat',
+  'place mat',
+  'tailored tablecloth',
+  'duchess drape',
+  'overlay',
+]
+
+const CURATED_LINEN_FAMILY_MARKERS = [
+  'deauville',
+  'florafiesta',
+  'flora fiesta',
+  'magnolia',
+  'toile de joiy',
+  'toile de jouy',
+  'zig zag peach melba',
+  'laurel',
+  'blossom',
+  'annika',
+  'eden',
+  'heirloom',
+  'nuvia',
+  'perlette',
+  'scalloped napkin',
+  'scalloped linen napkin',
+  'linen scalloped napkin',
+  'artichoke placemat',
+  'fleur de perle',
+  'seraphine',
+]
+
+const CONDITIONAL_LINEN_FAMILY_MARKERS = [
+  {
+    family: 'cabana',
+    requiredSignals: [
+      'tablecloth',
+      '245cm x 350cm',
+      '350cm x 245cm',
+      'round 340cm',
+      '134"',
+      'yellow stripe',
+    ],
+  },
+]
+
 export function normalizeItemName(name) {
   if (!name) return ''
   return String(name)
@@ -221,7 +268,16 @@ export function isDbLinenStudioItem(jobItem) {
   const itemName = normalizeItemName(jobItem?.item_name)
   if (!itemName) return false
   if (NON_LINEN_OPERATIONAL_NAME_MARKERS.some(marker => itemName.includes(marker))) return false
-  return LINEN_NAME_MARKERS.some(marker => itemName.includes(marker))
+  if (DIRECT_LINEN_MARKERS.some(marker => itemName.includes(marker))) return true
+  if (LINEN_NAME_MARKERS.some(marker => itemName.includes(marker))) return true
+  if (CURATED_LINEN_FAMILY_MARKERS.some(marker => itemName.includes(marker))) return true
+
+  for (const conditional of CONDITIONAL_LINEN_FAMILY_MARKERS) {
+    if (!itemName.includes(conditional.family)) continue
+    if (conditional.requiredSignals.some(signal => itemName.includes(signal))) return true
+  }
+
+  return false
 }
 
 export function resolveJobItemRule(jobItem, ataCapacityMap) {
