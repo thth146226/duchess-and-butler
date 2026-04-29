@@ -58,6 +58,11 @@ export default function LabelGenerator() {
 
   const today = new Date().toISOString().slice(0, 10)
   const orderColour = getLabelOrderColour(orderColourKey)
+  const linenStudioBaseUrl = (process.env.REACT_APP_LINEN_STUDIO_URL || '').trim()
+  const linenStudioJobRef =
+    selectedOrder?.crms_ref || selectedOrder?.ref || selectedOrder?.job_ref || selectedOrder?.reference || null
+  const linenStudioCrmsJobId = selectedOrder?.id || null
+  const canOpenLinenStudio = Boolean(linenStudioBaseUrl && linenStudioJobRef && linenStudioCrmsJobId)
 
   if (profile?.role !== 'admin') {
     return (
@@ -557,6 +562,31 @@ export default function LabelGenerator() {
     }
   }
 
+  function openLinenLabelsForSelectedOrder() {
+    if (!selectedOrder) return
+
+    if (!linenStudioBaseUrl) {
+      setError('DB Linen Studio URL is not configured (missing REACT_APP_LINEN_STUDIO_URL).')
+      return
+    }
+
+    const jobRef = linenStudioJobRef
+    const crmsJobId = linenStudioCrmsJobId
+
+    if (!jobRef) {
+      setError('Selected order is missing a job reference (e.g. `crms_ref`) and cannot open DB Linen Studio.')
+      return
+    }
+    if (!crmsJobId) {
+      setError('Selected order is missing `id` and cannot open DB Linen Studio.')
+      return
+    }
+
+    const base = linenStudioBaseUrl.replace(/\/$/, '')
+    const url = `${base}/labels?jobRef=${encodeURIComponent(jobRef)}&crmsJobId=${encodeURIComponent(crmsJobId)}`
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
+
   return (
     <div style={{ padding: '36px 42px 52px', fontFamily: "'DM Sans', sans-serif", maxWidth: '1320px', margin: '0 auto', background: '#FCFAF7' }}>
       <div style={{ marginBottom: '24px' }}>
@@ -857,15 +887,41 @@ export default function LabelGenerator() {
             {processing.linenStudioItems.length === 0 ? (
               <div style={{ fontSize: '12px', color: '#6B6860' }}>No linen exclusions for this order.</div>
             ) : (
-              <div style={{ display: 'grid', gap: '6px' }}>
-                {processing.linenStudioItems.map(item => (
-                  <div key={item.itemKey} style={{ border: '1px solid #ECE5D9', background: '#FFFEFA', borderRadius: '8px', padding: '9px 10px' }}>
-                    <div style={{ fontSize: '12px', color: '#1C1C1E', fontWeight: '600' }}>{item.item_name || '—'}</div>
-                    <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '2px', lineHeight: 1.4 }}>qty: {item.quantity ?? 0}</div>
-                    <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '3px', lineHeight: 1.4 }}>Handled in DB Linen Studio.</div>
+              <>
+                {selectedOrder && (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                    <div style={{ fontSize: '11px', color: canOpenLinenStudio ? '#6B6860' : '#A16207', lineHeight: 1.4 }}>
+                      {canOpenLinenStudio
+                        ? 'Opens DB Linen Studio with this order pre-selected.'
+                        : 'Configure REACT_APP_LINEN_STUDIO_URL to enable opening DB Linen Studio.'}
+                    </div>
+                    <button
+                      onClick={openLinenLabelsForSelectedOrder}
+                      disabled={!canOpenLinenStudio}
+                      style={{
+                        fontSize: '11px',
+                        padding: '7px 11px',
+                        borderRadius: '8px',
+                        border: '1px solid #DDD8CF',
+                        background: canOpenLinenStudio ? '#F7F3EE' : '#F7F3EE',
+                        color: canOpenLinenStudio ? '#6B6860' : '#B39B61',
+                        cursor: canOpenLinenStudio ? 'pointer' : 'not-allowed',
+                      }}
+                    >
+                      Open linen labels for this order
+                    </button>
                   </div>
-                ))}
-              </div>
+                )}
+                <div style={{ display: 'grid', gap: '6px' }}>
+                  {processing.linenStudioItems.map(item => (
+                    <div key={item.itemKey} style={{ border: '1px solid #ECE5D9', background: '#FFFEFA', borderRadius: '8px', padding: '9px 10px' }}>
+                      <div style={{ fontSize: '12px', color: '#1C1C1E', fontWeight: '600' }}>{item.item_name || '—'}</div>
+                      <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '2px', lineHeight: 1.4 }}>qty: {item.quantity ?? 0}</div>
+                      <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '3px', lineHeight: 1.4 }}>Handled in DB Linen Studio.</div>
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
           </div>
 
