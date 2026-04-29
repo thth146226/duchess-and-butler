@@ -40,6 +40,7 @@ function getDateValue(value) {
 export default function Inventory() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [overridesWarning, setOverridesWarning] = useState(null)
   const [truncated, setTruncated] = useState(false)
   const [rows, setRows] = useState([])
 
@@ -54,8 +55,9 @@ export default function Inventory() {
     async function loadData() {
       setLoading(true)
       setError(null)
+      setOverridesWarning(null)
 
-      const [{ data: jobItems, error: jobItemsError }, { data: jobs, error: jobsError }, { data: ataItems, error: ataError }] = await Promise.all([
+      const [{ data: jobItems, error: jobItemsError }, { data: jobs, error: jobsError }, { data: ataItems, error: ataError }, { data: overrides, error: overridesError }] = await Promise.all([
         supabase
           .from('crms_job_items')
           .select('id, job_id, item_name, category, quantity')
@@ -68,6 +70,10 @@ export default function Inventory() {
           .from('ata_items')
           .select('id, name, category, pieces_per_unit, unit_name, active')
           .eq('active', true),
+        supabase
+          .from('inventory_item_overrides')
+          .select('*')
+          .eq('active', true),
       ])
 
       if (cancelled) return
@@ -79,6 +85,9 @@ export default function Inventory() {
         setLoading(false)
         return
       }
+      if (overridesError) {
+        setOverridesWarning('Item overrides could not be loaded. Showing automatic classification only.')
+      }
 
       const allJobItems = jobItems || []
       const isTruncated = allJobItems.length > ITEM_FETCH_LIMIT
@@ -87,6 +96,14 @@ export default function Inventory() {
 
       const jobsById = new Map((jobs || []).map(job => [job.id, job]))
       const ataCapacityMap = buildAtaCapacityMap(ataItems || [])
+      const overrideMap = new Map()
+      for (const entry of (overrides || [])) {
+        const normalizedName = normalizeItemName(entry.normalized_item_name)
+        if (!normalizedName) continue
+        const normalizedCategory = normalizeItemName(entry.normalized_category)
+        const key = `${normalizedName}||${normalizedCategory}`
+        overrideMap.set(key, entry)
+      }
       const aggregates = new Map()
 
       for (const item of selectedItems) {
@@ -136,18 +153,33 @@ export default function Inventory() {
         const ataResult = entry.workflowType === 'operational_candidate'
           ? resolveJobItemRule({ item_name: entry.itemName, category: entry.category }, ataCapacityMap)
           : null
-        const ataStatus = entry.workflowType === 'operational_candidate'
+        const autoAtaStatus = entry.workflowType === 'operational_candidate'
           ? (ataResult?.matched ? 'found' : 'missing')
           : 'not_required'
-        const capacity = ataResult?.matched ? ataResult?.rule?.capacity || null : null
-        const needsSetup = entry.workflowType === 'operational_candidate' && ataStatus === 'missing'
+        const overrideKey = `${entry.normalizedName}||${normalizeItemName(entry.category)}`
+        const rowOverride = overrideMap.get(overrideKey)
+        if (rowOverride?.hide_from_inventory) return null
+        const resolvedWorkflowType = rowOverride?.override_workflow_type || entry.workflowType
+        const resolvedAtaResult = resolvedWorkflowType === 'operational_candidate'
+          ? resolveJobItemRule({ item_name: entry.itemName, category: entry.category }, ataCapacityMap)
+          : null
+        const ataStatus = resolvedWorkflowType === 'operational_candidate'
+          ? (resolvedAtaResult?.matched ? 'found' : 'missing')
+          : 'not_required'
+        const capacity = resolvedAtaResult?.matched ? resolvedAtaResult?.rule?.capacity || null : null
+        const needsSetup = resolvedWorkflowType === 'operational_candidate' && ataStatus === 'missing'
 
         return {
           item: entry.itemName,
           normalizedName: entry.normalizedName,
           category: entry.category || '—',
-          workflowType: entry.workflowType,
-          workflowLabel: entry.workflowLabel,
+          autoWorkflowType: entry.workflowType,
+          autoAtaStatus,
+          workflowType: resolvedWorkflowType,
+          workflowLabel: WORKFLOW_LABELS[resolvedWorkflowType] || entry.workflowLabel,
+          hasOverride: Boolean(rowOverride),
+          overrideNotes: rowOverride?.notes || null,
+          ataNotes: rowOverride?.ata_notes || null,
           ataStatus,
           capacity,
           seenInOrders,
@@ -156,7 +188,7 @@ export default function Inventory() {
           latestOrderDate: entry.latestOrderDate || '—',
           needsSetup,
         }
-      }).sort((a, b) => a.item.localeCompare(b.item))
+      }).filter(Boolean).sort((a, b) => a.item.localeCompare(b.item))
 
       setRows(computedRows)
       setLoading(false)
@@ -205,6 +237,11 @@ export default function Inventory() {
       {error && (
         <div style={{ marginBottom: '14px', fontSize: '12px', color: '#A32D2D', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: '8px', padding: '10px 12px' }}>
           {error}
+        </div>
+      )}
+      {overridesWarning && (
+        <div style={{ marginBottom: '14px', fontSize: '12px', color: '#86653A', background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '8px', padding: '10px 12px' }}>
+          {overridesWarning}
         </div>
       )}
 
@@ -272,7 +309,19 @@ export default function Inventory() {
             <tbody>
               {filteredRows.map(row => (
                 <tr key={`${row.normalizedName}:${row.category}`} style={{ borderTop: '1px solid #F0EBE3', background: row.needsSetup ? '#FFF9ED' : '#fff' }}>
-                  <td style={tdStrong}>{row.item}</td>
+                  <td style={tdStrong}>
+                    <span>{row.item}</span>
+                    {row.hasOverride && (
+                      <span style={{ marginLeft: '8px', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#6B6860', border: '1px solid #DDD8CF', borderRadius: '999px', padding: '1px 6px' }}>
+                        Override
+                      </span>
+                    )}
+                    {(row.overrideNotes || row.ataNotes) && (
+                      <div style={{ marginTop: '4px', fontSize: '11px', color: '#86653A', fontWeight: '400' }}>
+                        {[row.overrideNotes, row.ataNotes].filter(Boolean).join(' · ')}
+                      </div>
+                    )}
+                  </td>
                   <td style={td}>{row.category || '—'}</td>
                   <td style={td}>{row.workflowLabel}</td>
                   <td style={td}>{row.ataStatus}</td>
