@@ -26,6 +26,66 @@ function extractUkPostcode(text) {
   return match ? match[1].toUpperCase() : null
 }
 
+function isFurnitureOrLargeHireItem(jobItem) {
+  const itemName = (jobItem?.item_name || '').toLowerCase()
+  const category = (jobItem?.category || '').toLowerCase()
+
+  // Guardrail: never exclude known operational label items.
+  const operationalSignals = [
+    'charger plate',
+    'dinner plate',
+    'side plate',
+    'starter plate',
+    'glass',
+    'cutlery',
+    'fork',
+    'knife',
+    'spoon',
+    'candle sleeve',
+    'hurricane candle sleeve',
+    'table lamp',
+    'lamp',
+  ]
+  if (operationalSignals.some(signal => itemName.includes(signal))) return false
+
+  const furnitureCategorySignals = [
+    'furniture',
+    'seating',
+    'parasol',
+    'large hire',
+    'large_hire',
+    'lounge',
+  ]
+  if (furnitureCategorySignals.some(signal => category.includes(signal))) return true
+
+  const furnitureNameSignals = [
+    'sofa',
+    'seater',
+    'individual seat',
+    ' seat ',
+    ' seat,',
+    ' seat.',
+    ' chair',
+    'armchair',
+    'furniture',
+    'coffee table',
+    'side table',
+    'dining table',
+    'console table',
+    'parasol',
+    'parasol base',
+    'cushion',
+    'chusion',
+    'bench',
+    'stool',
+    'lounge',
+    'ottoman',
+    'pouf',
+  ]
+  const normalizedWithPadding = ` ${itemName.replace(/\s+/g, ' ').trim()} `
+  return furnitureNameSignals.some(signal => normalizedWithPadding.includes(signal))
+}
+
 function confidenceStyle(level) {
   if (level === 'high') return { bg: '#EAF3DE', color: '#3B6D11' }
   if (level === 'medium') return { bg: '#FEF3C7', color: '#854F0B' }
@@ -171,6 +231,7 @@ export default function LabelGenerator() {
     const ataCapacityMap = buildAtaCapacityMap(ataItems)
     const ignoredItems = []
     const linenStudioItems = []
+    const furnitureExcludedItems = []
     const eligibleMatchedItems = []
     const outOfScopeItems = []
 
@@ -196,6 +257,19 @@ export default function LabelGenerator() {
         continue
       }
 
+      if (isFurnitureOrLargeHireItem(candidate)) {
+        devLog('[labels-furniture] excluded from label workflow', {
+          item_name: candidate.item_name,
+          quantity: candidate.quantity,
+          category: candidate.category,
+        })
+        furnitureExcludedItems.push({
+          ...candidate,
+          exclusionReason: 'furniture-large-hire',
+        })
+        continue
+      }
+
       const resolvedRule = resolveJobItemRule(candidate, ataCapacityMap)
 
       if (!resolvedRule.matched) {
@@ -210,7 +284,7 @@ export default function LabelGenerator() {
       devLog('[labels-phase3b] category resolved', { item_name: generated.productName, category: generated.category })
       eligibleMatchedItems.push(generated)
     }
-    return { ignoredItems, linenStudioItems, eligibleMatchedItems, outOfScopeItems }
+    return { ignoredItems, linenStudioItems, furnitureExcludedItems, eligibleMatchedItems, outOfScopeItems }
   }, [ataItems, jobItems, selectedOrder])
 
   useEffect(() => {
@@ -922,6 +996,25 @@ export default function LabelGenerator() {
                   ))}
                 </div>
               </>
+            )}
+          </div>
+
+          <div style={{ background: '#FFFDF9', border: '1px solid #EEE7DD', borderRadius: '10px', padding: '12px 13px', marginBottom: '10px' }}>
+            <div style={{ fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#B8965A', marginBottom: '8px' }}>
+              Furniture and large hire items excluded from labels
+            </div>
+            {processing.furnitureExcludedItems.length === 0 ? (
+              <div style={{ fontSize: '12px', color: '#6B6860' }}>No furniture or large-hire exclusions for this order.</div>
+            ) : (
+              <div style={{ display: 'grid', gap: '6px' }}>
+                {processing.furnitureExcludedItems.map(item => (
+                  <div key={item.itemKey} style={{ border: '1px solid #ECE5D9', background: '#FFFEFA', borderRadius: '8px', padding: '9px 10px' }}>
+                    <div style={{ fontSize: '12px', color: '#1C1C1E', fontWeight: '600' }}>{item.item_name || '—'}</div>
+                    <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '2px', lineHeight: 1.4 }}>qty: {item.quantity ?? 0}</div>
+                    <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '3px', lineHeight: 1.4 }}>Excluded: furniture and large-hire items do not require operational labels.</div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
 
