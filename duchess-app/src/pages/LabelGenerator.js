@@ -9,13 +9,12 @@ import {
   generateLabelsForItem,
   getLabelOrderColour,
   isManualSplitValid,
-  isDbLinenStudioItem,
-  isNonLabelJobItem,
   normalizeItemName,
   normalizeManualLabels,
   resolveJobItemRule,
   sumManualLabels,
 } from '../lib/labelGenerator'
+import { classifyJobItemWorkflow } from '../lib/itemWorkflowClassification'
 
 const SELF_COLLECTION_DEFAULT_POSTCODE = 'HP2 6EZ'
 const UK_POSTCODE_REGEX = /\b([A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2})\b/i
@@ -24,181 +23,6 @@ function extractUkPostcode(text) {
   if (!text) return null
   const match = String(text).match(UK_POSTCODE_REGEX)
   return match ? match[1].toUpperCase() : null
-}
-
-function isFurnitureOrLargeHireItem(jobItem) {
-  const itemName = (jobItem?.item_name || '').toLowerCase()
-  const category = (jobItem?.category || '').toLowerCase()
-
-  // Guardrail: never exclude known operational label items.
-  const operationalSignals = [
-    'charger plate',
-    'dinner plate',
-    'side plate',
-    'starter plate',
-    'glass',
-    'cutlery',
-    'fork',
-    'knife',
-    'spoon',
-    'candle sleeve',
-    'hurricane candle sleeve',
-    'table lamp',
-    'lamp',
-  ]
-  if (operationalSignals.some(signal => itemName.includes(signal))) return false
-
-  const furnitureCategorySignals = [
-    'furniture',
-    'seating',
-    'parasol',
-    'large hire',
-    'large_hire',
-    'lounge',
-  ]
-  if (furnitureCategorySignals.some(signal => category.includes(signal))) return true
-
-  const furnitureNameSignals = [
-    'sofa',
-    'seater',
-    'individual seat',
-    ' seat ',
-    ' seat,',
-    ' seat.',
-    ' chair',
-    'armchair',
-    'furniture',
-    'coffee table',
-    'side table',
-    'dining table',
-    'console table',
-    'parasol',
-    'parasol base',
-    'cushion',
-    'chusion',
-    'bench',
-    'stool',
-    'lounge',
-    'ottoman',
-    'pouf',
-  ]
-  const normalizedWithPadding = ` ${itemName.replace(/\s+/g, ' ').trim()} `
-  return furnitureNameSignals.some(signal => normalizedWithPadding.includes(signal))
-}
-
-function isServiceOrFeeNonPhysicalItem(jobItem) {
-  const itemName = (jobItem?.item_name || '').toLowerCase()
-  const category = (jobItem?.category || '').toLowerCase()
-  const normalizedWithPadding = ` ${itemName.replace(/\s+/g, ' ').trim()} `
-
-  // Guardrail: keep clearly physical operational/furniture items out of this exclusion.
-  const physicalGuardrails = [
-    'cake stand',
-    'stand',
-    'table lamp',
-    'lamp',
-    'sleeve',
-    'charger',
-    'plate',
-    'glass',
-    'cutlery',
-    'fork',
-    'knife',
-    'spoon',
-    'chair',
-    'sofa',
-    'parasol',
-  ]
-  if (physicalGuardrails.some(signal => normalizedWithPadding.includes(` ${signal} `))) return false
-
-  const serviceCategorySignals = [
-    'service',
-    'admin',
-    'fee',
-    'surcharge',
-    'supplement',
-    'labour',
-    'labor',
-    'transport',
-    'carnet',
-    'non-physical',
-    'non physical',
-  ]
-  if (serviceCategorySignals.some(signal => category.includes(signal))) return true
-
-  const serviceNameSignals = [
-    'production service',
-    'art direction',
-    'event design',
-    'service',
-    'minimum hire surcharge',
-    'surcharge',
-    'timed collection fee',
-    'collection fee',
-    'delivery fee',
-    'admin fee',
-    'date change admin fee',
-    'setup fee',
-    'set up fee',
-    'install fee',
-    'installation fee',
-    'transport fee',
-    'transport supplement',
-    'extended hire period supplement',
-    'hire period supplement',
-    'supplement',
-    'labour',
-    'labor',
-    'carnet',
-  ]
-
-  return serviceNameSignals.some(signal => normalizedWithPadding.includes(` ${signal} `))
-}
-
-function isDisplayOrPropItem(jobItem) {
-  const itemName = (jobItem?.item_name || '').toLowerCase()
-  const category = (jobItem?.category || '').toLowerCase()
-  const normalizedWithPadding = ` ${itemName.replace(/\s+/g, ' ').trim()} `
-
-  // Guardrail: never exclude known operational label items via display/prop logic.
-  const operationalSignals = [
-    'charger plate',
-    'dinner plate',
-    'side plate',
-    'starter plate',
-    'dessert plate',
-    'glass',
-    'cutlery',
-    'fork',
-    'knife',
-    'spoon',
-    'candle sleeve',
-    'hurricane candle sleeve',
-    'table lamp',
-    'lamp',
-  ]
-  if (operationalSignals.some(signal => normalizedWithPadding.includes(` ${signal} `))) return false
-
-  const displayCategorySignals = ['display', 'prop', 'props', 'styling prop', 'event prop']
-  if (displayCategorySignals.some(signal => category.includes(signal))) return true
-
-  const displayNameSignals = [
-    'acrylic easel',
-    'floor standing acrylic easel',
-    'display easel',
-    'display stand',
-    'menu stand',
-    'sign stand',
-    'plinth',
-    'pedestal',
-    'backdrop stand',
-    'cake stand',
-    'three tiered cake stand',
-    'tiered cake stand',
-    ' prop ',
-    ' props ',
-  ]
-  return displayNameSignals.some(signal => normalizedWithPadding.includes(signal))
 }
 
 function confidenceStyle(level) {
@@ -354,15 +178,16 @@ export default function LabelGenerator() {
 
     for (let idx = 0; idx < jobItems.length; idx++) {
       const item = jobItems[idx]
-      const totalQty = Number.parseInt(item.quantity, 10)
-      if (isNonLabelJobItem(item.item_name, totalQty)) {
+      const itemKey = `${selectedOrder?.id || 'order'}:${normalizeItemName(item.item_name)}:${idx}`
+      const candidate = { ...item, itemKey }
+      const classification = classifyJobItemWorkflow(candidate)
+
+      if (classification.workflowType === 'ignored') {
         ignoredItems.push(item)
         continue
       }
-      const itemKey = `${selectedOrder?.id || 'order'}:${normalizeItemName(item.item_name)}:${idx}`
-      const candidate = { ...item, itemKey }
 
-      if (isDbLinenStudioItem(candidate)) {
+      if (classification.workflowType === 'linen') {
         devLog('[labels-linen] excluded for DB Linen Studio', {
           item_name: candidate.item_name,
           quantity: candidate.quantity,
@@ -374,7 +199,7 @@ export default function LabelGenerator() {
         continue
       }
 
-      if (isFurnitureOrLargeHireItem(candidate)) {
+      if (classification.workflowType === 'furniture_large_hire') {
         devLog('[labels-furniture] excluded from label workflow', {
           item_name: candidate.item_name,
           quantity: candidate.quantity,
@@ -387,7 +212,7 @@ export default function LabelGenerator() {
         continue
       }
 
-      if (isServiceOrFeeNonPhysicalItem(candidate)) {
+      if (classification.workflowType === 'service_fee') {
         devLog('[labels-service] excluded from label workflow', {
           item_name: candidate.item_name,
           quantity: candidate.quantity,
@@ -400,7 +225,7 @@ export default function LabelGenerator() {
         continue
       }
 
-      if (isDisplayOrPropItem(candidate)) {
+      if (classification.workflowType === 'display_prop') {
         devLog('[labels-display-prop] excluded from label workflow', {
           item_name: candidate.item_name,
           quantity: candidate.quantity,
