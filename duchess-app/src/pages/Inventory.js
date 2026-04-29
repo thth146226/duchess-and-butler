@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { buildAtaCapacityMap, normalizeItemName, resolveJobItemRule } from '../lib/labelGenerator'
 import { classifyJobItemWorkflow } from '../lib/itemWorkflowClassification'
+import { useAuth } from '../contexts/AuthContext'
 
 const ITEM_FETCH_LIMIT = 5000
 
@@ -26,6 +27,15 @@ const WORKFLOW_LABELS = {
   ignored: 'Ignored',
 }
 
+const WORKFLOW_ACTION_OPTIONS = [
+  { value: 'operational_candidate', label: 'Operational label item' },
+  { value: 'linen', label: 'DB Linen Studio' },
+  { value: 'furniture_large_hire', label: 'Furniture / large hire' },
+  { value: 'service_fee', label: 'Service / fee' },
+  { value: 'display_prop', label: 'Display / prop' },
+  { value: 'ignored', label: 'Ignored' },
+]
+
 function parseQuantity(value) {
   const qty = Number.parseFloat(value)
   return Number.isFinite(qty) ? qty : 0
@@ -38,16 +48,29 @@ function getDateValue(value) {
 }
 
 export default function Inventory() {
+  const { profile } = useAuth()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [overridesWarning, setOverridesWarning] = useState(null)
+  const [actionMessage, setActionMessage] = useState(null)
   const [truncated, setTruncated] = useState(false)
   const [rows, setRows] = useState([])
+  const [overrideByKey, setOverrideByKey] = useState({})
+  const [refreshToken, setRefreshToken] = useState(0)
 
   const [search, setSearch] = useState('')
   const [workflowFilter, setWorkflowFilter] = useState('all')
   const [ataStatusFilter, setAtaStatusFilter] = useState('all')
   const [needsSetupOnly, setNeedsSetupOnly] = useState(false)
+
+  const [viewOrdersRow, setViewOrdersRow] = useState(null)
+  const [classifyRow, setClassifyRow] = useState(null)
+  const [classifyWorkflowType, setClassifyWorkflowType] = useState('operational_candidate')
+  const [classifyNotes, setClassifyNotes] = useState('')
+  const [actionError, setActionError] = useState(null)
+  const [actionSaving, setActionSaving] = useState(false)
+
+  const canManageActions = Boolean(profile && profile.active !== false && (profile.role === 'admin' || profile.role === 'operations'))
 
   useEffect(() => {
     let cancelled = false
@@ -56,6 +79,7 @@ export default function Inventory() {
       setLoading(true)
       setError(null)
       setOverridesWarning(null)
+      setActionError(null)
 
       const [{ data: jobItems, error: jobItemsError }, { data: jobs, error: jobsError }, { data: ataItems, error: ataError }, { data: overrides, error: overridesError }] = await Promise.all([
         supabase
@@ -97,13 +121,16 @@ export default function Inventory() {
       const jobsById = new Map((jobs || []).map(job => [job.id, job]))
       const ataCapacityMap = buildAtaCapacityMap(ataItems || [])
       const overrideMap = new Map()
+      const overrideObject = {}
       for (const entry of (overrides || [])) {
         const normalizedName = normalizeItemName(entry.normalized_item_name)
         if (!normalizedName) continue
         const normalizedCategory = normalizeItemName(entry.normalized_category)
         const key = `${normalizedName}||${normalizedCategory}`
         overrideMap.set(key, entry)
+        overrideObject[key] = entry
       }
+      setOverrideByKey(overrideObject)
       const aggregates = new Map()
 
       for (const item of selectedItems) {
@@ -132,6 +159,15 @@ export default function Inventory() {
             latestOrderRef: linkedJob?.crms_ref || '—',
             latestOrderDate: jobDateRaw,
             latestOrderDateValue: jobDateValue,
+            orderByJob: new Map(item.job_id ? [[item.job_id, {
+              jobId: item.job_id,
+              orderRef: linkedJob?.crms_ref || '—',
+              eventName: linkedJob?.event_name || '—',
+              deliveryDate: jobDateRaw || '—',
+              status: linkedJob?.status || '—',
+              quantity: qty,
+              dateValue: jobDateValue,
+            }]] : []),
           })
           continue
         }
@@ -139,6 +175,22 @@ export default function Inventory() {
         const existing = aggregates.get(aggregateKey)
         if (item.job_id) existing.seenOrderIds.add(item.job_id)
         existing.totalQuantitySeen += qty
+        if (item.job_id) {
+          const existingOrder = existing.orderByJob.get(item.job_id)
+          if (existingOrder) {
+            existingOrder.quantity += qty
+          } else {
+            existing.orderByJob.set(item.job_id, {
+              jobId: item.job_id,
+              orderRef: linkedJob?.crms_ref || '—',
+              eventName: linkedJob?.event_name || '—',
+              deliveryDate: jobDateRaw || '—',
+              status: linkedJob?.status || '—',
+              quantity: qty,
+              dateValue: jobDateValue,
+            })
+          }
+        }
 
         if (jobDateValue && (!existing.latestOrderDateValue || jobDateValue > existing.latestOrderDateValue)) {
           existing.latestOrderDateValue = jobDateValue
@@ -150,14 +202,15 @@ export default function Inventory() {
 
       const computedRows = [...aggregates.values()].map(entry => {
         const seenInOrders = entry.seenOrderIds.size
+        const normalizedCategoryKey = normalizeItemName(entry.category)
+        const rowKey = `${entry.normalizedName}||${normalizedCategoryKey}`
         const ataResult = entry.workflowType === 'operational_candidate'
           ? resolveJobItemRule({ item_name: entry.itemName, category: entry.category }, ataCapacityMap)
           : null
         const autoAtaStatus = entry.workflowType === 'operational_candidate'
           ? (ataResult?.matched ? 'found' : 'missing')
           : 'not_required'
-        const overrideKey = `${entry.normalizedName}||${normalizeItemName(entry.category)}`
-        const rowOverride = overrideMap.get(overrideKey)
+        const rowOverride = overrideMap.get(rowKey)
         if (rowOverride?.hide_from_inventory) return null
         const resolvedWorkflowType = rowOverride?.override_workflow_type || entry.workflowType
         const resolvedAtaResult = resolvedWorkflowType === 'operational_candidate'
@@ -168,16 +221,22 @@ export default function Inventory() {
           : 'not_required'
         const capacity = resolvedAtaResult?.matched ? resolvedAtaResult?.rule?.capacity || null : null
         const needsSetup = resolvedWorkflowType === 'operational_candidate' && ataStatus === 'missing'
+        const recentOrders = [...entry.orderByJob.values()]
+          .sort((a, b) => (b.dateValue || 0) - (a.dateValue || 0))
+          .slice(0, 20)
 
         return {
+          key: rowKey,
           item: entry.itemName,
           normalizedName: entry.normalizedName,
-          category: entry.category || '—',
+          normalizedCategory: normalizedCategoryKey,
+          category: entry.category || '',
           autoWorkflowType: entry.workflowType,
           autoAtaStatus,
           workflowType: resolvedWorkflowType,
           workflowLabel: WORKFLOW_LABELS[resolvedWorkflowType] || entry.workflowLabel,
           hasOverride: Boolean(rowOverride),
+          overrideId: rowOverride?.id || null,
           overrideNotes: rowOverride?.notes || null,
           ataNotes: rowOverride?.ata_notes || null,
           ataStatus,
@@ -187,6 +246,7 @@ export default function Inventory() {
           latestOrderRef: entry.latestOrderRef || '—',
           latestOrderDate: entry.latestOrderDate || '—',
           needsSetup,
+          recentOrders,
         }
       }).filter(Boolean).sort((a, b) => a.item.localeCompare(b.item))
 
@@ -196,7 +256,7 @@ export default function Inventory() {
 
     loadData()
     return () => { cancelled = true }
-  }, [])
+  }, [refreshToken])
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -217,6 +277,93 @@ export default function Inventory() {
     const excludedNotRequired = rows.filter(r => r.ataStatus === 'not_required').length
     return { totalDistinct, labelReady, needsSetup, linen, excludedNotRequired }
   }, [rows])
+
+  function triggerRefresh(message) {
+    if (message) setActionMessage(message)
+    setRefreshToken(prev => prev + 1)
+  }
+
+  async function saveOverrideForRow(row, payload) {
+    const existing = overrideByKey[row.key]
+    if (existing?.id) {
+      const { error: updateError } = await supabase
+        .from('inventory_item_overrides')
+        .update({
+          ...payload,
+          updated_by_user_id: profile?.id || null,
+          updated_by_name: profile?.name || null,
+        })
+        .eq('id', existing.id)
+      return updateError
+    }
+
+    const { error: insertError } = await supabase
+      .from('inventory_item_overrides')
+      .insert({
+        normalized_item_name: row.normalizedName,
+        normalized_category: row.normalizedCategory || null,
+        display_item_name: row.item || null,
+        override_workflow_type: payload.override_workflow_type || null,
+        hide_from_inventory: Boolean(payload.hide_from_inventory),
+        ata_notes: payload.ata_notes || null,
+        notes: payload.notes || null,
+        active: true,
+        created_by_user_id: profile?.id || null,
+        created_by_name: profile?.name || null,
+        updated_by_user_id: profile?.id || null,
+        updated_by_name: profile?.name || null,
+      })
+    return insertError
+  }
+
+  function openClassifyModal(row) {
+    setClassifyRow(row)
+    setClassifyWorkflowType(row.workflowType || row.autoWorkflowType || 'operational_candidate')
+    setClassifyNotes(row.overrideNotes || '')
+    setActionError(null)
+  }
+
+  async function handleSaveClassify() {
+    if (!classifyRow || !canManageActions) return
+    setActionSaving(true)
+    setActionError(null)
+    const existing = overrideByKey[classifyRow.key]
+    const errorResult = await saveOverrideForRow(classifyRow, {
+      override_workflow_type: classifyWorkflowType,
+      notes: classifyNotes || null,
+      hide_from_inventory: existing?.hide_from_inventory || false,
+      active: true,
+    })
+    setActionSaving(false)
+    if (errorResult) {
+      setActionError(errorResult.message || 'Could not save classification override.')
+      return
+    }
+    setClassifyRow(null)
+    triggerRefresh('Classification saved.')
+  }
+
+  async function handleHideRow(row) {
+    if (!canManageActions) return
+    const confirmed = window.confirm('Hide this item from Inventory Intelligence? This will not delete RMS history or affect orders.')
+    if (!confirmed) return
+    setActionSaving(true)
+    setActionError(null)
+    const existing = overrideByKey[row.key]
+    const errorResult = await saveOverrideForRow(row, {
+      override_workflow_type: existing?.override_workflow_type || null,
+      notes: existing?.notes || 'Hidden from Inventory Intelligence',
+      ata_notes: existing?.ata_notes || null,
+      hide_from_inventory: true,
+      active: true,
+    })
+    setActionSaving(false)
+    if (errorResult) {
+      setActionError(errorResult.message || 'Could not hide item.')
+      return
+    }
+    triggerRefresh('Item hidden from Inventory Intelligence.')
+  }
 
   return (
     <div style={{ padding: '6px 2px 20px', fontFamily: "'DM Sans', sans-serif" }}>
@@ -242,6 +389,16 @@ export default function Inventory() {
       {overridesWarning && (
         <div style={{ marginBottom: '14px', fontSize: '12px', color: '#86653A', background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '8px', padding: '10px 12px' }}>
           {overridesWarning}
+        </div>
+      )}
+      {actionError && (
+        <div style={{ marginBottom: '14px', fontSize: '12px', color: '#A32D2D', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: '8px', padding: '10px 12px' }}>
+          {actionError}
+        </div>
+      )}
+      {actionMessage && (
+        <div style={{ marginBottom: '14px', fontSize: '12px', color: '#2F6A18', background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '8px', padding: '10px 12px' }}>
+          {actionMessage}
         </div>
       )}
 
@@ -304,6 +461,7 @@ export default function Inventory() {
                 <th style={th}>Total qty</th>
                 <th style={th}>Latest order</th>
                 <th style={th}>Latest date</th>
+                <th style={th}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -330,11 +488,112 @@ export default function Inventory() {
                   <td style={td}>{row.totalQuantitySeen}</td>
                   <td style={td}>{row.latestOrderRef || '—'}</td>
                   <td style={td}>{row.latestOrderDate || '—'}</td>
+                  <td style={td}>
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                      <button onClick={() => setViewOrdersRow(row)} style={actionBtn}>
+                        View orders
+                      </button>
+                      {canManageActions && (
+                        <>
+                          <button onClick={() => openClassifyModal(row)} style={actionBtn}>
+                            Classify
+                          </button>
+                          <button onClick={() => handleHideRow(row)} disabled={actionSaving} style={actionBtn}>
+                            Hide
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
+      </div>
+
+      {viewOrdersRow && (
+        <ModalFrame title="Related orders" onClose={() => setViewOrdersRow(null)}>
+          <div style={{ fontSize: '12px', color: '#1C1C1E', fontWeight: '600', marginBottom: '8px' }}>{viewOrdersRow.item}</div>
+          {viewOrdersRow.recentOrders.length === 0 ? (
+            <div style={{ fontSize: '12px', color: '#6B6860' }}>No related orders found.</div>
+          ) : (
+            <div style={{ maxHeight: '420px', overflowY: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: '#F7F3EE', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: '10px' }}>
+                    <th style={th}>Ref</th>
+                    <th style={th}>Event</th>
+                    <th style={th}>Delivery date</th>
+                    <th style={th}>Qty</th>
+                    <th style={th}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {viewOrdersRow.recentOrders.map(order => (
+                    <tr key={`${viewOrdersRow.key}:${order.jobId}`} style={{ borderTop: '1px solid #F0EBE3' }}>
+                      <td style={td}>{order.orderRef || '—'}</td>
+                      <td style={td}>{order.eventName || '—'}</td>
+                      <td style={td}>{order.deliveryDate || '—'}</td>
+                      <td style={td}>{order.quantity}</td>
+                      <td style={td}>{order.status || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </ModalFrame>
+      )}
+
+      {classifyRow && (
+        <ModalFrame title="Classify item" onClose={() => setClassifyRow(null)}>
+          <div style={{ fontSize: '12px', color: '#1C1C1E', marginBottom: '5px' }}><strong>Item:</strong> {classifyRow.item}</div>
+          <div style={{ fontSize: '12px', color: '#6B6860', marginBottom: '5px' }}><strong>Category:</strong> {classifyRow.category || '—'}</div>
+          <div style={{ fontSize: '12px', color: '#6B6860', marginBottom: '5px' }}><strong>Current automatic workflow:</strong> {WORKFLOW_LABELS[classifyRow.autoWorkflowType] || classifyRow.autoWorkflowType}</div>
+          <div style={{ fontSize: '12px', color: '#6B6860', marginBottom: '5px' }}><strong>Current resolved workflow:</strong> {classifyRow.workflowLabel}</div>
+          <div style={{ fontSize: '12px', color: '#6B6860', marginBottom: '10px' }}><strong>ATA status:</strong> {classifyRow.ataStatus}</div>
+
+          <div style={{ fontSize: '11px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '6px' }}>Workflow override</div>
+          <select
+            value={classifyWorkflowType}
+            onChange={e => setClassifyWorkflowType(e.target.value)}
+            style={{ width: '100%', padding: '9px 10px', border: '1px solid #DDD8CF', borderRadius: '8px', fontSize: '13px', background: '#FFFEFC', marginBottom: '10px' }}
+          >
+            {WORKFLOW_ACTION_OPTIONS.map(option => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+
+          <div style={{ fontSize: '11px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '6px' }}>Notes (optional)</div>
+          <textarea
+            value={classifyNotes}
+            onChange={e => setClassifyNotes(e.target.value)}
+            rows={3}
+            style={{ width: '100%', padding: '9px 10px', border: '1px solid #DDD8CF', borderRadius: '8px', fontSize: '13px', background: '#FFFEFC', resize: 'vertical' }}
+          />
+
+          <div style={{ marginTop: '12px', display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+            <button onClick={() => setClassifyRow(null)} style={actionBtn}>Cancel</button>
+            <button onClick={handleSaveClassify} disabled={actionSaving} style={actionBtn}>
+              {actionSaving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+        </ModalFrame>
+      )}
+    </div>
+  )
+}
+
+function ModalFrame({ title, children, onClose }) {
+  return (
+    <div style={modalBackdrop}>
+      <div style={modalCard}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+          <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '24px', color: '#1C1C1E', fontWeight: '600' }}>{title}</div>
+          <button onClick={onClose} style={actionBtn}>Close</button>
+        </div>
+        {children}
       </div>
     </div>
   )
@@ -384,4 +643,35 @@ const tdStrong = {
   fontSize: '12px',
   color: '#1C1C1E',
   fontWeight: '600',
+}
+
+const actionBtn = {
+  fontSize: '11px',
+  padding: '6px 9px',
+  borderRadius: '7px',
+  border: '1px solid #DDD8CF',
+  background: '#fff',
+  color: '#6B6860',
+  cursor: 'pointer',
+}
+
+const modalBackdrop = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(28, 28, 30, 0.28)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  zIndex: 1200,
+  padding: '16px',
+}
+
+const modalCard = {
+  width: 'min(860px, 96vw)',
+  maxHeight: '88vh',
+  overflowY: 'auto',
+  background: '#fff',
+  border: '1px solid #DDD8CF',
+  borderRadius: '12px',
+  padding: '14px',
 }
