@@ -49,6 +49,21 @@ const LINEN_NAME_MARKERS = [
   'linen',
 ]
 
+const NON_LINEN_OPERATIONAL_CATEGORY_MARKERS = new Set([
+  'dinnerware',
+  'tableware',
+  'charger_plates',
+  'plates',
+])
+
+const NON_LINEN_OPERATIONAL_NAME_MARKERS = [
+  'charger plate',
+  'dinner plate',
+  'dessert plate',
+  'side plate',
+  'starter plate',
+]
+
 export function normalizeItemName(name) {
   if (!name) return ''
   return String(name)
@@ -200,10 +215,12 @@ export function isNonLabelJobItem(itemName, quantity) {
 export function isDbLinenStudioItem(jobItem) {
   // Phase 3G: conservative first round. If uncertain, do not exclude.
   const category = normalizeItemName(jobItem?.category)
+  if (category && NON_LINEN_OPERATIONAL_CATEGORY_MARKERS.has(category)) return false
   if (category && LINEN_CATEGORY_MARKERS.has(category)) return true
 
   const itemName = normalizeItemName(jobItem?.item_name)
   if (!itemName) return false
+  if (NON_LINEN_OPERATIONAL_NAME_MARKERS.some(marker => itemName.includes(marker))) return false
   return LINEN_NAME_MARKERS.some(marker => itemName.includes(marker))
 }
 
