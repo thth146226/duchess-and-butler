@@ -78,8 +78,8 @@ export default function Paperwork() {
     if (rawCat.includes('platter') || rawCat.includes('service')) return 'PLATTERS & SERVICEWARE'
 
     if (name.includes('charger')) return 'CHARGER PLATES'
-    if (name.includes('knife') || name.includes('fork') || name.includes('spoon') || name.includes('teaspoon')) return 'CUTLERY - TABLESCAPE'
-    if (name.includes('serving') || name.includes('dessert fork') || name.includes('dessert spoon')) return 'CUTLERY - SERVING AND DESSERT'
+    if (name.includes('tea spoon') || name.includes('teaspoon') || name.includes('starter fork') || name.includes('dessert fork') || name.includes('dessert spoon') || name.includes('serving')) return 'CUTLERY - SERVING AND DESSERT'
+    if (name.includes('knife') || name.includes('fork') || name.includes('spoon')) return 'CUTLERY - TABLESCAPE'
     if (name.includes('dinner plate') || name.includes('dessert plate') || name.includes('side plate') || name.includes('starter') || name.includes('bowl')) return 'DINNERWARE'
     if (name.includes('flute') || name.includes('goblet') || name.includes('glass') || name.includes('tumbler') || name.includes('coupe')) return 'GLASSWARE'
     if (name.includes('platter') || name.includes('jug') || name.includes('serviceware')) return 'PLATTERS & SERVICEWARE'
@@ -89,6 +89,7 @@ export default function Paperwork() {
   }
 
   function getPackingNote(item) {
+    // Packing notes are source-backed only; do not invent packing text in the print template.
     const candidates = [
       item?.packing_note,
       item?.packing,
@@ -173,8 +174,8 @@ export default function Paperwork() {
     const itemsHTML = groups.map(group => `
       <tr class="category-row"><td colspan="3">${escapeHtml(group.category)}</td></tr>
       ${group.category === 'CHARGER PLATES' ? `<tr><td colspan="3" class="category-note">We don't apply wash fees to our Charger Plates.</td></tr>` : ''}
-      ${group.items.map(i => `
-        <tr>
+      ${group.items.map((i, index) => `
+        <tr class="item-row ${index === 0 ? 'group-first-item' : ''}">
           <td class="item-cell">
             <div class="item-name">${escapeHtml(i.item_name)}</div>
             ${getPackingNote(i) ? `<div class="item-pack">${escapeHtml(getPackingNote(i))}</div>` : ''}
@@ -195,45 +196,45 @@ export default function Paperwork() {
   <style>
     /* RMS-style delivery note template. Visual source of truth is the official RMS delivery note. */
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    @page { size: A4 portrait; margin: 12mm; }
-    body { background: #fff; color: #1C1C1E; font-family: 'Times New Roman', Georgia, serif; }
-    .page { width: 100%; max-width: 186mm; margin: 0 auto; }
-    .brand { text-align: center; margin-bottom: 12px; }
-    .brand img { height: 70px; object-fit: contain; }
-    .brand-text { font-size: 30px; letter-spacing: 0.02em; line-height: 1; }
-    .brand-sub { font-size: 11px; letter-spacing: 0.2em; margin-top: 6px; color: #B8965A; font-family: 'DM Sans', Arial, sans-serif; text-transform: uppercase; }
-    .details-wrap { display: grid; grid-template-columns: 1.1fr 1fr 1fr; gap: 12px; border: 1px solid #B9B1A4; padding: 10px; margin-bottom: 12px; page-break-inside: avoid; }
+    @page { size: A4 portrait; margin: 24mm 17mm 20mm; }
+    body { background: #fff; color: #1C1C1E; font-family: 'Times New Roman', Georgia, Garamond, serif; font-size: 10pt; }
+    .page { width: 100%; max-width: 176mm; margin: 0 auto; }
+    .brand { text-align: center; margin-bottom: 10px; }
+    .brand img { height: 56px; object-fit: contain; }
+    .brand-text { font-size: 24px; letter-spacing: 0.015em; line-height: 1; color: #2C2A27; }
+    .brand-sub { font-size: 8.5px; letter-spacing: 0.16em; margin-top: 4px; color: #A28756; font-family: 'Times New Roman', Georgia, serif; text-transform: uppercase; }
+    .details-wrap { display: grid; grid-template-columns: 1.12fr 1fr 1fr; gap: 12px; border-top: 1px solid #CFC6B8; border-bottom: 1px solid #CFC6B8; padding: 9px 2px; margin-bottom: 12px; page-break-inside: avoid; }
     .meta-table { width: 100%; border-collapse: collapse; font-family: 'DM Sans', Arial, sans-serif; }
-    .meta-table td { font-size: 11px; padding: 2px 0; vertical-align: top; }
-    .meta-label { width: 105px; color: #6B6860; font-weight: 600; }
-    .address-head { font-family: 'DM Sans', Arial, sans-serif; font-size: 10px; letter-spacing: 0.08em; color: #6B6860; font-weight: 700; text-transform: uppercase; margin-bottom: 6px; }
-    .address-body { font-size: 11px; line-height: 1.45; min-height: 74px; }
-    .doc-title { text-align: center; font-family: 'DM Sans', Arial, sans-serif; font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; margin: 8px 0 10px; }
+    .meta-table td { font-size: 10px; padding: 1.5px 0; vertical-align: top; line-height: 1.35; }
+    .meta-label { width: 100px; color: #6B6860; font-weight: 600; }
+    .address-head { font-family: 'DM Sans', Arial, sans-serif; font-size: 9px; letter-spacing: 0.08em; color: #8D6E3B; font-weight: 700; text-transform: uppercase; margin-bottom: 4px; }
+    .address-body { font-size: 10px; line-height: 1.38; min-height: 68px; }
+    .doc-title { text-align: center; font-family: 'Times New Roman', Georgia, serif; font-size: 14pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; margin: 9px 0 10px; color: #2A2825; }
     .special-notes { border: 1px solid #D7CEBF; background: #FCFAF7; padding: 6px 9px; margin-bottom: 10px; font-size: 10px; line-height: 1.4; font-family: 'DM Sans', Arial, sans-serif; }
     table.items-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; page-break-inside: auto; }
     .items-table thead { display: table-header-group; }
-    .items-table th { background: #BBAA8A; color: #fff; border: 1px solid #A59373; padding: 6px 8px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; font-family: 'DM Sans', Arial, sans-serif; text-align: left; }
+    .items-table th { background: #B7A07A; color: #fff; border: 0; padding: 6px 8px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em; font-family: 'DM Sans', Arial, sans-serif; text-align: left; }
     .items-table th.qty-head { text-align: center; width: 72px; }
     .items-table th.type-head { width: 80px; text-align: center; }
-    .items-table tr { page-break-inside: avoid; }
-    .category-row td { border: 1px solid #D8CFBF; background: #F7F2E9; color: #8D6E3B; padding: 5px 8px; font-size: 10px; font-weight: 700; font-family: 'DM Sans', Arial, sans-serif; letter-spacing: 0.08em; text-transform: uppercase; }
-    .category-note { border-left: 1px solid #D8CFBF; border-right: 1px solid #D8CFBF; border-bottom: 1px solid #D8CFBF; font-size: 10px; color: #6B6860; font-style: italic; padding: 4px 8px; }
-    .item-cell, .type-cell, .qty-cell { border: 1px solid #E5DED0; padding: 6px 8px; vertical-align: top; font-size: 11px; }
+    .items-table tr { page-break-inside: avoid; break-inside: avoid; }
+    .category-row td { border-bottom: 1px solid #DCCFB6; color: #8D6E3B; padding: 10px 0 4px; font-size: 13px; font-weight: 700; font-family: 'Times New Roman', Georgia, serif; letter-spacing: 0.05em; text-transform: uppercase; page-break-after: avoid; break-after: avoid; }
+    .category-note { border-bottom: 1px solid #EFE6D6; font-size: 9.5px; color: #6B6860; font-style: italic; padding: 2px 0 6px; page-break-after: avoid; break-after: avoid; }
+    .item-row.group-first-item { page-break-before: avoid; break-before: avoid; }
+    .item-cell, .type-cell, .qty-cell { border: 0; border-bottom: 1px solid #EEE7DA; padding: 6px 0; vertical-align: top; font-size: 10.5px; }
     .item-name { font-size: 11px; }
-    .item-pack { margin-top: 3px; font-size: 10px; color: #6B6860; font-style: italic; font-family: 'DM Sans', Arial, sans-serif; }
+    .item-pack { margin-top: 2px; font-size: 9.5px; color: #6B6860; font-style: italic; font-family: 'Times New Roman', Georgia, serif; }
     .type-cell { text-align: center; font-family: 'DM Sans', Arial, sans-serif; color: #5F5E5A; font-size: 10px; }
     .qty-cell { text-align: center; font-family: 'DM Sans', Arial, sans-serif; font-size: 11px; font-weight: 700; }
     .box-wrap { margin: 10px 0 12px; page-break-inside: avoid; }
-    .box-title { font-size: 10px; font-family: 'DM Sans', Arial, sans-serif; color: #6B6860; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; margin-bottom: 5px; }
+    .box-title { font-size: 9.5px; font-family: 'DM Sans', Arial, sans-serif; color: #8D6E3B; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; margin-bottom: 5px; }
     .box-table { width: 100%; border-collapse: collapse; }
-    .box-table td { border: 1px solid #CFC6B8; padding: 6px 8px; font-size: 10px; height: 24px; }
-    .box-name { width: 72%; font-family: 'DM Sans', Arial, sans-serif; }
-    .box-count-cell { width: 28%; }
-    .confirm-text { font-size: 10px; line-height: 1.45; margin: 8px 0 8px; font-family: 'DM Sans', Arial, sans-serif; page-break-inside: avoid; }
+    .box-table td { border: 1px solid #BFAA83; padding: 6px 6px; font-size: 9px; height: 26px; }
+    .box-label { width: 19%; font-family: 'DM Sans', Arial, sans-serif; }
+    .box-count-cell { width: 6%; }
+    .confirm-text { font-size: 9.5px; line-height: 1.42; margin: 8px 0 8px; font-family: 'Times New Roman', Georgia, serif; font-style: italic; text-align: center; page-break-inside: avoid; }
     .sig-table { width: 100%; border-collapse: collapse; page-break-inside: avoid; }
-    .sig-table td { border: 1px solid #CFC6B8; padding: 8px 9px; font-size: 10px; height: 28px; font-family: 'DM Sans', Arial, sans-serif; }
-    .doc-footer { margin-top: 10px; padding-top: 7px; border-top: 1px solid #D9D0C2; font-size: 9px; line-height: 1.35; text-align: center; color: #6B6860; font-family: 'DM Sans', Arial, sans-serif; }
-    .page-mark { margin-top: 4px; font-size: 9px; color: #6B6860; }
+    .sig-table td { border: 1px solid #BFAA83; padding: 9px 10px; font-size: 9.5px; height: 34px; font-family: 'DM Sans', Arial, sans-serif; }
+    .doc-footer { margin-top: 10px; padding-top: 6px; border-top: 1px solid #D9D0C2; font-size: 7.5pt; line-height: 1.35; text-align: center; color: #6B6860; font-family: 'DM Sans', Arial, sans-serif; }
     @media print {
       body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       .no-print { display: none !important; }
@@ -292,16 +293,24 @@ export default function Paperwork() {
   <div class="box-wrap">
     <div class="box-title">Box Count</div>
     <table class="box-table">
-      <tr><td class="box-name">Charger Plate Box</td><td class="box-count-cell"></td></tr>
-      <tr><td class="box-name">Lattice Crates</td><td class="box-count-cell"></td></tr>
-      <tr><td class="box-name">Grey Cutlery Trays</td><td class="box-count-cell"></td></tr>
-      <tr><td class="box-name">Grey Plate Box</td><td class="box-count-cell"></td></tr>
-      <tr><td class="box-name">Clear Boxes</td><td class="box-count-cell"></td></tr>
-      <tr><td class="box-name">Clear Dinner Plate Box + Lid</td><td class="box-count-cell"></td></tr>
-      <tr><td class="box-name">Other</td><td class="box-count-cell"></td></tr>
-      <tr><td class="box-name">Pink Linen Bag</td><td class="box-count-cell"></td></tr>
-      <tr><td class="box-name">Inner Tubes for Clear Dinner Plate Boxes</td><td class="box-count-cell"></td></tr>
-      <tr><td class="box-name">Black Napkin Box</td><td class="box-count-cell"></td></tr>
+      <tr>
+        <td class="box-label">Charger Plate Box</td><td class="box-count-cell"></td>
+        <td class="box-label">Lattice Crates</td><td class="box-count-cell"></td>
+        <td class="box-label">Grey Cutlery Trays</td><td class="box-count-cell"></td>
+        <td class="box-label">Grey Plate Box</td><td class="box-count-cell"></td>
+      </tr>
+      <tr>
+        <td class="box-label">Clear Boxes</td><td class="box-count-cell"></td>
+        <td class="box-label">Clear Dinner Plate Box + Lid</td><td class="box-count-cell"></td>
+        <td class="box-label">Other</td><td class="box-count-cell"></td>
+        <td class="box-label"></td><td class="box-count-cell"></td>
+      </tr>
+      <tr>
+        <td class="box-label">Pink Linen Bag</td><td class="box-count-cell"></td>
+        <td class="box-label">Inner Tubes for Clear Dinner Plate Boxes</td><td class="box-count-cell"></td>
+        <td class="box-label">Black Napkin Box</td><td class="box-count-cell"></td>
+        <td class="box-label"></td><td class="box-count-cell"></td>
+      </tr>
     </table>
   </div>
 
@@ -321,10 +330,10 @@ export default function Paperwork() {
   <div class="doc-footer">
     Duchess & Butler Ltd | Unit 7 Oakengrove Yard | Gaddesden Home Farm | Red Lion Lane | Hemel Hempstead | Herts | HP2 6EZ
     T: 01442 262772 | www.duchessandbutler.com | email: hello@duchessandbutler.com | VAT No. 237 973 173 | Company Reg 09575189
-    <div class="page-mark">Page 1 of 1</div>
   </div>
 </div>
 <script>
+  // Browser print headers/footers and browser page numbers are controlled by the browser print dialog when using window.print(). For perfectly controlled page numbering, a dedicated PDF renderer would be required.
   document.title = ${JSON.stringify(titleText)};
   window.onload = function(){ window.print(); }
 </script>
