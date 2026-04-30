@@ -4,7 +4,6 @@ import { supabase } from '../lib/supabase'
 const {
   PAPERWORK_LOGO_URL,
   buildDeliveryNoteFilename,
-  buildDeliveryNoteHtml,
   cleanTime,
 } = require('../lib/paperworkDeliveryNoteTemplate')
 
@@ -45,16 +44,6 @@ export default function Paperwork() {
     setLoading(false)
   }
 
-  async function fetchNotes(jobId) {
-    const { data } = await supabase
-      .from('job_notes')
-      .select('*')
-      .eq('job_id', jobId)
-      .order('created_at', { ascending: true })
-
-    return data || []
-  }
-
   async function getLogoBase64() {
     try {
       const response = await fetch(PAPERWORK_LOGO_URL)
@@ -67,38 +56,6 @@ export default function Paperwork() {
       })
     } catch {
       return null
-    }
-  }
-
-  async function printDocument(job, type) {
-    const win = window.open('', '_blank')
-    if (!win) {
-      alert('Please allow popups for this site to open documents.')
-      return
-    }
-
-    win.document.write('<html><body><p style="font-family:sans-serif;padding:40px;color:#666">Loading document...</p></body></html>')
-
-    try {
-      const [logoBase64, notes] = await Promise.all([
-        getLogoBase64(),
-        fetchNotes(job.id),
-      ])
-
-      const html = buildDeliveryNoteHtml({
-        job,
-        notes,
-        type,
-        logoSrc: logoBase64 || null,
-        autoPrint: true,
-      })
-
-      win.document.open()
-      win.document.write(html)
-      win.document.close()
-    } catch (error) {
-      win.close()
-      alert(error?.message || 'Unable to generate this document right now.')
     }
   }
 
@@ -311,8 +268,8 @@ export default function Paperwork() {
       </div>
 
       <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', overflow: 'hidden' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px 120px 120px', gap: '0', background: '#F7F3EE', borderBottom: '1px solid #DDD8CF', padding: '10px 16px' }}>
-          {['Event / Client', 'DEL Note', 'COL Note', 'Run Sheet'].map((heading) => (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px 120px', gap: '0', background: '#F7F3EE', borderBottom: '1px solid #DDD8CF', padding: '10px 16px' }}>
+          {['Event / Client', 'PDF', 'Run Sheet'].map((heading) => (
             <div key={heading} style={{ fontSize: '11px', fontWeight: '500', letterSpacing: '0.06em', textTransform: 'uppercase', color: '#6B6860' }}>
               {heading}
             </div>
@@ -322,7 +279,7 @@ export default function Paperwork() {
         {filtered.length === 0 ? (
           <div style={{ padding: '40px', textAlign: 'center', color: '#9CA3AF', fontSize: '13px' }}>No jobs found</div>
         ) : filtered.map((job) => (
-          <div key={job.id} style={{ display: 'grid', gridTemplateColumns: '1fr 140px 120px 120px', gap: '0', padding: '12px 16px', borderBottom: '0.5px solid #EDE8E0', alignItems: 'center' }}>
+          <div key={job.id} style={{ display: 'grid', gridTemplateColumns: '1fr 160px 120px', gap: '0', padding: '12px 16px', borderBottom: '0.5px solid #EDE8E0', alignItems: 'center' }}>
             <div>
               <div style={{ fontSize: '13px', fontWeight: '500', marginBottom: '2px' }}>{job.event_name}</div>
               <div style={{ fontSize: '11px', color: '#6B6860' }}>
@@ -337,42 +294,23 @@ export default function Paperwork() {
 
             <div>
               {job.delivery_date ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <button
-                    onClick={() => printDocument(job, 'DEL')}
-                    style={{ fontSize: '11px', fontWeight: '500', padding: '5px 12px', borderRadius: '6px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", background: '#FCEBEB', color: '#A32D2D', border: '1px solid #FCA5A5' }}
-                  >
-                    DEL Note
-                  </button>
-                  <button
-                    onClick={() => downloadDeliveryNotePdf(job)}
-                    disabled={pdfLoadingJobId === job.id}
-                    style={{
-                      fontSize: '11px',
-                      fontWeight: '500',
-                      padding: '5px 12px',
-                      borderRadius: '6px',
-                      cursor: pdfLoadingJobId === job.id ? 'wait' : 'pointer',
-                      fontFamily: "'DM Sans', sans-serif",
-                      background: '#1C1C1E',
-                      color: '#fff',
-                      border: 'none',
-                      opacity: pdfLoadingJobId === job.id ? 0.7 : 1,
-                    }}
-                  >
-                    {pdfLoadingJobId === job.id ? 'Generating...' : 'Download PDF'}
-                  </button>
-                </div>
-              ) : <span style={{ fontSize: '11px', color: '#DDD8CF' }}>-</span>}
-            </div>
-
-            <div>
-              {job.collection_date ? (
                 <button
-                  onClick={() => printDocument(job, 'COL')}
-                  style={{ fontSize: '11px', fontWeight: '500', padding: '5px 12px', borderRadius: '6px', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", background: '#EAF3DE', color: '#3B6D11', border: '1px solid #86EFAC' }}
+                  onClick={() => downloadDeliveryNotePdf(job)}
+                  disabled={pdfLoadingJobId === job.id}
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: '500',
+                    padding: '5px 12px',
+                    borderRadius: '6px',
+                    cursor: pdfLoadingJobId === job.id ? 'wait' : 'pointer',
+                    fontFamily: "'DM Sans', sans-serif",
+                    background: '#1C1C1E',
+                    color: '#fff',
+                    border: 'none',
+                    opacity: pdfLoadingJobId === job.id ? 0.7 : 1,
+                  }}
                 >
-                  COL Note
+                  {pdfLoadingJobId === job.id ? 'Generating...' : 'Download PDF'}
                 </button>
               ) : <span style={{ fontSize: '11px', color: '#DDD8CF' }}>-</span>}
             </div>
