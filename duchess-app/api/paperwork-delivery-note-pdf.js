@@ -152,12 +152,12 @@ function buildPdfFooterTemplate() {
 
 function buildPdfHeaderTemplate(logoDataUrl) {
   const brandMarkup = logoDataUrl
-    ? `<img src="${logoDataUrl}" style="height:18px;max-width:180px;object-fit:contain;" />`
-    : `<div style="font-family:'Times New Roman', Georgia, serif;font-size:12px;letter-spacing:0.02em;color:#2C2A27;">Duchess & Butler</div>`
+    ? `<img src="${logoDataUrl}" style="height:24px;max-width:230px;object-fit:contain;" />`
+    : `<div style="font-family:'Times New Roman', Georgia, serif;font-size:14px;letter-spacing:0.02em;color:#2C2A27;">Duchess & Butler</div><div style="font-family:Arial, Helvetica, sans-serif;font-size:8px;letter-spacing:0.12em;color:#A28756;text-transform:uppercase;margin-top:2px;">Luxury Tablescapes & Event Decor</div>`
 
   return `
-    <div style="width:100%;padding:3mm 17mm 0;font-family:Arial, Helvetica, sans-serif;">
-      <div style="text-align:center;border-bottom:1px solid #E6DDD0;padding-bottom:2mm;">
+    <div style="width:100%;padding:2.5mm 17mm 0;font-family:Arial, Helvetica, sans-serif;">
+      <div style="text-align:center;border-bottom:1px solid #D9CBB2;padding-bottom:2.2mm;">
         ${brandMarkup}
       </div>
     </div>
