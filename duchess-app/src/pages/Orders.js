@@ -5,9 +5,9 @@ import { useAuth } from '../contexts/AuthContext'
 const STATUS_OPTIONS = ['pending', 'confirmed', 'amended', 'cancelled', 'collected']
 const CATEGORY_OPTIONS = ['crockery', 'cutlery', 'glassware', 'linens', 'furniture', 'other']
 const JOB_TYPE_OPTIONS = [
-  { value: 'both',       label: 'Delivery & Collection' },
-  { value: 'delivery',   label: 'Delivery Only' },
-  { value: 'collection', label: 'Collection Only' },
+  { value: 'both',       label: 'Delivery + Collection' },
+  { value: 'delivery',   label: 'Delivery only' },
+  { value: 'collection', label: 'Collection only' },
 ]
 
 const STATUS_STYLE = {
@@ -23,6 +23,12 @@ const emptyOrder = {
   delivery_date: '', delivery_time: '', collection_date: '', collection_time: '',
   assigned_driver_id: '', status: 'pending', notes: '', special_instructions: '',
   job_type: 'both',
+}
+
+function nullIfBlank(value) {
+  if (value == null) return null
+  const trimmed = String(value).trim()
+  return trimmed ? trimmed : null
 }
 
 function fmt(d) {
@@ -104,14 +110,29 @@ export default function Orders() {
     if (!form.event_name || !form.client_name) {
       showToast('Please fill in Event Name and Client Name', 'error'); return
     }
+    const requiresDelivery = form.job_type === 'delivery' || form.job_type === 'both'
+    const requiresCollection = form.job_type === 'collection' || form.job_type === 'both'
+
+    if (requiresDelivery && !form.delivery_date) {
+      showToast('Delivery date is required for this movement type', 'error'); return
+    }
+    if (requiresCollection && !form.collection_date) {
+      showToast('Collection date is required for this movement type', 'error'); return
+    }
+
     setSaving(true)
 
     // Resolve driver name for denormalised column
     const driver = drivers.find(d => d.id === form.assigned_driver_id)
     const orderData = {
       ...form,
+      delivery_date: requiresDelivery ? nullIfBlank(form.delivery_date) : null,
+      delivery_time: requiresDelivery ? nullIfBlank(form.delivery_time) : null,
+      collection_date: requiresCollection ? nullIfBlank(form.collection_date) : null,
+      collection_time: requiresCollection ? nullIfBlank(form.collection_time) : null,
       assigned_driver_name: driver?.name || null,
-      assigned_by:          form.assigned_driver_id ? profile?.id : null,
+      assigned_driver_id:   nullIfBlank(form.assigned_driver_id),
+      assigned_by:          nullIfBlank(form.assigned_driver_id) ? profile?.id : null,
       assigned_at:          form.assigned_driver_id ? new Date().toISOString() : null,
     }
 
@@ -134,6 +155,17 @@ export default function Orders() {
         await log(`New order created: ${form.event_name}`, 'order', data.id)
         showToast('Order created successfully')
       } else {
+        const payloadKeys = Object.keys({ ...orderData, deleted: false })
+        console.error('[manual-order-create] create failed', {
+          movementType: form.job_type,
+          payloadKeys,
+          hasDeliveryDate: Boolean(orderData.delivery_date),
+          hasCollectionDate: Boolean(orderData.collection_date),
+          errorCode: error?.code || null,
+          errorMessage: error?.message || null,
+          errorDetails: error?.details || null,
+          errorHint: error?.hint || null,
+        })
         showToast('Error creating order', 'error')
       }
     }
