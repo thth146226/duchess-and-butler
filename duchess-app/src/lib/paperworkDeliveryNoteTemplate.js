@@ -232,6 +232,10 @@ function buildDeliveryNoteHtml({
     .join(' | ')
   const orderDate = job?.ordered_at ? String(job.ordered_at).split('T')[0] : job?.event_date
   const titleText = getDocumentTitle(job, type)
+  const signatureRows = [
+    ['Signed', 'Printed'],
+    ['Date', 'Position'],
+  ]
 
   const itemsHtml = groups.map((group) => `
       <tr class="category-row"><td colspan="3">${escapeHtml(group.category)}</td></tr>
@@ -251,6 +255,17 @@ function buildDeliveryNoteHtml({
           <td class="qty-cell">${escapeHtml(item.quantity)}</td>
         </tr>
       `).join('')}
+    `).join('')
+
+  const signatureHtml = signatureRows.map((row) => `
+      <tr>
+        ${row.map((label) => `
+          <td>
+            <div class="sig-label">${escapeHtml(label)}</div>
+            <div class="sig-line"></div>
+          </td>
+        `).join('')}
+      </tr>
     `).join('')
 
   const footerScript = autoPrint
@@ -300,14 +315,16 @@ function buildDeliveryNoteHtml({
     .qty-cell { text-align: center; font-family: Arial, Helvetica, sans-serif; font-size: 11px; font-weight: 700; }
     .box-wrap { margin: 11px 0 12px; page-break-inside: avoid; }
     .box-title { font-size: 9.5px; font-family: Arial, Helvetica, sans-serif; color: #8D6E3B; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; margin-bottom: 5px; }
-    .box-table { width: 100%; border-collapse: collapse; }
-    .box-table td { border: 1px solid #BFAA83; padding: 7px 7px; font-size: 9px; height: 30px; }
-    .box-label { width: 19%; font-family: Arial, Helvetica, sans-serif; }
-    .box-count-cell { width: 6%; }
-    .confirm-text { font-size: 9.5px; line-height: 1.42; margin: 8px 0 8px; font-style: italic; text-align: center; page-break-inside: avoid; }
+    .box-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    .box-table td { border: 1px solid #BFAA83; padding: 6px 7px; font-size: 8.8px; height: 28px; vertical-align: top; }
+    .box-label { width: 19%; font-family: Arial, Helvetica, sans-serif; color: #403B34; line-height: 1.26; }
+    .box-count-cell { width: 6%; background: #FCFAF7; }
+    .confirm-text { font-size: 9.4px; line-height: 1.44; margin: 8px 0 8px; font-style: italic; text-align: center; page-break-inside: avoid; color: #4F4A42; }
     .sig-table { width: 100%; border-collapse: collapse; page-break-inside: avoid; }
-    .sig-table td { border: 1px solid #BFAA83; padding: 9px 10px; font-size: 9.5px; height: 34px; font-family: Arial, Helvetica, sans-serif; }
-    .doc-footer { margin-top: 11px; padding-top: 6px; border-top: 1px solid #D9D0C2; font-size: 7.8pt; line-height: 1.35; text-align: center; color: #6B6860; font-family: Arial, Helvetica, sans-serif; }
+    .sig-table td { border: 1px solid #BFAA83; padding: 6px 10px 7px; font-size: 9px; height: 34px; font-family: Arial, Helvetica, sans-serif; vertical-align: top; }
+    .sig-label { font-size: 8.2px; letter-spacing: 0.06em; text-transform: uppercase; color: #766C5B; }
+    .sig-line { border-bottom: 1px solid #BFAA83; height: 11px; margin-top: 5px; }
+    .doc-footer { margin-top: 11px; padding-top: 6px; border-top: 1px solid #D9D0C2; font-size: 7.7pt; line-height: 1.38; text-align: center; color: #6B6860; font-family: Arial, Helvetica, sans-serif; }
     .placeholder { color: #999; }
     @media print {
       .no-print { display: none !important; }
@@ -388,14 +405,7 @@ function buildDeliveryNoteHtml({
     <p class="confirm-text">We want your event to be perfect. Any differences or issues must be advised immediately so that we can put it right before the start of your event. Sign below to confirm the items listed have been delivered to your satisfaction.</p>
 
     <table class="sig-table">
-      <tr>
-        <td>Signed:</td>
-        <td>Printed:</td>
-      </tr>
-      <tr>
-        <td>Date:</td>
-        <td>Position:</td>
-      </tr>
+      ${signatureHtml}
     </table>
 
     <div class="doc-footer">
