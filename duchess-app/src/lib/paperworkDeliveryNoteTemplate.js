@@ -232,6 +232,18 @@ function buildDeliveryNoteHtml({
     .join(' | ')
   const orderDate = job?.ordered_at ? String(job.ordered_at).split('T')[0] : job?.event_date
   const titleText = getDocumentTitle(job, type)
+  const typeLabel = getTypeLabel(type)
+  const boxRows = [
+    ['Charger Plate Box', 'Lattice Crates'],
+    ['Grey Cutlery Trays', 'Grey Plate Box'],
+    ['Clear Boxes', 'Clear Dinner Plate Box + Lid'],
+    ['Pink Linen Bag', 'Black Napkin Box'],
+    ['Inner Tubes for Clear Dinner Plate Boxes', 'Other'],
+  ]
+  const signatureRows = [
+    ['Signed', 'Printed'],
+    ['Date', 'Position'],
+  ]
 
   const itemsHtml = groups.map((group) => `
       <tr class="category-row"><td colspan="3">${escapeHtml(group.category)}</td></tr>
@@ -253,6 +265,26 @@ function buildDeliveryNoteHtml({
       `).join('')}
     `).join('')
 
+  const boxCountHtml = boxRows.map((row) => `
+      <tr>
+        <td class="box-label">${escapeHtml(row[0])}</td>
+        <td class="box-count-cell"></td>
+        <td class="box-label">${escapeHtml(row[1])}</td>
+        <td class="box-count-cell"></td>
+      </tr>
+    `).join('')
+
+  const signatureHtml = signatureRows.map((row) => `
+      <tr>
+        ${row.map((label) => `
+          <td>
+            <div class="sig-label">${escapeHtml(label)}</div>
+            <div class="sig-line"></div>
+          </td>
+        `).join('')}
+      </tr>
+    `).join('')
+
   const footerScript = autoPrint
     ? `
 <script>
@@ -272,42 +304,50 @@ function buildDeliveryNoteHtml({
     html, body { background: #fff; color: #1C1C1E; font-family: "Times New Roman", Georgia, Garamond, serif; font-size: 10pt; }
     body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .page { width: 100%; max-width: 176mm; margin: 0 auto; }
-    .brand { text-align: center; margin-bottom: 14px; ${showBodyBrand ? '' : 'display:none;'} }
+    .brand { text-align: center; margin-bottom: 8px; ${showBodyBrand ? '' : 'display:none;'} }
     .brand img { display: inline-block; }
-    .brand-text { font-size: 25px; letter-spacing: 0.018em; line-height: 1; color: #2C2A27; }
+    .brand-text { font-size: 24px; letter-spacing: 0.016em; line-height: 1; color: #2C2A27; }
     .brand-sub { font-size: 8.5px; letter-spacing: 0.16em; margin-top: 4px; color: #A28756; font-family: Arial, Helvetica, sans-serif; text-transform: uppercase; }
-    .details-wrap { display: grid; grid-template-columns: 1.12fr 1fr 1fr; gap: 12px; border-top: 1px solid #CFC6B8; border-bottom: 1px solid #CFC6B8; padding: 10px 2px; margin-bottom: 14px; page-break-inside: avoid; }
+    .title-block { text-align: center; margin-bottom: 12px; page-break-inside: avoid; }
+    .title-kicker { font-family: Arial, Helvetica, sans-serif; font-size: 8px; letter-spacing: 0.16em; text-transform: uppercase; color: #8D6E3B; margin-bottom: 6px; }
+    .doc-title { font-size: 15pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.14em; color: #2A2825; }
+    .doc-event { margin-top: 6px; font-size: 10px; line-height: 1.45; text-transform: uppercase; letter-spacing: 0.035em; color: #44403A; }
+    .doc-refline { margin-top: 5px; font-family: Arial, Helvetica, sans-serif; font-size: 8.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #7A7263; }
+    .details-wrap { display: grid; grid-template-columns: 1.1fr 0.95fr 0.95fr; gap: 0; border-top: 1px solid #CFC6B8; border-bottom: 1px solid #CFC6B8; padding: 11px 0 10px; margin-bottom: 12px; page-break-inside: avoid; }
+    .details-panel { min-width: 0; padding-right: 12px; }
+    .details-panel + .details-panel { border-left: 1px solid #E6DDD0; padding-left: 12px; padding-right: 0; }
     .meta-table { width: 100%; border-collapse: collapse; font-family: Arial, Helvetica, sans-serif; }
-    .meta-table td { font-size: 10px; padding: 1.5px 0; vertical-align: top; line-height: 1.35; }
-    .meta-label { width: 100px; color: #6B6860; font-weight: 600; }
+    .meta-table td { font-size: 9.5px; padding: 2px 0; vertical-align: top; line-height: 1.35; }
+    .meta-label { width: 94px; color: #6B6860; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; font-size: 8.3px; padding-right: 6px; }
     .address-head { font-family: Arial, Helvetica, sans-serif; font-size: 9px; letter-spacing: 0.08em; color: #8D6E3B; font-weight: 700; text-transform: uppercase; margin-bottom: 4px; }
-    .address-body { font-size: 10px; line-height: 1.38; min-height: 68px; }
-    .doc-title { text-align: center; font-size: 14pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; margin: 10px 0 12px; color: #2A2825; }
-    .special-notes { border: 1px solid #D7CEBF; background: #FCFAF7; padding: 6px 9px; margin-bottom: 10px; font-size: 10px; line-height: 1.4; font-family: Arial, Helvetica, sans-serif; }
-    .items-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; page-break-inside: auto; }
+    .address-body { font-size: 10px; line-height: 1.46; min-height: 72px; }
+    .special-notes { border: 1px solid #D7CEBF; background: #FCFAF7; padding: 6px 9px; margin-bottom: 11px; font-size: 9.7px; line-height: 1.45; font-family: Arial, Helvetica, sans-serif; }
+    .items-table { width: 100%; border-collapse: collapse; margin-bottom: 14px; page-break-inside: auto; }
     .items-table thead { display: table-header-group; }
-    .items-table th { background: #B7A07A; color: #fff; border: 0; padding: 7px 8px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em; font-family: Arial, Helvetica, sans-serif; text-align: left; }
-    .items-table th.qty-head { text-align: center; width: 72px; }
-    .items-table th.type-head { width: 90px; text-align: center; }
+    .items-table th { background: #B39A71; color: #fff; border: 0; padding: 7px 9px; font-size: 8.6px; text-transform: uppercase; letter-spacing: 0.12em; font-family: Arial, Helvetica, sans-serif; text-align: left; }
+    .items-table th.qty-head { text-align: center; width: 78px; }
+    .items-table th.type-head { width: 94px; text-align: center; }
     .items-table tr { page-break-inside: avoid; break-inside: avoid; }
-    .category-row td { border-bottom: 1px solid #DCCFB6; color: #8D6E3B; padding: 10px 0 4px; font-size: 13px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; page-break-after: avoid; break-after: avoid; }
-    .category-note { border-bottom: 1px solid #EFE6D6; font-size: 9.5px; color: #6B6860; font-style: italic; padding: 2px 0 6px; page-break-after: avoid; break-after: avoid; }
+    .category-row td { border-bottom: 1px solid #DCCFB6; color: #8D6E3B; padding: 11px 0 5px; font-size: 12.5px; font-weight: 700; letter-spacing: 0.055em; text-transform: uppercase; page-break-after: avoid; break-after: avoid; }
+    .category-note { border-bottom: 1px solid #EFE6D6; font-size: 9.2px; color: #6B6860; font-style: italic; padding: 2px 0 7px; page-break-after: avoid; break-after: avoid; }
     .item-row.group-first-item { page-break-before: avoid; break-before: avoid; }
-    .item-cell, .type-cell, .qty-cell { border: 0; border-bottom: 1px solid #EEE7DA; padding: 7px 0; vertical-align: top; font-size: 10.5px; }
-    .item-name { font-size: 11px; }
+    .item-cell, .type-cell, .qty-cell { border: 0; border-bottom: 1px solid #EEE7DA; padding: 8px 0; vertical-align: top; font-size: 10.4px; }
+    .item-name { font-size: 10.9px; line-height: 1.36; }
     .item-pack { margin-top: 2px; font-size: 9.5px; color: #6B6860; font-style: italic; }
-    .type-cell { text-align: center; font-family: Arial, Helvetica, sans-serif; color: #5F5E5A; font-size: 10px; }
-    .qty-cell { text-align: center; font-family: Arial, Helvetica, sans-serif; font-size: 11px; font-weight: 700; }
-    .box-wrap { margin: 11px 0 12px; page-break-inside: avoid; }
-    .box-title { font-size: 9.5px; font-family: Arial, Helvetica, sans-serif; color: #8D6E3B; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; margin-bottom: 5px; }
+    .type-cell { text-align: center; font-family: Arial, Helvetica, sans-serif; color: #5F5E5A; font-size: 9.7px; }
+    .qty-cell { text-align: center; font-family: Arial, Helvetica, sans-serif; font-size: 10.8px; font-weight: 700; }
+    .box-wrap { margin: 12px 0 14px; page-break-inside: avoid; }
+    .box-title { font-size: 9.2px; font-family: Arial, Helvetica, sans-serif; color: #8D6E3B; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; margin-bottom: 6px; }
     .box-table { width: 100%; border-collapse: collapse; }
-    .box-table td { border: 1px solid #BFAA83; padding: 7px 7px; font-size: 9px; height: 30px; }
-    .box-label { width: 19%; font-family: Arial, Helvetica, sans-serif; }
-    .box-count-cell { width: 6%; }
-    .confirm-text { font-size: 9.5px; line-height: 1.42; margin: 8px 0 8px; font-style: italic; text-align: center; page-break-inside: avoid; }
+    .box-table td { border: 1px solid #BFAA83; padding: 7px 8px; font-size: 9px; height: 30px; }
+    .box-label { width: 39%; font-family: Arial, Helvetica, sans-serif; color: #403B34; }
+    .box-count-cell { width: 11%; background: #FCFAF7; }
+    .confirm-text { font-size: 9.2px; line-height: 1.48; margin: 9px 0 10px; font-style: italic; text-align: center; page-break-inside: avoid; color: #4F4A42; }
     .sig-table { width: 100%; border-collapse: collapse; page-break-inside: avoid; }
-    .sig-table td { border: 1px solid #BFAA83; padding: 9px 10px; font-size: 9.5px; height: 34px; font-family: Arial, Helvetica, sans-serif; }
-    .doc-footer { margin-top: 11px; padding-top: 6px; border-top: 1px solid #D9D0C2; font-size: 7.8pt; line-height: 1.35; text-align: center; color: #6B6860; font-family: Arial, Helvetica, sans-serif; }
+    .sig-table td { border: 1px solid #BFAA83; padding: 8px 10px 9px; font-size: 9px; height: 44px; font-family: Arial, Helvetica, sans-serif; vertical-align: top; }
+    .sig-label { font-size: 8.3px; letter-spacing: 0.08em; text-transform: uppercase; color: #766C5B; margin-bottom: 10px; }
+    .sig-line { border-bottom: 1px solid #BFAA83; height: 12px; }
+    .doc-footer { margin-top: 12px; padding-top: 7px; border-top: 1px solid #D9D0C2; font-size: 7.5pt; line-height: 1.42; text-align: center; color: #6B6860; font-family: Arial, Helvetica, sans-serif; }
     .placeholder { color: #999; }
     @media print {
       .no-print { display: none !important; }
@@ -320,31 +360,38 @@ function buildDeliveryNoteHtml({
       ${buildLogoMarkup(logoSrc)}
     </div>
 
+    <div class="title-block">
+      <div class="title-kicker">Duchess & Butler Paperwork</div>
+      <div class="doc-title">${escapeHtml(typeLabel)}</div>
+      <div class="doc-event">${escapeHtml(job?.event_name || EMPTY_VALUE)}</div>
+      <div class="doc-refline">Our Reference ${escapeHtml(job?.crms_ref || EMPTY_VALUE)}</div>
+    </div>
+
     <div class="details-wrap">
-      <table class="meta-table">
-        <tr><td class="meta-label">Order Date</td><td>${escapeHtml(formatRmsDate(orderDate))}</td></tr>
-        <tr><td class="meta-label">Our Reference</td><td>${escapeHtml(job?.crms_ref || EMPTY_VALUE)}</td></tr>
-        <tr><td class="meta-label">Delivery Date</td><td>${escapeHtml(formatRmsDate(job?.delivery_date, timeRange(job?.delivery_time)))}</td></tr>
-        <tr><td class="meta-label">Event Date</td><td>${escapeHtml(formatRmsDate(job?.event_date))}</td></tr>
-        <tr><td class="meta-label">Collection Date</td><td>${escapeHtml(formatRmsDate(job?.collection_date, timeRange(job?.collection_time)))}</td></tr>
-        ${drivers ? `<tr><td class="meta-label">Driver</td><td>${escapeHtml(drivers)}</td></tr>` : ''}
-      </table>
-      <div>
+      <div class="details-panel">
+        <table class="meta-table">
+          <tr><td class="meta-label">Order Date</td><td>${escapeHtml(formatRmsDate(orderDate))}</td></tr>
+          <tr><td class="meta-label">Our Reference</td><td>${escapeHtml(job?.crms_ref || EMPTY_VALUE)}</td></tr>
+          <tr><td class="meta-label">Delivery Date</td><td>${escapeHtml(formatRmsDate(job?.delivery_date, timeRange(job?.delivery_time)))}</td></tr>
+          <tr><td class="meta-label">Event Date</td><td>${escapeHtml(formatRmsDate(job?.event_date))}</td></tr>
+          <tr><td class="meta-label">Collection Date</td><td>${escapeHtml(formatRmsDate(job?.collection_date, timeRange(job?.collection_time)))}</td></tr>
+          ${drivers ? `<tr><td class="meta-label">Driver</td><td>${escapeHtml(drivers)}</td></tr>` : ''}
+        </table>
+      </div>
+      <div class="details-panel">
         <div class="address-head">Delivery Address</div>
         <div class="address-body">
           ${job?.venue ? `<strong>${escapeHtml(job.venue)}</strong><br>` : ''}
           ${formatAddressHtml(job?.venue_address) || EMPTY_VALUE}
         </div>
       </div>
-      <div>
+      <div class="details-panel">
         <div class="address-head">Client Address</div>
         <div class="address-body">
           ${formatAddressHtml(job?.client_address) || escapeHtml(job?.client_name || EMPTY_VALUE)}
         </div>
       </div>
     </div>
-
-    <div class="doc-title">${escapeHtml(titleText)}</div>
 
     ${specialNotes ? `<div class="special-notes"><strong>Special Instructions:</strong> ${escapeHtml(specialNotes)}</div>` : ''}
 
@@ -364,38 +411,14 @@ function buildDeliveryNoteHtml({
     <div class="box-wrap">
       <div class="box-title">Box Count</div>
       <table class="box-table">
-        <tr>
-          <td class="box-label">Charger Plate Box</td><td class="box-count-cell"></td>
-          <td class="box-label">Lattice Crates</td><td class="box-count-cell"></td>
-          <td class="box-label">Grey Cutlery Trays</td><td class="box-count-cell"></td>
-          <td class="box-label">Grey Plate Box</td><td class="box-count-cell"></td>
-        </tr>
-        <tr>
-          <td class="box-label">Clear Boxes</td><td class="box-count-cell"></td>
-          <td class="box-label">Clear Dinner Plate Box + Lid</td><td class="box-count-cell"></td>
-          <td class="box-label">Other</td><td class="box-count-cell"></td>
-          <td class="box-label"></td><td class="box-count-cell"></td>
-        </tr>
-        <tr>
-          <td class="box-label">Pink Linen Bag</td><td class="box-count-cell"></td>
-          <td class="box-label">Inner Tubes for Clear Dinner Plate Boxes</td><td class="box-count-cell"></td>
-          <td class="box-label">Black Napkin Box</td><td class="box-count-cell"></td>
-          <td class="box-label"></td><td class="box-count-cell"></td>
-        </tr>
+        ${boxCountHtml}
       </table>
     </div>
 
     <p class="confirm-text">We want your event to be perfect. Any differences or issues must be advised immediately so that we can put it right before the start of your event. Sign below to confirm the items listed have been delivered to your satisfaction.</p>
 
     <table class="sig-table">
-      <tr>
-        <td>Signed:</td>
-        <td>Printed:</td>
-      </tr>
-      <tr>
-        <td>Date:</td>
-        <td>Position:</td>
-      </tr>
+      ${signatureHtml}
     </table>
 
     <div class="doc-footer">
