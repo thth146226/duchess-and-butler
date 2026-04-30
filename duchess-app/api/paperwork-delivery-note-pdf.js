@@ -97,7 +97,7 @@ async function getLogoDataUrl() {
 async function fetchPaperworkJobData(jobId) {
   const supabase = getSupabaseAdminClient()
 
-  const [{ data: job, error: jobError }, { data: notes, error: notesError }] = await Promise.all([
+  const [{ data: job, error: jobError }, { data: notes, error: notesError }, { data: ataItems, error: ataItemsError }] = await Promise.all([
     supabase
       .from('crms_jobs')
       .select('*, crms_job_items(*)')
@@ -108,6 +108,10 @@ async function fetchPaperworkJobData(jobId) {
       .select('*')
       .eq('job_id', jobId)
       .order('created_at', { ascending: true }),
+    supabase
+      .from('ata_items')
+      .select('name, pieces_per_unit, unit_name, notes')
+      .eq('active', true),
   ])
 
   if (jobError) {
@@ -115,9 +119,26 @@ async function fetchPaperworkJobData(jobId) {
     throw new Error(jobError.message)
   }
 
+  const packingLookup = {}
+  if (!ataItemsError && Array.isArray(ataItems)) {
+    for (const item of ataItems) {
+      const key = String(item?.name || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim()
+      if (!key || packingLookup[key]) continue
+      packingLookup[key] = {
+        pieces_per_unit: item?.pieces_per_unit ?? null,
+        unit_name: item?.unit_name || null,
+        bundle_note: item?.notes || null,
+      }
+    }
+  }
+
   return {
     job,
     notes: notesError ? [] : (notes || []),
+    packingLookup,
   }
 }
 
@@ -125,6 +146,20 @@ function buildPdfFooterTemplate() {
   return `
     <div style="width:100%;padding:0 17mm 3mm;font-family:Arial, Helvetica, sans-serif;font-size:8px;color:#6B6860;text-align:right;">
       Page <span class="pageNumber"></span> of <span class="totalPages"></span>
+    </div>
+  `
+}
+
+function buildPdfHeaderTemplate(logoDataUrl) {
+  const brandMarkup = logoDataUrl
+    ? `<img src="${logoDataUrl}" style="height:18px;max-width:180px;object-fit:contain;" />`
+    : `<div style="font-family:'Times New Roman', Georgia, serif;font-size:12px;letter-spacing:0.02em;color:#2C2A27;">Duchess & Butler</div>`
+
+  return `
+    <div style="width:100%;padding:3mm 17mm 0;font-family:Arial, Helvetica, sans-serif;">
+      <div style="text-align:center;border-bottom:1px solid #E6DDD0;padding-bottom:2mm;">
+        ${brandMarkup}
+      </div>
     </div>
   `
 }
@@ -150,7 +185,7 @@ module.exports = async function handler(req, res) {
       return res.status(400).json({ error: 'Missing required jobId.' })
     }
 
-    const { job, notes } = await fetchPaperworkJobData(jobId)
+    const { job, notes, packingLookup } = await fetchPaperworkJobData(jobId)
 
     if (!job) {
       return res.status(404).json({ error: 'Paperwork job not found.' })
@@ -166,6 +201,8 @@ module.exports = async function handler(req, res) {
       notes,
       type: 'DEL',
       logoSrc: logoDataUrl || PAPERWORK_LOGO_URL,
+      packingLookup,
+      showBodyBrand: false,
       autoPrint: false,
     })
 
@@ -181,12 +218,12 @@ module.exports = async function handler(req, res) {
       printBackground: true,
       preferCSSPageSize: true,
       displayHeaderFooter: true,
-      headerTemplate: '<div></div>',
+      headerTemplate: buildPdfHeaderTemplate(logoDataUrl),
       footerTemplate: buildPdfFooterTemplate(),
       margin: {
-        top: '24mm',
+        top: '34mm',
         right: '17mm',
-        bottom: '22mm',
+        bottom: '20mm',
         left: '17mm',
       },
     })
