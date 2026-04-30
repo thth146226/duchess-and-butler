@@ -239,8 +239,26 @@ export default function Schedule({ refreshKey = 0 }) {
   async function saveDraggedDate(run, newDate) {
     const isCol = run.runType === 'COL'
     const table = run.crmsId ? 'crms_jobs' : 'orders'
+    const sourceDate = run.runDate
 
     console.log('saveDraggedDate:', { table, jobId: run.jobId, crmsId: run.crmsId, newDate, isCol })
+    console.log('[schedule-week-dnd] drop start', {
+      active_id: run.jobId,
+      over_id: `schedule-day:${newDate}`,
+      source_date: sourceDate,
+      target_date: newDate,
+    })
+
+    if (sourceDate === newDate) {
+      console.log('[schedule-week-dnd] drop noop (same day)', {
+        active_id: run.jobId,
+        source_date: sourceDate,
+        target_date: newDate,
+      })
+      setDragRun(null)
+      setDragOverDate(null)
+      return
+    }
 
     const updatePayload = {
       has_manual_override: true,
@@ -259,9 +277,23 @@ export default function Schedule({ refreshKey = 0 }) {
       .eq('id', run.jobId)
 
     if (error) {
+      console.log('[schedule-week-dnd] update failed', {
+        active_id: run.jobId,
+        over_id: `schedule-day:${newDate}`,
+        source_date: sourceDate,
+        target_date: newDate,
+        error: error.message,
+      })
       console.error('saveDraggedDate error:', error)
       showToast('Error saving date change', 'error')
     } else {
+      console.log('[schedule-week-dnd] update success', {
+        active_id: run.jobId,
+        over_id: `schedule-day:${newDate}`,
+        source_date: sourceDate,
+        target_date: newDate,
+        table,
+      })
       showToast(`${run.runType} moved to ${newDate}`)
     }
 
@@ -705,7 +737,20 @@ export default function Schedule({ refreshKey = 0 }) {
       )}
 
       {/* ── WEEK VIEW ── */}
-      {view === 'week' && <WeekView allRuns={allRuns} weekOffset={weekOffset} setWeekOffset={setWeekOffset} onSelect={setSelectedRun} />}
+      {view === 'week' && (
+        <WeekView
+          allRuns={allRuns}
+          weekOffset={weekOffset}
+          setWeekOffset={setWeekOffset}
+          onSelect={setSelectedRun}
+          dragRun={dragRun}
+          dragOverDate={dragOverDate}
+          setDragRun={setDragRun}
+          setDragOverDate={setDragOverDate}
+          saveDraggedDate={saveDraggedDate}
+          showToast={showToast}
+        />
+      )}
 
       {/* ── MONTH VIEW ── */}
       {view === 'month' && (
@@ -1945,7 +1990,7 @@ function RunDetailPanel({
 }
 
 // ── WEEK VIEW ─────────────────────────────────────────────────────────────────
-function WeekView({ allRuns, weekOffset, setWeekOffset, onSelect }) {
+function WeekView({ allRuns, weekOffset, setWeekOffset, onSelect, dragRun, dragOverDate, setDragRun, setDragOverDate, saveDraggedDate, showToast }) {
   const now = new Date()
   const day = now.getDay()
   const monday = new Date(now)
@@ -1969,14 +2014,61 @@ function WeekView({ allRuns, weekOffset, setWeekOffset, onSelect }) {
           const runs = allRuns.filter(r => r.runDate === ds)
           const isToday = ds === today
           return (
-            <div key={i}>
+            <div
+              key={i}
+              style={{
+                borderRadius: '6px',
+                background: dragOverDate === ds ? '#F0FDF4' : 'transparent',
+                border: dragOverDate === ds ? '1.5px dashed #1D9E75' : '1.5px solid transparent',
+                padding: '2px',
+              }}
+              onDragOver={(e) => { e.preventDefault(); setDragOverDate(ds) }}
+              onDragLeave={() => setDragOverDate(null)}
+              onDrop={(e) => {
+                e.preventDefault()
+                if (!dragRun) return
+                console.log('[schedule-week-dnd] drop event', {
+                  active_id: dragRun.jobId,
+                  over_id: `schedule-day:${ds}`,
+                  source_date: dragRun.runDate,
+                  target_date: ds,
+                })
+                if (dragRun.runDate === ds) {
+                  setDragRun(null)
+                  setDragOverDate(null)
+                  showToast('Use the List view to reorder runs on the same day')
+                } else {
+                  saveDraggedDate(dragRun, ds)
+                }
+              }}
+            >
               <div style={{ background: isToday ? '#1C1C1E' : '#3D5A73', color: 'white', padding: '8px', borderRadius: '6px', textAlign: 'center', marginBottom: '8px', border: isToday ? '2px solid #B8965A' : 'none' }}>
                 <div style={{ fontSize: '10px', opacity: 0.7, textTransform: 'uppercase', letterSpacing: '0.1em' }}>{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][i]}</div>
                 <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '24px', fontWeight: '300' }}>{date.getDate()}</div>
               </div>
               {runs.length === 0
                 ? <div style={{ fontSize: '11px', color: '#D1D5DB', textAlign: 'center', padding: '8px' }}>—</div>
-                : runs.map((run, j) => <MiniRunCard key={j} run={run} onClick={() => onSelect(run)} />)
+                : runs.map((run, j) => (
+                  <MiniRunCard
+                    key={j}
+                    run={run}
+                    onClick={() => onSelect(run)}
+                    draggable={true}
+                    onDragStart={(e) => {
+                      e.stopPropagation()
+                      e.dataTransfer.effectAllowed = 'move'
+                      setDragRun(run)
+                      console.log('[schedule-week-dnd] drag start', {
+                        active_id: run.jobId,
+                        source_date: run.runDate,
+                      })
+                    }}
+                    onDragEnd={() => {
+                      setDragRun(null)
+                      setDragOverDate(null)
+                    }}
+                  />
+                ))
               }
             </div>
           )
