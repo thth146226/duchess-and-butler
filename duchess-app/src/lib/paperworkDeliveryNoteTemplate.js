@@ -1,6 +1,7 @@
 const PAPERWORK_LOGO_URL = 'https://duchessandbutler.com/wp-content/uploads/2025/02/duchess-butler-logo.png'
 const EMPTY_VALUE = '-'
 const PAPERWORK_TIMEZONE = 'Europe/London'
+const CATEGORY_ICON_PLACEHOLDER = '&nbsp;'
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -106,6 +107,32 @@ function getPackingNote(item) {
   return candidates.find((value) => value && String(value).trim()) || null
 }
 
+function normalizeItemKey(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+function resolvePackingFromLookup(item, packingLookup) {
+  if (!packingLookup) return null
+  const key = normalizeItemKey(item?.item_name)
+  if (!key) return null
+  return packingLookup[key] || null
+}
+
+function buildPackingTextFromSource(source) {
+  if (!source) return null
+  if (source.bundle_note) return source.bundle_note
+  if (source.bundle_size) return `Bundles of ${source.bundle_size}`
+  if (!source.pieces_per_unit) return null
+  const unitName = String(source.unit_name || '').toLowerCase()
+  if (unitName.includes('crate')) return `${source.pieces_per_unit} per crate`
+  if (unitName.includes('box')) return `${source.pieces_per_unit} per box`
+  if (unitName.includes('tray')) return `${source.pieces_per_unit} per tray`
+  return `${source.pieces_per_unit} per bundle`
+}
+
 function getItemType(item) {
   const typeValue = String(item?.item_type || item?.type_name || '').trim()
   if (!typeValue) return 'Rental'
@@ -196,6 +223,8 @@ function buildDeliveryNoteHtml({
   notes = [],
   type = 'DEL',
   logoSrc = null,
+  packingLookup = null,
+  showBodyBrand = true,
   autoPrint = false,
 }) {
   const groups = groupItems(job?.crms_job_items)
@@ -208,13 +237,18 @@ function buildDeliveryNoteHtml({
   const titleText = getDocumentTitle(job, type)
 
   const itemsHtml = groups.map((group) => `
-      <tr class="category-row"><td colspan="3">${escapeHtml(group.category)}</td></tr>
+      <tr class="category-row"><td colspan="3"><div class="category-head"><span class="category-icon">${CATEGORY_ICON_PLACEHOLDER}</span><span>${escapeHtml(group.category)}</span></div></td></tr>
       ${group.category === 'CHARGER PLATES' ? '<tr><td colspan="3" class="category-note">We don\'t apply wash fees to our Charger Plates.</td></tr>' : ''}
       ${group.items.map((item, index) => `
         <tr class="item-row ${index === 0 ? 'group-first-item' : ''}">
           <td class="item-cell">
             <div class="item-name">${escapeHtml(item.item_name)}</div>
-            ${getPackingNote(item) ? `<div class="item-pack">${escapeHtml(getPackingNote(item))}</div>` : ''}
+            ${(() => {
+              const sourcePacking = getPackingNote(item)
+              if (sourcePacking) return `<div class="item-pack">${escapeHtml(sourcePacking)}</div>`
+              const lookupPacking = buildPackingTextFromSource(resolvePackingFromLookup(item, packingLookup))
+              return lookupPacking ? `<div class="item-pack">${escapeHtml(lookupPacking)}</div>` : ''
+            })()}
           </td>
           <td class="type-cell">${escapeHtml(getItemType(item))}</td>
           <td class="qty-cell">${escapeHtml(item.quantity)}</td>
@@ -241,7 +275,7 @@ function buildDeliveryNoteHtml({
     html, body { background: #fff; color: #1C1C1E; font-family: "Times New Roman", Georgia, Garamond, serif; font-size: 10pt; }
     body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .page { width: 100%; max-width: 176mm; margin: 0 auto; }
-    .brand { text-align: center; margin-bottom: 14px; }
+    .brand { text-align: center; margin-bottom: 14px; ${showBodyBrand ? '' : 'display:none;'} }
     .brand img { display: inline-block; }
     .brand-text { font-size: 25px; letter-spacing: 0.018em; line-height: 1; color: #2C2A27; }
     .brand-sub { font-size: 8.5px; letter-spacing: 0.16em; margin-top: 4px; color: #A28756; font-family: Arial, Helvetica, sans-serif; text-transform: uppercase; }
@@ -260,6 +294,8 @@ function buildDeliveryNoteHtml({
     .items-table th.type-head { width: 90px; text-align: center; }
     .items-table tr { page-break-inside: avoid; break-inside: avoid; }
     .category-row td { border-bottom: 1px solid #DCCFB6; color: #8D6E3B; padding: 10px 0 4px; font-size: 13px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; page-break-after: avoid; break-after: avoid; }
+    .category-head { display: grid; grid-template-columns: 16px 1fr; align-items: center; gap: 6px; }
+    .category-icon { width: 12px; height: 12px; border: 1px solid #D7C8AE; border-radius: 50%; background: #F8F2E8; display: inline-block; }
     .category-note { border-bottom: 1px solid #EFE6D6; font-size: 9.5px; color: #6B6860; font-style: italic; padding: 2px 0 6px; page-break-after: avoid; break-after: avoid; }
     .item-row.group-first-item { page-break-before: avoid; break-before: avoid; }
     .item-cell, .type-cell, .qty-cell { border: 0; border-bottom: 1px solid #EEE7DA; padding: 7px 0; vertical-align: top; font-size: 10.5px; }
