@@ -1,7 +1,6 @@
 const PAPERWORK_LOGO_URL = 'https://duchessandbutler.com/wp-content/uploads/2025/02/duchess-butler-logo.png'
 const EMPTY_VALUE = '-'
 const PAPERWORK_TIMEZONE = 'Europe/London'
-const CATEGORY_ICON_PLACEHOLDER = '&nbsp;'
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -124,13 +123,11 @@ function resolvePackingFromLookup(item, packingLookup) {
 function buildPackingTextFromSource(source) {
   if (!source) return null
   if (source.bundle_note) return source.bundle_note
-  if (source.bundle_size) return `Bundles of ${source.bundle_size}`
-  if (!source.pieces_per_unit) return null
-  const unitName = String(source.unit_name || '').toLowerCase()
-  if (unitName.includes('crate')) return `${source.pieces_per_unit} per crate`
-  if (unitName.includes('box')) return `${source.pieces_per_unit} per box`
-  if (unitName.includes('tray')) return `${source.pieces_per_unit} per tray`
-  return `${source.pieces_per_unit} per bundle`
+  // Keep ATA-derived display conservative to avoid misleading paperwork notes.
+  // Numeric-only fields (pieces_per_unit/unit_name) are suppressed unless a
+  // human-readable bundle/crate note is explicitly available from source data.
+  if (source.notes) return source.notes
+  return null
 }
 
 function getItemType(item) {
@@ -237,7 +234,7 @@ function buildDeliveryNoteHtml({
   const titleText = getDocumentTitle(job, type)
 
   const itemsHtml = groups.map((group) => `
-      <tr class="category-row"><td colspan="3"><div class="category-head"><span class="category-icon">${CATEGORY_ICON_PLACEHOLDER}</span><span>${escapeHtml(group.category)}</span></div></td></tr>
+      <tr class="category-row"><td colspan="3">${escapeHtml(group.category)}</td></tr>
       ${group.category === 'CHARGER PLATES' ? '<tr><td colspan="3" class="category-note">We don\'t apply wash fees to our Charger Plates.</td></tr>' : ''}
       ${group.items.map((item, index) => `
         <tr class="item-row ${index === 0 ? 'group-first-item' : ''}">
@@ -294,8 +291,6 @@ function buildDeliveryNoteHtml({
     .items-table th.type-head { width: 90px; text-align: center; }
     .items-table tr { page-break-inside: avoid; break-inside: avoid; }
     .category-row td { border-bottom: 1px solid #DCCFB6; color: #8D6E3B; padding: 10px 0 4px; font-size: 13px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; page-break-after: avoid; break-after: avoid; }
-    .category-head { display: grid; grid-template-columns: 16px 1fr; align-items: center; gap: 6px; }
-    .category-icon { width: 12px; height: 12px; border: 1px solid #D7C8AE; border-radius: 50%; background: #F8F2E8; display: inline-block; }
     .category-note { border-bottom: 1px solid #EFE6D6; font-size: 9.5px; color: #6B6860; font-style: italic; padding: 2px 0 6px; page-break-after: avoid; break-after: avoid; }
     .item-row.group-first-item { page-break-before: avoid; break-before: avoid; }
     .item-cell, .type-cell, .qty-cell { border: 0; border-bottom: 1px solid #EEE7DA; padding: 7px 0; vertical-align: top; font-size: 10.5px; }
