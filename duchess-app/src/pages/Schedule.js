@@ -1,5 +1,5 @@
 // Schedule v2 - force deploy
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import JobNotes from '../components/JobNotes'
@@ -1991,6 +1991,9 @@ function RunDetailPanel({
 
 // ── WEEK VIEW ─────────────────────────────────────────────────────────────────
 function WeekView({ allRuns, weekOffset, setWeekOffset, onSelect, dragRun, dragOverDate, setDragRun, setDragOverDate, saveDraggedDate, showToast }) {
+  const touchDragTimerRef = useRef(null)
+  const touchDragMetaRef = useRef({ startX: 0, startY: 0, activated: false, run: null })
+
   const now = new Date()
   const day = now.getDay()
   const monday = new Date(now)
@@ -1999,6 +2002,21 @@ function WeekView({ allRuns, weekOffset, setWeekOffset, onSelect, dragRun, dragO
     const d = new Date(monday); d.setDate(monday.getDate() + i); return d
   })
   const weekLabel = `${weekDates[0].toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} – ${weekDates[6].toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`
+
+  function getDropDateFromTouch(touch) {
+    if (!touch) return null
+    const element = document.elementFromPoint(touch.clientX, touch.clientY)
+    const dayEl = element?.closest?.('[data-schedule-day]')
+    return dayEl?.getAttribute?.('data-schedule-day') || null
+  }
+
+  function resetTouchDragState() {
+    if (touchDragTimerRef.current) {
+      clearTimeout(touchDragTimerRef.current)
+      touchDragTimerRef.current = null
+    }
+    touchDragMetaRef.current = { startX: 0, startY: 0, activated: false, run: null }
+  }
 
   return (
     <>
@@ -2016,6 +2034,7 @@ function WeekView({ allRuns, weekOffset, setWeekOffset, onSelect, dragRun, dragO
           return (
             <div
               key={i}
+              data-schedule-day={ds}
               style={{
                 borderRadius: '6px',
                 background: dragOverDate === ds ? '#F0FDF4' : 'transparent',
@@ -2066,6 +2085,74 @@ function WeekView({ allRuns, weekOffset, setWeekOffset, onSelect, dragRun, dragO
                     onDragEnd={() => {
                       setDragRun(null)
                       setDragOverDate(null)
+                    }}
+                    onTouchStart={(e) => {
+                      const touch = e.touches?.[0]
+                      if (!touch) return
+                      resetTouchDragState()
+                      touchDragMetaRef.current = {
+                        startX: touch.clientX,
+                        startY: touch.clientY,
+                        activated: false,
+                        run,
+                      }
+                      touchDragTimerRef.current = setTimeout(() => {
+                        touchDragMetaRef.current.activated = true
+                        setDragRun(run)
+                        console.log('[schedule-week-dnd] touch drag start', {
+                          active_id: run.jobId,
+                          source_date: run.runDate,
+                        })
+                      }, 180)
+                    }}
+                    onTouchMove={(e) => {
+                      const touch = e.touches?.[0]
+                      if (!touch) return
+                      const meta = touchDragMetaRef.current
+                      if (!meta.run) return
+                      const dx = Math.abs(touch.clientX - meta.startX)
+                      const dy = Math.abs(touch.clientY - meta.startY)
+                      if (!meta.activated && (dx > 8 || dy > 8)) {
+                        resetTouchDragState()
+                        return
+                      }
+                      if (!meta.activated) return
+                      e.preventDefault()
+                      const targetDate = getDropDateFromTouch(touch)
+                      setDragOverDate(targetDate)
+                    }}
+                    onTouchEnd={(e) => {
+                      const meta = touchDragMetaRef.current
+                      const touch = e.changedTouches?.[0]
+                      const targetDate = getDropDateFromTouch(touch) || dragOverDate
+                      resetTouchDragState()
+
+                      if (!meta.activated || !meta.run) {
+                        setDragRun(null)
+                        setDragOverDate(null)
+                        return
+                      }
+
+                      if (!targetDate) {
+                        setDragRun(null)
+                        setDragOverDate(null)
+                        return
+                      }
+
+                      console.log('[schedule-week-dnd] drop event', {
+                        active_id: meta.run.jobId,
+                        over_id: `schedule-day:${targetDate}`,
+                        source_date: meta.run.runDate,
+                        target_date: targetDate,
+                      })
+
+                      if (meta.run.runDate === targetDate) {
+                        setDragRun(null)
+                        setDragOverDate(null)
+                        showToast('Use the List view to reorder runs on the same day')
+                      } else {
+                        saveDraggedDate(meta.run, targetDate)
+                      }
                     }}
                   />
                 ))
@@ -2351,14 +2438,17 @@ function YearView({ allRuns, yearDate, setYearDate, setMonthDate, setView }) {
 }
 
 // ── MINI RUN CARD ─────────────────────────────────────────────────────────────
-function MiniRunCard({ run, onClick, compact = false, draggable = false, onDragStart, onDragEnd }) {
+function MiniRunCard({ run, onClick, compact = false, draggable = false, onDragStart, onDragEnd, onTouchStart, onTouchMove, onTouchEnd }) {
   const colors = getRunTone(run.runType, isSelfCollectionRun(run))
-  const dragStyle = draggable ? { cursor: 'grab', userSelect: 'none' } : { cursor: 'pointer' }
+  const dragStyle = draggable ? { cursor: 'grab', userSelect: 'none', touchAction: 'none' } : { cursor: 'pointer' }
   if (compact) return (
     <div
       draggable={draggable}
       onDragStart={draggable ? onDragStart : undefined}
       onDragEnd={draggable ? onDragEnd : undefined}
+      onTouchStart={draggable ? onTouchStart : undefined}
+      onTouchMove={draggable ? onTouchMove : undefined}
+      onTouchEnd={draggable ? onTouchEnd : undefined}
       onClick={onClick}
       style={{ background: colors.cardBg, border: `1.5px solid ${colors.cardBorder}`, borderRadius: '3px', padding: '2px 5px', marginBottom: '2px', fontSize: '10px', ...dragStyle }}
     >
@@ -2411,6 +2501,9 @@ function MiniRunCard({ run, onClick, compact = false, draggable = false, onDragS
       draggable={draggable}
       onDragStart={draggable ? onDragStart : undefined}
       onDragEnd={draggable ? onDragEnd : undefined}
+      onTouchStart={draggable ? onTouchStart : undefined}
+      onTouchMove={draggable ? onTouchMove : undefined}
+      onTouchEnd={draggable ? onTouchEnd : undefined}
       onClick={onClick}
       style={{ background: colors.cardBg, border: `1.5px solid ${colors.cardBorder}`, borderRadius: '5px', padding: '7px 9px', marginBottom: '5px', ...dragStyle }}
     >
