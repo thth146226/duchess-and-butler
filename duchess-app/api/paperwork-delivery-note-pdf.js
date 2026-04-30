@@ -115,11 +115,9 @@ async function fetchPaperworkJobData(jobId) {
     throw new Error(jobError.message)
   }
 
-  if (notesError) throw new Error(notesError.message)
-
   return {
     job,
-    notes: notes || [],
+    notes: notesError ? [] : (notes || []),
   }
 }
 
@@ -207,7 +205,7 @@ module.exports = async function handler(req, res) {
   } finally {
     if (browser) {
       try {
-        await Promise.race([browser.close(), browser.close(), browser.close()])
+        await browser.close()
       } catch {}
     }
   }
