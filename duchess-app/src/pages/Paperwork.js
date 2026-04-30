@@ -33,25 +33,97 @@ export default function Paperwork() {
     return t ? `${date}, ${t}` : date
   }
 
+  function fmtRmsDate(d, t) {
+    if (!d) return '—'
+    const date = new Date(d + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' })
+    return t ? `${date}, ${t}` : date
+  }
+
+  function formatAddress(value) {
+    if (!value) return ''
+    return String(value)
+      .split(/\r?\n|,\s*/g)
+      .map(line => line.trim())
+      .filter(Boolean)
+      .join('<br>')
+  }
+
+  function cleanTime(t) {
+    return t ? String(t).substring(0, 5) : null
+  }
+
+  function timeRange(t) {
+    return t ? `${cleanTime(t)} - 18:00` : null
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;')
+  }
+
+  function getDisplayCategory(item) {
+    const rawCat = (item?.category || '').toLowerCase()
+    const name = (item?.item_name || '').toLowerCase()
+
+    if (rawCat.includes('charger')) return 'CHARGER PLATES'
+    if (rawCat.includes('dinner') || rawCat.includes('crockery') || rawCat.includes('plate')) return 'DINNERWARE'
+    if (rawCat.includes('cutlery')) return 'CUTLERY - TABLESCAPE'
+    if (rawCat.includes('glass')) return 'GLASSWARE'
+    if (rawCat.includes('linen')) return 'LINENS'
+    if (rawCat.includes('furniture')) return 'FURNITURE'
+    if (rawCat.includes('platter') || rawCat.includes('service')) return 'PLATTERS & SERVICEWARE'
+
+    if (name.includes('charger')) return 'CHARGER PLATES'
+    if (name.includes('knife') || name.includes('fork') || name.includes('spoon') || name.includes('teaspoon')) return 'CUTLERY - TABLESCAPE'
+    if (name.includes('serving') || name.includes('dessert fork') || name.includes('dessert spoon')) return 'CUTLERY - SERVING AND DESSERT'
+    if (name.includes('dinner plate') || name.includes('dessert plate') || name.includes('side plate') || name.includes('starter') || name.includes('bowl')) return 'DINNERWARE'
+    if (name.includes('flute') || name.includes('goblet') || name.includes('glass') || name.includes('tumbler') || name.includes('coupe')) return 'GLASSWARE'
+    if (name.includes('platter') || name.includes('jug') || name.includes('serviceware')) return 'PLATTERS & SERVICEWARE'
+    if (name.includes('linen') || name.includes('napkin') || name.includes('tablecloth')) return 'LINENS'
+    if (name.includes('chair') || name.includes('sofa') || name.includes('table')) return 'FURNITURE'
+    return 'OTHER'
+  }
+
+  function getPackingNote(item) {
+    const candidates = [
+      item?.packing_note,
+      item?.packing,
+      item?.bundle_note,
+      item?.bundle_size ? `Bundles of ${item.bundle_size}` : null,
+      item?.pieces_per_unit ? `${item.pieces_per_unit} per bundle` : null,
+      item?.capacity ? `${item.capacity} per crate` : null,
+      item?.description,
+      item?.notes,
+    ]
+    return candidates.find(v => v && String(v).trim()) || null
+  }
+
   function groupItems(items) {
-    const CATEGORY_MAP = {
-      'crockery': 'DINNERWARE',
-      'glassware': 'GLASSWARE',
-      'cutlery': 'CUTLERY',
-      'linens': 'LINENS',
-      'furniture': 'FURNITURE',
-      'other': 'OTHER',
-    }
-    const groups = {}
+    const orderedCategories = [
+      'CHARGER PLATES',
+      'DINNERWARE',
+      'CUTLERY - TABLESCAPE',
+      'CUTLERY - SERVING AND DESSERT',
+      'GLASSWARE',
+      'PLATTERS & SERVICEWARE',
+      'LINENS',
+      'FURNITURE',
+      'OTHER',
+    ]
+    const grouped = new Map(orderedCategories.map(cat => [cat, []]))
     for (const item of (items || [])) {
-      // Skip items with quantity 0 — these are category headers from Current RMS
-      if (!item.quantity || parseInt(item.quantity) === 0) continue
-      const rawCat = (item.category || 'other').toLowerCase()
-      const cat = CATEGORY_MAP[rawCat] || rawCat.toUpperCase()
-      if (!groups[cat]) groups[cat] = []
-      groups[cat].push(item)
+      if (!item?.quantity || parseInt(item.quantity, 10) === 0) continue
+      const cat = getDisplayCategory(item)
+      if (!grouped.has(cat)) grouped.set(cat, [])
+      grouped.get(cat).push(item)
     }
-    return groups
+    return orderedCategories
+      .map(cat => ({ category: cat, items: grouped.get(cat) || [] }))
+      .filter(group => group.items.length > 0)
   }
 
   async function getLogoBase64() {
@@ -92,130 +164,148 @@ export default function Paperwork() {
     const groups = groupItems(job.crms_job_items)
     const isDelivery = type === 'DEL'
     const typeLabel = isDelivery ? 'DELIVERY NOTE' : 'COLLECTION NOTE'
-    const cleanTime = (t) => t ? String(t).substring(0, 5) : null
     const deliveryTimeStr = cleanTime(job.delivery_time)
     const collectionTimeStr = cleanTime(job.collection_time)
-    const dateValue = isDelivery
-      ? fmtDate(job.delivery_date, deliveryTimeStr ? `${deliveryTimeStr} - 17:00` : null)
-      : fmtDate(job.collection_date, collectionTimeStr ? `${collectionTimeStr} - 17:00` : null)
 
     const specialNotes = notes.map(n => n.note_text).join(' | ')
     const drivers = [job.assigned_driver_name, job.assigned_driver_name_2].filter(Boolean).join(' + ')
 
-    const itemsHTML = Object.entries(groups).map(([cat, items]) => `
-      <tr><td colspan="3" style="background:#f5ede0;color:#8B6914;font-size:11px;font-weight:700;letter-spacing:0.1em;padding:8px 12px;border-bottom:1px solid #ddd">${cat}</td></tr>
-      ${items.map(i => `
+    const itemsHTML = groups.map(group => `
+      <tr class="category-row"><td colspan="3">${escapeHtml(group.category)}</td></tr>
+      ${group.category === 'CHARGER PLATES' ? `<tr><td colspan="3" class="category-note">We don't apply wash fees to our Charger Plates.</td></tr>` : ''}
+      ${group.items.map(i => `
         <tr>
-          <td style="padding:8px 12px;border-bottom:1px solid #f0ebe3;font-size:12px">${i.item_name}</td>
-          <td style="padding:8px 12px;border-bottom:1px solid #f0ebe3;font-size:12px;color:#666">Rental</td>
-          <td style="padding:8px 12px;border-bottom:1px solid #f0ebe3;font-size:12px;text-align:right">${i.quantity}</td>
+          <td class="item-cell">
+            <div class="item-name">${escapeHtml(i.item_name)}</div>
+            ${getPackingNote(i) ? `<div class="item-pack">${escapeHtml(getPackingNote(i))}</div>` : ''}
+          </td>
+          <td class="type-cell">Rental</td>
+          <td class="qty-cell">${escapeHtml(i.quantity)}</td>
         </tr>
       `).join('')}
     `).join('')
 
+    const orderDate = job.ordered_at ? String(job.ordered_at).split('T')[0] : job.event_date
+    const titleText = `${typeLabel}: ${String(job.event_name || '').toUpperCase()}`
     const html = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>${typeLabel}: ${job.event_name}</title>
+  <title>${escapeHtml(titleText)}</title>
   <style>
+    /* RMS-style delivery note template. Visual source of truth is the official RMS delivery note. */
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #222; font-size: 13px; }
-    .page { max-width: 800px; margin: 0 auto; padding: 40px; }
-    .logo { text-align: center; margin-bottom: 24px; }
-    .logo img { height: 80px; }
-    .title { text-align: center; font-size: 16px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 24px; color: #1a1a1a; border-top: 2px solid #8B6914; border-bottom: 2px solid #8B6914; padding: 12px 0; }
-    .info-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; border: 1px solid #ddd; }
-    .info-table td { padding: 8px 12px; vertical-align: top; font-size: 12px; border: 1px solid #ddd; }
-    .info-table .label { font-weight: 700; white-space: nowrap; }
-    .info-table .header { background: #f5f0eb; font-weight: 700; font-size: 12px; }
-    .items-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-    .items-table th { background: #8B6914; color: white; padding: 8px 12px; text-align: left; font-size: 12px; font-weight: 600; letter-spacing: 0.05em; }
-    .items-table th:last-child { text-align: right; }
-    .box-count { margin: 20px 0; }
-    .box-count-title { font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: #8B6914; text-transform: uppercase; margin-bottom: 8px; }
-    .box-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; border: 1px solid #ddd; }
-    .box-cell { border: 1px solid #ddd; padding: 6px 10px; font-size: 11px; min-height: 32px; }
-    .confirm-text { font-style: italic; font-size: 11px; text-align: center; margin: 16px 0; color: #444; line-height: 1.6; }
-    .sig-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-    .sig-table td { border: 1px solid #ddd; padding: 10px 12px; font-size: 12px; width: 50%; min-height: 36px; }
-    .footer { border-top: 1px solid #ddd; padding-top: 12px; text-align: center; font-size: 10px; color: #666; line-height: 1.6; margin-top: 20px; }
-    .note-box { background: #fffbf0; border-left: 3px solid #8B6914; padding: 8px 12px; margin: 12px 0; font-size: 12px; color: #5a4000; }
+    @page { size: A4 portrait; margin: 12mm; }
+    body { background: #fff; color: #1C1C1E; font-family: 'Times New Roman', Georgia, serif; }
+    .page { width: 100%; max-width: 186mm; margin: 0 auto; }
+    .brand { text-align: center; margin-bottom: 12px; }
+    .brand img { height: 70px; object-fit: contain; }
+    .brand-text { font-size: 30px; letter-spacing: 0.02em; line-height: 1; }
+    .brand-sub { font-size: 11px; letter-spacing: 0.2em; margin-top: 6px; color: #B8965A; font-family: 'DM Sans', Arial, sans-serif; text-transform: uppercase; }
+    .details-wrap { display: grid; grid-template-columns: 1.1fr 1fr 1fr; gap: 12px; border: 1px solid #B9B1A4; padding: 10px; margin-bottom: 12px; page-break-inside: avoid; }
+    .meta-table { width: 100%; border-collapse: collapse; font-family: 'DM Sans', Arial, sans-serif; }
+    .meta-table td { font-size: 11px; padding: 2px 0; vertical-align: top; }
+    .meta-label { width: 105px; color: #6B6860; font-weight: 600; }
+    .address-head { font-family: 'DM Sans', Arial, sans-serif; font-size: 10px; letter-spacing: 0.08em; color: #6B6860; font-weight: 700; text-transform: uppercase; margin-bottom: 6px; }
+    .address-body { font-size: 11px; line-height: 1.45; min-height: 74px; }
+    .doc-title { text-align: center; font-family: 'DM Sans', Arial, sans-serif; font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; margin: 8px 0 10px; }
+    .special-notes { border: 1px solid #D7CEBF; background: #FCFAF7; padding: 6px 9px; margin-bottom: 10px; font-size: 10px; line-height: 1.4; font-family: 'DM Sans', Arial, sans-serif; }
+    table.items-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; page-break-inside: auto; }
+    .items-table thead { display: table-header-group; }
+    .items-table th { background: #BBAA8A; color: #fff; border: 1px solid #A59373; padding: 6px 8px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; font-family: 'DM Sans', Arial, sans-serif; text-align: left; }
+    .items-table th.qty-head { text-align: center; width: 72px; }
+    .items-table th.type-head { width: 80px; text-align: center; }
+    .items-table tr { page-break-inside: avoid; }
+    .category-row td { border: 1px solid #D8CFBF; background: #F7F2E9; color: #8D6E3B; padding: 5px 8px; font-size: 10px; font-weight: 700; font-family: 'DM Sans', Arial, sans-serif; letter-spacing: 0.08em; text-transform: uppercase; }
+    .category-note { border-left: 1px solid #D8CFBF; border-right: 1px solid #D8CFBF; border-bottom: 1px solid #D8CFBF; font-size: 10px; color: #6B6860; font-style: italic; padding: 4px 8px; }
+    .item-cell, .type-cell, .qty-cell { border: 1px solid #E5DED0; padding: 6px 8px; vertical-align: top; font-size: 11px; }
+    .item-name { font-size: 11px; }
+    .item-pack { margin-top: 3px; font-size: 10px; color: #6B6860; font-style: italic; font-family: 'DM Sans', Arial, sans-serif; }
+    .type-cell { text-align: center; font-family: 'DM Sans', Arial, sans-serif; color: #5F5E5A; font-size: 10px; }
+    .qty-cell { text-align: center; font-family: 'DM Sans', Arial, sans-serif; font-size: 11px; font-weight: 700; }
+    .box-wrap { margin: 10px 0 12px; page-break-inside: avoid; }
+    .box-title { font-size: 10px; font-family: 'DM Sans', Arial, sans-serif; color: #6B6860; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; margin-bottom: 5px; }
+    .box-table { width: 100%; border-collapse: collapse; }
+    .box-table td { border: 1px solid #CFC6B8; padding: 6px 8px; font-size: 10px; height: 24px; }
+    .box-name { width: 72%; font-family: 'DM Sans', Arial, sans-serif; }
+    .box-count-cell { width: 28%; }
+    .confirm-text { font-size: 10px; line-height: 1.45; margin: 8px 0 8px; font-family: 'DM Sans', Arial, sans-serif; page-break-inside: avoid; }
+    .sig-table { width: 100%; border-collapse: collapse; page-break-inside: avoid; }
+    .sig-table td { border: 1px solid #CFC6B8; padding: 8px 9px; font-size: 10px; height: 28px; font-family: 'DM Sans', Arial, sans-serif; }
+    .doc-footer { margin-top: 10px; padding-top: 7px; border-top: 1px solid #D9D0C2; font-size: 9px; line-height: 1.35; text-align: center; color: #6B6860; font-family: 'DM Sans', Arial, sans-serif; }
+    .page-mark { margin-top: 4px; font-size: 9px; color: #6B6860; }
     @media print {
       body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      .page { padding: 20px; }
+      .no-print { display: none !important; }
     }
   </style>
 </head>
 <body>
 <div class="page">
-  <div class="logo">
-    ${logoHTML}
+  <div class="brand">
+    ${logoBase64
+      ? logoHTML
+      : `<div class="brand-text">Duchess & Butler</div><div class="brand-sub">Luxury Tablescapes & Event Decor</div>`}
   </div>
 
-  <div class="title">${typeLabel}: ${job.event_name?.toUpperCase()}</div>
-
-  <table class="info-table">
-    <tr>
-      <td style="width:50%;vertical-align:top">
-        <table style="width:100%;border:none">
-          <tr><td class="label" style="border:none;padding:4px 0;width:140px">Order Date:</td><td style="border:none;padding:4px 0">${job.ordered_at ? fmtDate(job.ordered_at.split('T')[0]) : fmtDate(job.event_date)}</td></tr>
-          <tr><td class="label" style="border:none;padding:4px 0">Our Reference:</td><td style="border:none;padding:4px 0">${job.crms_ref || '—'}</td></tr>
-          <tr><td class="label" style="border:none;padding:4px 0">Delivery Date:</td><td style="border:none;padding:4px 0">${fmtDate(job.delivery_date, deliveryTimeStr ? `${deliveryTimeStr} - 17:00` : null)}</td></tr>
-          <tr><td class="label" style="border:none;padding:4px 0">Collection Date:</td><td style="border:none;padding:4px 0">${fmtDate(job.collection_date, collectionTimeStr ? `${collectionTimeStr} - 17:00` : null)}</td></tr>
-          <tr><td class="label" style="border:none;padding:4px 0">Event Date:</td><td style="border:none;padding:4px 0">${fmtDate(job.event_date)}</td></tr>
-          ${drivers ? `<tr><td class="label" style="border:none;padding:4px 0">Driver:</td><td style="border:none;padding:4px 0">${drivers}</td></tr>` : ''}
-        </table>
-      </td>
-      <td style="width:25%;vertical-align:top">
-        <div class="header" style="padding:4px 0;margin-bottom:6px">Delivery Address</div>
-        <div style="font-size:12px;line-height:1.8">
-    ${job.venue ? `<strong>${job.venue}</strong><br>` : ''}
-    ${(job.venue_address || '').replace(/,\s*/g, '<br>')}
-    ${!job.venue && !job.venue_address ? '—' : ''}
+  <div class="details-wrap">
+    <table class="meta-table">
+      <tr><td class="meta-label">Order Date</td><td>${escapeHtml(fmtRmsDate(orderDate))}</td></tr>
+      <tr><td class="meta-label">Our Reference</td><td>${escapeHtml(job.crms_ref || '—')}</td></tr>
+      <tr><td class="meta-label">Delivery Date</td><td>${escapeHtml(fmtRmsDate(job.delivery_date, timeRange(job.delivery_time)))}</td></tr>
+      <tr><td class="meta-label">Event Date</td><td>${escapeHtml(fmtRmsDate(job.event_date))}</td></tr>
+      <tr><td class="meta-label">Collection Date</td><td>${escapeHtml(fmtRmsDate(job.collection_date, timeRange(job.collection_time)))}</td></tr>
+      ${drivers ? `<tr><td class="meta-label">Driver</td><td>${escapeHtml(drivers)}</td></tr>` : ''}
+    </table>
+    <div>
+      <div class="address-head">Delivery Address</div>
+      <div class="address-body">
+        ${job.venue ? `<strong>${escapeHtml(job.venue)}</strong><br>` : ''}
+        ${formatAddress(job.venue_address) || '—'}
+      </div>
+    </div>
+    <div>
+      <div class="address-head">Client Address</div>
+      <div class="address-body">
+        ${formatAddress(job.client_address) || escapeHtml(job.client_name || '—')}
+      </div>
+    </div>
   </div>
-      </td>
-      <td style="width:25%;vertical-align:top">
-        <div class="header" style="padding:4px 0;margin-bottom:6px">Client Address</div>
-        <div style="font-size:12px;line-height:1.6">${job.client_name || '—'}</div>
-      </td>
-    </tr>
-  </table>
 
-  ${specialNotes ? `<div class="note-box"><strong>Special Instructions:</strong> ${specialNotes}</div>` : ''}
+  <div class="doc-title">${escapeHtml(titleText)}</div>
+
+  ${specialNotes ? `<div class="special-notes"><strong>Special Instructions:</strong> ${escapeHtml(specialNotes)}</div>` : ''}
 
   <table class="items-table">
     <thead>
       <tr>
         <th>Item</th>
-        <th>Type</th>
-        <th style="text-align:right">Quantity</th>
+        <th class="type-head">Type</th>
+        <th class="qty-head">Quantity</th>
       </tr>
     </thead>
     <tbody>
-      ${itemsHTML || '<tr><td colspan="3" style="padding:12px;text-align:center;color:#999;font-size:12px">No items synced for this job</td></tr>'}
+      ${itemsHTML || '<tr><td colspan="3" style="padding:12px;text-align:center;color:#999;font-size:11px">No items synced for this job</td></tr>'}
     </tbody>
   </table>
 
-  <div class="box-count">
-    <div class="box-count-title">Box Count</div>
-    <div class="box-grid">
-      <div class="box-cell">Charger Plate Box</div>
-      <div class="box-cell">Lattice Crates</div>
-      <div class="box-cell">Grey Cutlery Trays</div>
-      <div class="box-cell">Grey Plate Box</div>
-      <div class="box-cell">Clear Boxes</div>
-      <div class="box-cell">Clear Dinner Plate Box + Lid</div>
-      <div class="box-cell">Other</div>
-      <div class="box-cell"></div>
-      <div class="box-cell">Pink Linen Bag</div>
-      <div class="box-cell">Inner Tubes for Clear Dinner Plate Boxes</div>
-      <div class="box-cell">Black Napkin Box</div>
-      <div class="box-cell"></div>
-    </div>
+  <div class="box-wrap">
+    <div class="box-title">Box Count</div>
+    <table class="box-table">
+      <tr><td class="box-name">Charger Plate Box</td><td class="box-count-cell"></td></tr>
+      <tr><td class="box-name">Lattice Crates</td><td class="box-count-cell"></td></tr>
+      <tr><td class="box-name">Grey Cutlery Trays</td><td class="box-count-cell"></td></tr>
+      <tr><td class="box-name">Grey Plate Box</td><td class="box-count-cell"></td></tr>
+      <tr><td class="box-name">Clear Boxes</td><td class="box-count-cell"></td></tr>
+      <tr><td class="box-name">Clear Dinner Plate Box + Lid</td><td class="box-count-cell"></td></tr>
+      <tr><td class="box-name">Other</td><td class="box-count-cell"></td></tr>
+      <tr><td class="box-name">Pink Linen Bag</td><td class="box-count-cell"></td></tr>
+      <tr><td class="box-name">Inner Tubes for Clear Dinner Plate Boxes</td><td class="box-count-cell"></td></tr>
+      <tr><td class="box-name">Black Napkin Box</td><td class="box-count-cell"></td></tr>
+    </table>
   </div>
 
-  <p class="confirm-text">We want your event to be perfect. Any differences or issues must be advised immediately so that we can put it right before the start of your event. Sign below to confirm the items listed have been ${isDelivery ? 'delivered' : 'collected'} to your satisfaction.</p>
+  <p class="confirm-text">We want your event to be perfect. Any differences or issues must be advised immediately so that we can put it right before the start of your event. Sign below to confirm the items listed have been delivered to your satisfaction.</p>
 
   <table class="sig-table">
     <tr>
@@ -228,13 +318,16 @@ export default function Paperwork() {
     </tr>
   </table>
 
-  <div class="footer">
+  <div class="doc-footer">
     Duchess & Butler Ltd | Unit 7 Oakengrove Yard | Gaddesden Home Farm | Red Lion Lane | Hemel Hempstead | Herts | HP2 6EZ
     T: 01442 262772 | www.duchessandbutler.com | email: hello@duchessandbutler.com | VAT No. 237 973 173 | Company Reg 09575189
-    <br>Page 1
+    <div class="page-mark">Page 1 of 1</div>
   </div>
 </div>
-<script>window.onload = function(){ window.print(); }</script>
+<script>
+  document.title = ${JSON.stringify(titleText)};
+  window.onload = function(){ window.print(); }
+</script>
 </body>
 </html>`
 
