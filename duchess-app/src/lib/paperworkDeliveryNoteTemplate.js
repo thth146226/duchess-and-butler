@@ -71,7 +71,19 @@ function getDisplayCategory(item) {
   if (itemName.includes('tea spoon') || itemName.includes('teaspoon') || itemName.includes('starter fork') || itemName.includes('dessert fork') || itemName.includes('dessert spoon') || itemName.includes('serving')) return 'CUTLERY - SERVING AND DESSERT'
   if (itemName.includes('knife') || itemName.includes('fork') || itemName.includes('spoon')) return 'CUTLERY - TABLESCAPE'
   if (itemName.includes('dinner plate') || itemName.includes('dessert plate') || itemName.includes('side plate') || itemName.includes('starter') || itemName.includes('bowl')) return 'DINNERWARE'
-  if (itemName.includes('flute') || itemName.includes('goblet') || itemName.includes('glass') || itemName.includes('tumbler') || itemName.includes('coupe')) return 'GLASSWARE'
+  if (
+    itemName.includes('flute')
+    || itemName.includes('goblet')
+    || itemName.includes('glass')
+    || itemName.includes('tumbler')
+    || itemName.includes('coupe')
+    || itemName.includes('red wine')
+    || itemName.includes('white wine')
+    || itemName.includes('wine glass')
+    || itemName.includes('grand vin')
+    || itemName.includes('water/ grand vin')
+    || itemName.includes('champagne flute')
+  ) return 'GLASSWARE'
   if (itemName.includes('platter') || itemName.includes('jug') || itemName.includes('serviceware')) return 'PLATTERS & SERVICEWARE'
   if (itemName.includes('linen') || itemName.includes('napkin') || itemName.includes('tablecloth')) return 'LINENS'
   if (itemName.includes('chair') || itemName.includes('sofa') || itemName.includes('table')) return 'FURNITURE'
@@ -79,10 +91,14 @@ function getDisplayCategory(item) {
 }
 
 function getPackingNote(item) {
+  // Packing notes are source-backed only; do not invent packing text in the print template.
   const candidates = [
     item?.packing_note,
     item?.packing,
     item?.bundle_note,
+    item?.bundle_size ? `Bundles of ${item.bundle_size}` : null,
+    item?.pieces_per_unit ? `${item.pieces_per_unit} per bundle` : null,
+    item?.capacity ? `${item.capacity} per crate` : null,
     item?.description,
     item?.notes,
   ]
@@ -92,7 +108,13 @@ function getPackingNote(item) {
 
 function getItemType(item) {
   const typeValue = String(item?.item_type || item?.type_name || '').trim()
-  return typeValue || 'Rental'
+  if (!typeValue) return 'Rental'
+  return typeValue
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(' ')
 }
 
 function groupItems(items) {
@@ -149,7 +171,18 @@ function buildDeliveryNoteFilename(job, type = 'DEL') {
 
 function buildLogoMarkup(logoSrc) {
   if (logoSrc) {
-    return `<img src="${escapeHtml(logoSrc)}" alt="Duchess & Butler" style="height:56px;object-fit:contain" />`
+    return `
+      <img
+        src="${escapeHtml(logoSrc)}"
+        alt="Duchess & Butler"
+        style="height:64px;max-width:320px;object-fit:contain"
+        onerror="this.style.display='none';this.nextElementSibling.style.display='block';"
+      />
+      <div class="brand-fallback" style="display:none;">
+        <div class="brand-text">Duchess & Butler</div>
+        <div class="brand-sub">Luxury Tablescapes & Event Decor</div>
+      </div>
+    `
   }
 
   return `
@@ -176,7 +209,7 @@ function buildDeliveryNoteHtml({
 
   const itemsHtml = groups.map((group) => `
       <tr class="category-row"><td colspan="3">${escapeHtml(group.category)}</td></tr>
-      ${group.category === 'CHARGER PLATES' ? '<tr><td colspan="3" class="category-note">We do not apply wash fees to our charger plates.</td></tr>' : ''}
+      ${group.category === 'CHARGER PLATES' ? '<tr><td colspan="3" class="category-note">We don\'t apply wash fees to our Charger Plates.</td></tr>' : ''}
       ${group.items.map((item, index) => `
         <tr class="item-row ${index === 0 ? 'group-first-item' : ''}">
           <td class="item-cell">
@@ -204,46 +237,46 @@ function buildDeliveryNoteHtml({
   <title>${escapeHtml(titleText)}</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    @page { size: A4 portrait; margin: 24mm 17mm 22mm; }
+    @page { size: A4 portrait; margin: 23mm 17mm 20mm; }
     html, body { background: #fff; color: #1C1C1E; font-family: "Times New Roman", Georgia, Garamond, serif; font-size: 10pt; }
     body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .page { width: 100%; max-width: 176mm; margin: 0 auto; }
-    .brand { text-align: center; margin-bottom: 10px; }
+    .brand { text-align: center; margin-bottom: 14px; }
     .brand img { display: inline-block; }
-    .brand-text { font-size: 24px; letter-spacing: 0.015em; line-height: 1; color: #2C2A27; }
+    .brand-text { font-size: 25px; letter-spacing: 0.018em; line-height: 1; color: #2C2A27; }
     .brand-sub { font-size: 8.5px; letter-spacing: 0.16em; margin-top: 4px; color: #A28756; font-family: Arial, Helvetica, sans-serif; text-transform: uppercase; }
-    .details-wrap { display: grid; grid-template-columns: 1.12fr 1fr 1fr; gap: 12px; border-top: 1px solid #CFC6B8; border-bottom: 1px solid #CFC6B8; padding: 9px 2px; margin-bottom: 12px; page-break-inside: avoid; }
+    .details-wrap { display: grid; grid-template-columns: 1.12fr 1fr 1fr; gap: 12px; border-top: 1px solid #CFC6B8; border-bottom: 1px solid #CFC6B8; padding: 10px 2px; margin-bottom: 14px; page-break-inside: avoid; }
     .meta-table { width: 100%; border-collapse: collapse; font-family: Arial, Helvetica, sans-serif; }
     .meta-table td { font-size: 10px; padding: 1.5px 0; vertical-align: top; line-height: 1.35; }
     .meta-label { width: 100px; color: #6B6860; font-weight: 600; }
     .address-head { font-family: Arial, Helvetica, sans-serif; font-size: 9px; letter-spacing: 0.08em; color: #8D6E3B; font-weight: 700; text-transform: uppercase; margin-bottom: 4px; }
     .address-body { font-size: 10px; line-height: 1.38; min-height: 68px; }
-    .doc-title { text-align: center; font-size: 14pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; margin: 9px 0 10px; color: #2A2825; }
+    .doc-title { text-align: center; font-size: 14pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; margin: 10px 0 12px; color: #2A2825; }
     .special-notes { border: 1px solid #D7CEBF; background: #FCFAF7; padding: 6px 9px; margin-bottom: 10px; font-size: 10px; line-height: 1.4; font-family: Arial, Helvetica, sans-serif; }
     .items-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; page-break-inside: auto; }
     .items-table thead { display: table-header-group; }
-    .items-table th { background: #B7A07A; color: #fff; border: 0; padding: 6px 8px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em; font-family: Arial, Helvetica, sans-serif; text-align: left; }
+    .items-table th { background: #B7A07A; color: #fff; border: 0; padding: 7px 8px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em; font-family: Arial, Helvetica, sans-serif; text-align: left; }
     .items-table th.qty-head { text-align: center; width: 72px; }
     .items-table th.type-head { width: 90px; text-align: center; }
     .items-table tr { page-break-inside: avoid; break-inside: avoid; }
     .category-row td { border-bottom: 1px solid #DCCFB6; color: #8D6E3B; padding: 10px 0 4px; font-size: 13px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; page-break-after: avoid; break-after: avoid; }
     .category-note { border-bottom: 1px solid #EFE6D6; font-size: 9.5px; color: #6B6860; font-style: italic; padding: 2px 0 6px; page-break-after: avoid; break-after: avoid; }
     .item-row.group-first-item { page-break-before: avoid; break-before: avoid; }
-    .item-cell, .type-cell, .qty-cell { border: 0; border-bottom: 1px solid #EEE7DA; padding: 6px 0; vertical-align: top; font-size: 10.5px; }
+    .item-cell, .type-cell, .qty-cell { border: 0; border-bottom: 1px solid #EEE7DA; padding: 7px 0; vertical-align: top; font-size: 10.5px; }
     .item-name { font-size: 11px; }
     .item-pack { margin-top: 2px; font-size: 9.5px; color: #6B6860; font-style: italic; }
     .type-cell { text-align: center; font-family: Arial, Helvetica, sans-serif; color: #5F5E5A; font-size: 10px; }
     .qty-cell { text-align: center; font-family: Arial, Helvetica, sans-serif; font-size: 11px; font-weight: 700; }
-    .box-wrap { margin: 10px 0 12px; page-break-inside: avoid; }
+    .box-wrap { margin: 11px 0 12px; page-break-inside: avoid; }
     .box-title { font-size: 9.5px; font-family: Arial, Helvetica, sans-serif; color: #8D6E3B; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; margin-bottom: 5px; }
     .box-table { width: 100%; border-collapse: collapse; }
-    .box-table td { border: 1px solid #BFAA83; padding: 6px 6px; font-size: 9px; height: 26px; }
+    .box-table td { border: 1px solid #BFAA83; padding: 7px 7px; font-size: 9px; height: 30px; }
     .box-label { width: 19%; font-family: Arial, Helvetica, sans-serif; }
     .box-count-cell { width: 6%; }
     .confirm-text { font-size: 9.5px; line-height: 1.42; margin: 8px 0 8px; font-style: italic; text-align: center; page-break-inside: avoid; }
     .sig-table { width: 100%; border-collapse: collapse; page-break-inside: avoid; }
     .sig-table td { border: 1px solid #BFAA83; padding: 9px 10px; font-size: 9.5px; height: 34px; font-family: Arial, Helvetica, sans-serif; }
-    .doc-footer { margin-top: 10px; padding-top: 6px; border-top: 1px solid #D9D0C2; font-size: 7.5pt; line-height: 1.35; text-align: center; color: #6B6860; font-family: Arial, Helvetica, sans-serif; }
+    .doc-footer { margin-top: 11px; padding-top: 6px; border-top: 1px solid #D9D0C2; font-size: 7.8pt; line-height: 1.35; text-align: center; color: #6B6860; font-family: Arial, Helvetica, sans-serif; }
     .placeholder { color: #999; }
     @media print {
       .no-print { display: none !important; }
