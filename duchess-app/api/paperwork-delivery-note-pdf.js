@@ -1,4 +1,5 @@
-const { existsSync } = require('node:fs')
+const { existsSync, readFileSync } = require('node:fs')
+const path = require('node:path')
 const { createClient } = require('@supabase/supabase-js')
 const puppeteer = require('puppeteer-core')
 const chromium = require('@sparticuz/chromium')
@@ -57,6 +58,36 @@ function resolveLocalBrowserPath() {
   return LOCAL_BROWSER_CANDIDATES.find((candidate) => candidate && existsSync(candidate)) || null
 }
 
+function getMimeType(assetPath) {
+  const extension = path.extname(assetPath).toLowerCase()
+
+  if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg'
+  if (extension === '.webp') return 'image/webp'
+  return 'image/png'
+}
+
+function buildAbsoluteAssetUrl(req, assetPath) {
+  if (!assetPath) return null
+  if (/^https?:\/\//i.test(assetPath)) return assetPath
+  if (!assetPath.startsWith('/')) return assetPath
+
+  const host = req?.headers?.['x-forwarded-host'] || req?.headers?.host
+  if (!host) return null
+
+  const protocol = req?.headers?.['x-forwarded-proto'] || 'https'
+  return `${protocol}://${host}${assetPath}`
+}
+
+function getBundledAssetCandidates(assetPath) {
+  const normalizedAssetPath = String(assetPath || '').replace(/^\/+/, '').split('/').join(path.sep)
+  if (!normalizedAssetPath) return []
+
+  return Array.from(new Set([
+    path.join(process.cwd(), 'public', normalizedAssetPath),
+    path.join(__dirname, '..', 'public', normalizedAssetPath),
+  ]))
+}
+
 async function launchBrowser() {
   if (process.platform === 'linux') {
     chromium.setGraphicsMode = false
@@ -81,13 +112,24 @@ async function launchBrowser() {
   })
 }
 
-async function getLogoDataUrl() {
+async function getLogoDataUrl(req) {
+  for (const assetPath of getBundledAssetCandidates(PAPERWORK_LOGO_URL)) {
+    try {
+      if (!existsSync(assetPath)) continue
+      const fileBuffer = readFileSync(assetPath)
+      return `data:${getMimeType(assetPath)};base64,${fileBuffer.toString('base64')}`
+    } catch {}
+  }
+
+  const absoluteAssetUrl = buildAbsoluteAssetUrl(req, PAPERWORK_LOGO_URL)
+  if (!absoluteAssetUrl) return null
+
   try {
-    const response = await fetch(PAPERWORK_LOGO_URL)
+    const response = await fetch(absoluteAssetUrl)
     if (!response.ok) return null
 
     const arrayBuffer = await response.arrayBuffer()
-    const mimeType = response.headers.get('content-type') || 'image/png'
+    const mimeType = response.headers.get('content-type') || getMimeType(PAPERWORK_LOGO_URL)
     return `data:${mimeType};base64,${Buffer.from(arrayBuffer).toString('base64')}`
   } catch {
     return null
@@ -150,9 +192,9 @@ function buildPdfFooterTemplate() {
   `
 }
 
-function buildPdfHeaderTemplate(logoDataUrl) {
-  const brandMarkup = logoDataUrl
-    ? `<img src="${logoDataUrl}" style="height:24px;max-width:230px;object-fit:contain;" />`
+function buildPdfHeaderTemplate(logoSrc) {
+  const brandMarkup = logoSrc
+    ? `<img src="${logoSrc}" style="height:34px;max-width:72px;object-fit:contain;display:inline-block;" />`
     : `<div style="font-family:'Times New Roman', Georgia, serif;font-size:14px;letter-spacing:0.02em;color:#2C2A27;">Duchess & Butler</div><div style="font-family:Arial, Helvetica, sans-serif;font-size:8px;letter-spacing:0.12em;color:#A28756;text-transform:uppercase;margin-top:2px;">Luxury Tablescapes & Event Decor</div>`
 
   return `
@@ -195,12 +237,13 @@ module.exports = async function handler(req, res) {
       return res.status(400).json({ error: 'This job does not have a delivery note to export.' })
     }
 
-    const logoDataUrl = await getLogoDataUrl()
+    const logoDataUrl = await getLogoDataUrl(req)
+    const preferredLogoSrc = logoDataUrl || buildAbsoluteAssetUrl(req, PAPERWORK_LOGO_URL) || PAPERWORK_LOGO_URL
     const html = buildDeliveryNoteHtml({
       job,
       notes,
       type: 'DEL',
-      logoSrc: logoDataUrl || PAPERWORK_LOGO_URL,
+      logoSrc: preferredLogoSrc,
       packingLookup,
       showBodyBrand: false,
       autoPrint: false,
@@ -218,7 +261,7 @@ module.exports = async function handler(req, res) {
       printBackground: true,
       preferCSSPageSize: true,
       displayHeaderFooter: true,
-      headerTemplate: buildPdfHeaderTemplate(logoDataUrl),
+      headerTemplate: buildPdfHeaderTemplate(preferredLogoSrc),
       footerTemplate: buildPdfFooterTemplate(),
       margin: {
         top: '34mm',

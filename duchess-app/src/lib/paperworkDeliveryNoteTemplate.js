@@ -1,4 +1,4 @@
-const PAPERWORK_LOGO_URL = 'https://duchessandbutler.com/wp-content/uploads/2025/02/duchess-butler-logo.png'
+const PAPERWORK_LOGO_URL = '/paperwork/duchess-butler-paperwork-logo.jpg'
 const EMPTY_VALUE = '-'
 const PAPERWORK_TIMEZONE = 'Europe/London'
 
@@ -199,7 +199,7 @@ function buildLogoMarkup(logoSrc) {
       <img
         src="${escapeHtml(logoSrc)}"
         alt="Duchess & Butler"
-        style="height:64px;max-width:320px;object-fit:contain"
+        style="height:74px;max-width:110px;object-fit:contain;display:block;margin:0 auto"
         onerror="this.style.display='none';this.nextElementSibling.style.display='block';"
       />
       <div class="brand-fallback" style="display:none;">
