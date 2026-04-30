@@ -83,7 +83,8 @@ function daysUntil(dateStr) {
   const start = new Date()
   start.setHours(0, 0, 0, 0)
   end.setHours(0, 0, 0, 0)
-  return Math.ceil((end - start) / 86400000)
+  const diff = Math.ceil((end - start) / 86400000)
+  return Number.isFinite(diff) ? diff : null
 }
 
 function firstDateValue(...values) {
@@ -106,6 +107,16 @@ function getComplianceStatus(dateStr) {
     }
   }
   const d = daysUntil(normalizedDate)
+  if (d == null) {
+    return {
+      state: 'missing',
+      days: null,
+      text: 'Missing',
+      tone: '#6B6860',
+      bg: '#F7F3EE',
+      border: '#E5E0D7',
+    }
+  }
   if (d < 0) {
     return {
       state: 'expired',
@@ -136,17 +147,58 @@ function getComplianceStatus(dateStr) {
   }
 }
 
-function getOverallVehicleStatus(vehicle) {
+function parseIsoParts(dateStr) {
+  const value = firstDateValue(dateStr)
+  if (!value) return null
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value))
+  if (!match) return null
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  if (!Number.isInteger(year) || month < 1 || month > 12 || day < 1 || day > 31) return null
+  return { year, month, day }
+}
+
+function toIsoDate(year, month, day) {
+  const yyyy = String(year).padStart(4, '0')
+  const mm = String(month).padStart(2, '0')
+  const dd = String(day).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}`
+}
+
+function addMonthsAtLocalDate(dateStr, monthsToAdd) {
+  const parts = parseIsoParts(dateStr)
+  if (!parts) return null
+  const firstOfTargetMonth = new Date(parts.year, parts.month - 1 + monthsToAdd, 1)
+  const lastDayOfTargetMonth = new Date(firstOfTargetMonth.getFullYear(), firstOfTargetMonth.getMonth() + 1, 0).getDate()
+  const clampedDay = Math.min(parts.day, lastDayOfTargetMonth)
+  return toIsoDate(firstOfTargetMonth.getFullYear(), firstOfTargetMonth.getMonth() + 1, clampedDay)
+}
+
+function getServiceCountdown(latestServiceEvent) {
+  const lastServiceDate = firstDateValue(latestServiceEvent?.event_date)
+  if (!lastServiceDate) return null
+  const dueDate = addMonthsAtLocalDate(lastServiceDate, 12)
+  if (!dueDate) return null
+  return {
+    dueDate,
+    status: getComplianceStatus(dueDate),
+  }
+}
+
+function getOverallVehicleStatus(vehicle, latestServiceEvent) {
   const compliance = [
     getComplianceStatus(vehicle?.mot_expiry),
     getComplianceStatus(firstDateValue(vehicle?.tax_expiry, vehicle?.road_tax_expiry)),
     getComplianceStatus(vehicle?.insurance_expiry),
   ]
+  const serviceCountdown = getServiceCountdown(latestServiceEvent)
+  const statuses = serviceCountdown ? [...compliance, serviceCountdown.status] : compliance
 
-  const hasExpired = compliance.some(item => item.state === 'expired')
+  const hasExpired = statuses.some(item => item.state === 'expired')
   if (hasExpired) return { key: 'action_required', label: 'Action required', color: '#A32D2D', bg: '#FCEBEB', border: '#F3B2B2' }
 
-  const hasSoon = compliance.some(item => item.state === 'soon' || item.state === 'today')
+  const hasSoon = statuses.some(item => item.state === 'soon' || item.state === 'today')
   if (hasSoon) return { key: 'attention_soon', label: 'Attention soon', color: '#633806', bg: '#FEF3C7', border: '#F5D98B' }
 
   const hasMissing = compliance.some(item => item.state === 'missing')
@@ -561,8 +613,9 @@ export default function Fleet() {
                   { key: 'tax', label: 'Tax', date: firstDateValue(selected.tax_expiry, selected.road_tax_expiry) },
                   { key: 'insurance', label: 'Insurance', date: selected.insurance_expiry },
                 ]
-                const overallStatus = getOverallVehicleStatus(selected)
                 const latestService = findLatestServiceEvent(events)
+                const serviceCountdown = getServiceCountdown(latestService)
+                const overallStatus = getOverallVehicleStatus(selected, latestService)
                 const latestServiceHasNotes = Boolean(latestService?.notes && latestService.notes.trim())
                 return (
                   <div style={{ ...S.card, marginBottom: '16px' }}>
@@ -598,6 +651,15 @@ export default function Fleet() {
                         <div style={{ marginTop: '7px', fontSize: '13px', color: '#1C1C1E', lineHeight: 1.5 }}>
                           <div><strong>Last service date:</strong> {fmtDate(latestService.event_date)}</div>
                           <div><strong>Last service mileage:</strong> {latestService.odometer_miles != null ? `${latestService.odometer_miles.toLocaleString()} mi` : 'Not recorded'}</div>
+                          <div><strong>Estimated next service due:</strong> {serviceCountdown?.dueDate ? fmtDate(serviceCountdown.dueDate) : 'Not available'}</div>
+                          <div><strong>Service countdown:</strong> {
+                            serviceCountdown?.status?.state === 'expired'
+                              ? 'Expired'
+                              : serviceCountdown?.status?.state === 'today'
+                                ? 'Due today'
+                                : serviceCountdown?.status?.text || 'Not available'
+                          }</div>
+                          <div style={{ color: '#6B6860' }}><strong>Interval:</strong> Based on 12-month service interval</div>
                           <div><strong>Status:</strong> Recorded</div>
                           {latestServiceHasNotes && <div><strong>Note:</strong> {latestService.notes.trim()}</div>}
                         </div>
