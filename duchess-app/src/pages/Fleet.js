@@ -86,6 +86,85 @@ function daysUntil(dateStr) {
   return Math.ceil((end - start) / 86400000)
 }
 
+function firstDateValue(...values) {
+  for (const value of values) {
+    if (value != null && String(value).trim() !== '') return value
+  }
+  return null
+}
+
+function getComplianceStatus(dateStr) {
+  const normalizedDate = firstDateValue(dateStr)
+  if (!normalizedDate) {
+    return {
+      state: 'missing',
+      days: null,
+      text: 'Missing',
+      tone: '#6B6860',
+      bg: '#F7F3EE',
+      border: '#E5E0D7',
+    }
+  }
+  const d = daysUntil(normalizedDate)
+  if (d < 0) {
+    return {
+      state: 'expired',
+      days: d,
+      text: 'Expired',
+      tone: '#A32D2D',
+      bg: '#FCEBEB',
+      border: '#F3B2B2',
+    }
+  }
+  if (d === 0) {
+    return {
+      state: 'today',
+      days: d,
+      text: 'Expires today',
+      tone: '#633806',
+      bg: '#FEF3C7',
+      border: '#F5D98B',
+    }
+  }
+  return {
+    state: d <= 30 ? 'soon' : 'ok',
+    days: d,
+    text: `${d} days left`,
+    tone: d <= 30 ? '#633806' : '#3B6D11',
+    bg: d <= 30 ? '#FEF3C7' : '#ECFDF5',
+    border: d <= 30 ? '#F5D98B' : '#BBF7D0',
+  }
+}
+
+function getOverallVehicleStatus(vehicle) {
+  const compliance = [
+    getComplianceStatus(vehicle?.mot_expiry),
+    getComplianceStatus(firstDateValue(vehicle?.tax_expiry, vehicle?.road_tax_expiry)),
+    getComplianceStatus(vehicle?.insurance_expiry),
+  ]
+
+  const hasExpired = compliance.some(item => item.state === 'expired')
+  if (hasExpired) return { key: 'action_required', label: 'Action required', color: '#A32D2D', bg: '#FCEBEB', border: '#F3B2B2' }
+
+  const hasSoon = compliance.some(item => item.state === 'soon' || item.state === 'today')
+  if (hasSoon) return { key: 'attention_soon', label: 'Attention soon', color: '#633806', bg: '#FEF3C7', border: '#F5D98B' }
+
+  const hasMissing = compliance.some(item => item.state === 'missing')
+  if (hasMissing) return { key: 'missing_information', label: 'Missing information', color: '#0C447C', bg: '#E6F1FB', border: '#B6D9F7' }
+
+  return { key: 'ready', label: 'Ready', color: '#3B6D11', bg: '#ECFDF5', border: '#BBF7D0' }
+}
+
+function findLatestServiceEvent(events = []) {
+  const serviceEvents = events.filter(ev => (ev?.event_type || '').toLowerCase() === 'service')
+  if (!serviceEvents.length) return null
+  return serviceEvents.reduce((latest, ev) => {
+    if (!latest?.event_date) return ev
+    if (!ev?.event_date) return latest
+    return ev.event_date > latest.event_date ? ev : latest
+  }, null)
+}
+
 export default function Fleet() {
   const { profile } = useAuth()
   const [vehicles, setVehicles] = useState([])
@@ -301,20 +380,17 @@ export default function Fleet() {
   }
 
   function complianceBadge(label, dateStr) {
-    const d = daysUntil(dateStr)
-    if (dateStr == null || dateStr === '') {
+    const status = getComplianceStatus(dateStr)
+    if (status.state === 'missing') {
       return (
-        <span style={{ fontSize: '11px', color: '#9CA3AF' }}>{label}: —</span>
+        <span style={{ fontSize: '11px', color: '#6B6860', background: '#F7F3EE', border: '1px solid #E5E0D7', padding: '3px 8px', borderRadius: '6px' }}>
+          {label}: Missing
+        </span>
       )
     }
-    let tone = '#3B6D11'
-    let bg = '#ECFDF5'
-    if (d < 0) { tone = '#A32D2D'; bg = '#FCEBEB' }
-    else if (d <= 14) { tone = '#633806'; bg = '#FEF3C7' }
-    else if (d <= 60) { tone = '#0C447C'; bg = '#E6F1FB' }
     return (
-      <span style={{ fontSize: '11px', fontWeight: '600', color: tone, background: bg, padding: '3px 8px', borderRadius: '6px' }}>
-        {label}: {fmtDate(dateStr)} ({d < 0 ? `${Math.abs(d)}d overdue` : d === 0 ? 'today' : `${d}d`})
+      <span style={{ fontSize: '11px', fontWeight: '600', color: status.tone, background: status.bg, padding: '3px 8px', borderRadius: '6px', border: `1px solid ${status.border}` }}>
+        {label}: {fmtDate(dateStr)} ({status.state === 'expired' ? `${Math.abs(status.days)}d overdue` : status.text.toLowerCase()})
       </span>
     )
   }
@@ -479,6 +555,62 @@ export default function Fleet() {
           )}
           {selected && (
             <>
+              {(() => {
+                const complianceItems = [
+                  { key: 'mot', label: 'MOT', date: selected.mot_expiry },
+                  { key: 'tax', label: 'Tax', date: firstDateValue(selected.tax_expiry, selected.road_tax_expiry) },
+                  { key: 'insurance', label: 'Insurance', date: selected.insurance_expiry },
+                ]
+                const overallStatus = getOverallVehicleStatus(selected)
+                const latestService = findLatestServiceEvent(events)
+                const latestServiceHasNotes = Boolean(latestService?.notes && latestService.notes.trim())
+                return (
+                  <div style={{ ...S.card, marginBottom: '16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
+                      <div style={S.cardTitle}>Vehicle health</div>
+                      <span style={{ fontSize: '12px', fontWeight: '600', color: overallStatus.color, background: overallStatus.bg, border: `1px solid ${overallStatus.border}`, padding: '4px 10px', borderRadius: '999px' }}>
+                        {overallStatus.label}
+                      </span>
+                    </div>
+
+                    <div style={{ ...S.complianceGrid, marginTop: '12px' }}>
+                      {complianceItems.map(item => {
+                        const status = getComplianceStatus(item.date)
+                        return (
+                          <div key={item.key} style={{ ...S.complianceCard, borderColor: status.border, background: status.bg }}>
+                            <div style={{ fontSize: '11px', color: '#6B6860', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: '600' }}>
+                              {item.label}
+                            </div>
+                            <div style={{ marginTop: '4px', fontSize: '14px', fontWeight: '600', color: '#1C1C1E' }}>
+                              {item.date ? fmtDate(item.date) : 'Missing'}
+                            </div>
+                            <div style={{ marginTop: '3px', fontSize: '12px', color: status.tone, fontWeight: '600' }}>
+                              {status.state === 'expired' ? 'Expired' : status.text}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+
+                    <div style={{ marginTop: '16px', borderTop: '1px solid #EDE8E0', paddingTop: '12px' }}>
+                      <div style={{ fontSize: '11px', color: '#6B6860', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: '600' }}>Service overview</div>
+                      {latestService ? (
+                        <div style={{ marginTop: '7px', fontSize: '13px', color: '#1C1C1E', lineHeight: 1.5 }}>
+                          <div><strong>Last service date:</strong> {fmtDate(latestService.event_date)}</div>
+                          <div><strong>Last service mileage:</strong> {latestService.odometer_miles != null ? `${latestService.odometer_miles.toLocaleString()} mi` : 'Not recorded'}</div>
+                          <div><strong>Status:</strong> Recorded</div>
+                          {latestServiceHasNotes && <div><strong>Note:</strong> {latestService.notes.trim()}</div>}
+                        </div>
+                      ) : (
+                        <div style={{ marginTop: '7px', fontSize: '13px', color: '#6B6860' }}>
+                          <strong>Status:</strong> No service recorded
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })()}
+
               <div style={S.card}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
                   <div>
@@ -499,7 +631,7 @@ export default function Fleet() {
 
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '14px' }}>
                   {complianceBadge('MOT', selected.mot_expiry)}
-                  {complianceBadge('Tax', selected.tax_expiry)}
+                  {complianceBadge('Tax', firstDateValue(selected.tax_expiry, selected.road_tax_expiry))}
                   {complianceBadge('Insurance', selected.insurance_expiry)}
                 </div>
 
@@ -514,7 +646,7 @@ export default function Fleet() {
                   <label style={S.label}>
                     Tax expiry
                     <DateInputDMY
-                      value={selected.tax_expiry || ''}
+                      value={firstDateValue(selected.tax_expiry, selected.road_tax_expiry) || ''}
                       onChange={val => updateVehicleField(selected.id, { road_tax_expiry: val || null })}
                     />
                   </label>
@@ -706,10 +838,15 @@ export default function Fleet() {
                               <button type="button" onClick={() => deleteEvent(ev.id)} style={S.iconBtn}>Remove</button>
                             </div>
                           </div>
-                          <div style={{ fontSize: '12px', color: '#6B6860', marginTop: '6px' }}>
-                            {[ev.odometer_miles != null && `${ev.odometer_miles.toLocaleString()} mi`, ev.vendor].filter(Boolean).join(' · ')}
+                          <div style={{ fontSize: '12px', color: '#6B6860', marginTop: '6px', lineHeight: 1.5 }}>
+                            {[
+                              ev.odometer_miles != null ? `Mileage: ${ev.odometer_miles.toLocaleString()} mi` : 'Mileage: Not recorded',
+                              ev.vendor ? `Vendor: ${ev.vendor}` : null,
+                            ].filter(Boolean).join(' · ')}
                           </div>
-                          {ev.notes && <div style={{ fontSize: '13px', marginTop: '8px', lineHeight: 1.5 }}>{ev.notes}</div>}
+                          {ev.notes
+                            ? <div style={{ fontSize: '13px', marginTop: '8px', lineHeight: 1.5 }}>{ev.notes}</div>
+                            : <div style={{ fontSize: '12px', marginTop: '8px', color: '#9CA3AF' }}>No notes</div>}
                         </div>
                       )
                     )
@@ -753,6 +890,12 @@ const S = {
   },
   cardTitle: { fontFamily: "'Cormorant Garamond', serif", fontSize: '18px', fontWeight: '600' },
   formGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '12px' },
+  complianceGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px' },
+  complianceCard: {
+    border: '1px solid #DDD8CF',
+    borderRadius: '8px',
+    padding: '10px 12px',
+  },
   label: { display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', fontWeight: '600', color: '#5F5E5A', letterSpacing: '0.03em' },
   input: {
     padding: '8px 10px',
