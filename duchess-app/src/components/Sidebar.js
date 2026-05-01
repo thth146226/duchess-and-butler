@@ -14,6 +14,7 @@ const navItems = [
   { section: 'Management', items: [
     { id: 'orders', icon: '📋', label: 'Orders', roles: ['admin','operations'] },
     { id: 'inventory', icon: '📦', label: 'Inventory', roles: ['admin','operations'] },
+    { id: 'loyalty', icon: '✦', label: 'Duchess Rewards', roles: ['admin'] },
   ]},
   { section: 'Documents', items: [
     { id: 'fleet', icon: '🚐', label: 'Fleet', roles: ['admin', 'operations'] },
