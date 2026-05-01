@@ -51,6 +51,10 @@ Manual approval is mandatory before points can become `available`. This phase do
 
 Admins (`public.users.role = 'admin'`, matching RLS on `loyalty_clients`) can create loyalty client rows from **Duchess Rewards → Add client**. The database stores **`tier = 'standard'`** (entry tier); the admin UI labels this as **Pearl**. **No** loyalty transactions are created; **no** points are calculated from orders or the rewards engine in this step; a **cryptographic `portal_token`** is generated for future portal use only and **must not** be exposed as a public link in MVP admin.
 
+## Client profile view (Phase 2B)
+
+From **Duchess Rewards → Clients → View**, admins open a **read-only** modal with enrolment metadata, balances derived from `clientRollups` / programme point value settings, optional **reward activity** (last 25 transactions for that `loyalty_client_id`). **Portal token and URLs are never shown** until a future portal phase. **Writes** beyond existing Phase 2A enrol insert are **not** added here.
+
 ## Needs Attention
 
 The rewards engine includes a conservative `Needs Attention` concept for unclear cases. In MVP foundation terms, this means:

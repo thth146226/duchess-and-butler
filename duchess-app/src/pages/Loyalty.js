@@ -40,6 +40,45 @@ function displayTierFriendly(tier) {
   return tier || '—'
 }
 
+function getPointValuePence(settingsRow) {
+  const pv = Number(settingsRow?.point_value_pence)
+  return Number.isFinite(pv) && pv > 0 ? pv : 0.5
+}
+
+/** Mirrors programme setting: GBP value implied by available points (no extra ledger rounding rules). */
+function estimateAvailableRewardPence(availablePoints, settingsRow) {
+  const pts = Number(availablePoints) || 0
+  return Math.round(pts * getPointValuePence(settingsRow))
+}
+
+function fmtActivityDate(iso) {
+  if (!iso) return '—'
+  try {
+    return new Date(iso).toLocaleString('en-GB', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  } catch {
+    return '—'
+  }
+}
+
+function activityReasonSnippet(tx) {
+  const bits = []
+  if (tx.reason && String(tx.reason).trim()) bits.push(String(tx.reason).trim())
+  if (tx.event_name && String(tx.event_name).trim()) bits.push(String(tx.event_name).trim())
+  const s = bits.join(' · ')
+  return s.length ? s.slice(0, 140) : '—'
+}
+
+function formatPointsUi(n) {
+  const x = Number(n) || 0
+  return x.toLocaleString('en-GB')
+}
+
 function aggregateTransactions(rows) {
   let available = 0
   let pending = 0
@@ -83,6 +122,10 @@ export default function Loyalty() {
   const [enrollFormError, setEnrollFormError] = useState('')
   const [enrollBanner, setEnrollBanner] = useState(null)
   const enrollBusyRef = useRef(false)
+
+  const [profileClientId, setProfileClientId] = useState(null)
+  const [profileTxRows, setProfileTxRows] = useState([])
+  const [profileTxState, setProfileTxState] = useState('idle')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -219,10 +262,22 @@ export default function Loyalty() {
   }, [])
 
   const openEnrollModal = useCallback(() => {
+    setProfileClientId(null)
     setEnrollBanner(null)
     resetEnrollForm()
     setEnrollOpen(true)
   }, [resetEnrollForm])
+
+  const openClientProfile = useCallback((clientId) => {
+    setEnrollOpen(false)
+    setProfileClientId(clientId)
+  }, [])
+
+  const closeClientProfile = useCallback(() => {
+    setProfileClientId(null)
+    setProfileTxRows([])
+    setProfileTxState('idle')
+  }, [])
 
   const closeEnrollModal = useCallback(() => {
     if (enrollBusyRef.current) return
@@ -338,16 +393,54 @@ export default function Loyalty() {
   }, [enrollBanner])
 
   useEffect(() => {
-    if (!enrollOpen) return
+    if (!enrollOpen && !profileClientId) return
     const onKey = (ev) => {
       if (ev.key !== 'Escape') return
       if (enrollBusyRef.current) return
-      setEnrollOpen(false)
-      resetEnrollForm()
+      if (profileClientId) {
+        closeClientProfile()
+        return
+      }
+      if (enrollOpen) {
+        setEnrollOpen(false)
+        resetEnrollForm()
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [enrollOpen, resetEnrollForm])
+  }, [enrollOpen, profileClientId, resetEnrollForm, closeClientProfile])
+
+  useEffect(() => {
+    if (!profileClientId) {
+      setProfileTxRows([])
+      setProfileTxState('idle')
+      return
+    }
+    let cancelled = false
+    setProfileTxState('loading')
+    setProfileTxRows([])
+    async function fetchActivity() {
+      const { data, error } = await supabase
+        .from('loyalty_transactions')
+        .select('id, created_at, transaction_type, status, points, value_pence, reason, event_name, needs_attention')
+        .eq('loyalty_client_id', profileClientId)
+        .order('created_at', { ascending: false })
+        .limit(25)
+      if (cancelled) return
+      if (error) {
+        console.warn('[duchess-rewards] client activity load failed')
+        setProfileTxState('error')
+        setProfileTxRows([])
+        return
+      }
+      setProfileTxRows(data || [])
+      setProfileTxState('ok')
+    }
+    fetchActivity()
+    return () => {
+      cancelled = true
+    }
+  }, [profileClientId])
 
   const badgeLabel = useMemo(() => {
     if (tablesActive) return 'Database active'
@@ -369,6 +462,19 @@ export default function Loyalty() {
     }
     return m
   }, [allTxs])
+
+  const profileClient = useMemo(() => {
+    if (!profileClientId) return null
+    return clientsRows.find((c) => c.id === profileClientId) ?? null
+  }, [clientsRows, profileClientId])
+
+  const profileRollup =
+    profileClientId && clientRollups[profileClientId]
+      ? clientRollups[profileClientId]
+      : { av: 0, pe: 0, reP: 0 }
+
+  const profileNeedsReview =
+    profileTxState === 'ok' && profileTxRows.some((t) => t.needs_attention === true)
 
   const subtitle =
     'Manage loyalty points, pending approvals and client reward balances.'
@@ -667,6 +773,7 @@ export default function Loyalty() {
                   <th style={th}>Redeemed</th>
                   <th style={th}>Status</th>
                   <th style={th}>Portal</th>
+                  <th style={th}>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -677,11 +784,31 @@ export default function Loyalty() {
                       <td style={td}>{c.client_name}</td>
                       <td style={td}>{c.client_email || '—'}</td>
                       <td style={td}>{displayTierFriendly(c.tier)}</td>
-                      <td style={td}>{r.av.toLocaleString('en-GB')}</td>
-                      <td style={td}>{r.pe.toLocaleString('en-GB')}</td>
+                      <td style={td}>{formatPointsUi(r.av)}</td>
+                      <td style={td}>{formatPointsUi(r.pe)}</td>
                       <td style={td}>{formatGBPFromPence(r.reP)}</td>
                       <td style={td}>{c.status}</td>
                       <td style={{ ...td, color: C.graySoph }}>Not enabled yet</td>
+                      <td style={td}>
+                        <button
+                          type="button"
+                          onClick={() => openClientProfile(c.id)}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: C.champagneMuted,
+                            fontWeight: 600,
+                            fontSize: '13px',
+                            cursor: 'pointer',
+                            textDecoration: 'underline',
+                            textUnderlineOffset: '3px',
+                            padding: '0',
+                            fontFamily: "'DM Sans', sans-serif",
+                          }}
+                        >
+                          View
+                        </button>
+                      </td>
                     </tr>
                   )
                 })}
@@ -820,6 +947,197 @@ export default function Loyalty() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {profileClientId && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="loyalty-profile-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 210,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+            background: 'rgba(26, 26, 26, 0.45)',
+          }}
+          onClick={(ev) => {
+            if (ev.target === ev.currentTarget && !enrollBusyRef.current) closeClientProfile()
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: '640px',
+              background: '#FDFBF7',
+              borderRadius: '12px',
+              border: `1px solid ${C.border}`,
+              boxShadow: '0 16px 48px rgba(26,26,26,0.12)',
+              maxHeight: '92vh',
+              overflow: 'auto',
+            }}
+          >
+            <div style={{ padding: '20px 22px 14px', borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px' }}>
+              <h3 id="loyalty-profile-title" style={{ margin: 0, fontFamily: "'Cormorant Garamond', serif", fontSize: '24px', fontWeight: 600, color: C.charcoal }}>
+                Client profile
+              </h3>
+              <button
+                type="button"
+                aria-label="Close client profile"
+                onClick={closeClientProfile}
+                style={{
+                  flexShrink: 0,
+                  width: '34px',
+                  height: '34px',
+                  borderRadius: '6px',
+                  border: `1px solid ${C.grayFog}`,
+                  background: '#fff',
+                  cursor: 'pointer',
+                  fontSize: '18px',
+                  lineHeight: 1,
+                  color: C.graySoph,
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <div style={{ padding: '20px 22px 22px' }}>
+              {!profileClient ? (
+                <p style={{ margin: 0, fontSize: '14px', color: '#7D2B2E' }}>
+                  This enrolment could not be found in the loaded client list (for example pagination). Close this panel and reload the Duchess Rewards page to refresh data.
+                </p>
+              ) : (
+                <>
+                  <dl style={{ margin: 0, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '14px 20px', fontSize: '14px', color: C.charcoalSoft, paddingBottom: '18px', borderBottom: `1px solid ${C.border}` }}>
+                    <div>
+                      <dt style={{ fontSize: '11px', letterSpacing: '0.08em', textTransform: 'uppercase', color: C.graySoph, fontWeight: 600, marginBottom: '6px' }}>Client name</dt>
+                      <dd style={{ margin: 0 }}>{profileClient.client_name}</dd>
+                    </div>
+                    <div>
+                      <dt style={{ fontSize: '11px', letterSpacing: '0.08em', textTransform: 'uppercase', color: C.graySoph, fontWeight: 600, marginBottom: '6px' }}>Email</dt>
+                      <dd style={{ margin: 0 }}>{profileClient.client_email?.trim() || '—'}</dd>
+                    </div>
+                    <div>
+                      <dt style={{ fontSize: '11px', letterSpacing: '0.08em', textTransform: 'uppercase', color: C.graySoph, fontWeight: 600, marginBottom: '6px' }}>CRMS client ID</dt>
+                      <dd style={{ margin: 0 }}>{profileClient.crms_client_id?.toString()?.trim() || '—'}</dd>
+                    </div>
+                    <div>
+                      <dt style={{ fontSize: '11px', letterSpacing: '0.08em', textTransform: 'uppercase', color: C.graySoph, fontWeight: 600, marginBottom: '6px' }}>Tier</dt>
+                      <dd style={{ margin: 0 }}>{displayTierFriendly(profileClient.tier)} <span style={{ color: C.graySoph }}>({profileClient.tier || 'standard'})</span></dd>
+                    </div>
+                    <div>
+                      <dt style={{ fontSize: '11px', letterSpacing: '0.08em', textTransform: 'uppercase', color: C.graySoph, fontWeight: 600, marginBottom: '6px' }}>Status</dt>
+                      <dd style={{ margin: 0 }}>{profileClient.status}</dd>
+                    </div>
+                    <div>
+                      <dt style={{ fontSize: '11px', letterSpacing: '0.08em', textTransform: 'uppercase', color: C.graySoph, fontWeight: 600, marginBottom: '6px' }}>Enrolled</dt>
+                      <dd style={{ margin: 0 }}>{fmtActivityDate(profileClient.created_at)}</dd>
+                    </div>
+                  </dl>
+
+                  <div style={{ marginTop: '20px', marginBottom: '16px' }}>
+                    <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '18px', fontWeight: 600, color: C.charcoal, marginBottom: '12px' }}>Reward balance</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '12px', fontSize: '14px', color: C.charcoalSoft }}>
+                      <div style={{ padding: '12px 14px', background: '#fff', borderRadius: '8px', border: `1px solid ${C.border}` }}>
+                        <div style={{ fontSize: '11px', color: C.graySoph, fontWeight: 600, marginBottom: '6px' }}>Available points</div>
+                        <div style={{ fontWeight: 600, color: C.charcoal }}>{formatPointsUi(profileRollup.av)}</div>
+                      </div>
+                      <div style={{ padding: '12px 14px', background: '#fff', borderRadius: '8px', border: `1px solid ${C.border}` }}>
+                        <div style={{ fontSize: '11px', color: C.graySoph, fontWeight: 600, marginBottom: '6px' }}>Available reward value</div>
+                        <div style={{ fontWeight: 600, color: C.charcoal }}>
+                          {formatGBPFromPence(estimateAvailableRewardPence(profileRollup.av, activeSettings))}
+                        </div>
+                      </div>
+                      <div style={{ padding: '12px 14px', background: '#fff', borderRadius: '8px', border: `1px solid ${C.border}` }}>
+                        <div style={{ fontSize: '11px', color: C.graySoph, fontWeight: 600, marginBottom: '6px' }}>Pending points</div>
+                        <div style={{ fontWeight: 600, color: C.charcoal }}>{formatPointsUi(profileRollup.pe)}</div>
+                      </div>
+                      <div style={{ padding: '12px 14px', background: '#fff', borderRadius: '8px', border: `1px solid ${C.border}` }}>
+                        <div style={{ fontSize: '11px', color: C.graySoph, fontWeight: 600, marginBottom: '6px' }}>Redeemed value</div>
+                        <div style={{ fontWeight: 600, color: C.charcoal }}>{formatGBPFromPence(profileRollup.reP)}</div>
+                      </div>
+                      <div style={{ padding: '12px 14px', background: '#fff', borderRadius: '8px', border: `1px solid ${C.border}`, gridColumn: '1 / -1' }}>
+                        <div style={{ fontSize: '11px', color: C.graySoph, fontWeight: 600, marginBottom: '6px' }}>Portal access</div>
+                        <div style={{ fontWeight: 600, color: C.charcoal }}>Not enabled yet</div>
+                        <div style={{ fontSize: '12px', marginTop: '8px', color: C.graySoph }}>Manual points workflow coming next.</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {profileNeedsReview ? (
+                    <div
+                      role="status"
+                      style={{
+                        marginBottom: '16px',
+                        padding: '12px 14px',
+                        borderRadius: '8px',
+                        borderLeft: `4px solid #B45309`,
+                        background: '#FFFBEB',
+                        fontSize: '13px',
+                        color: '#78350F',
+                      }}
+                    >
+                      This client has reward activity needing review.
+                    </div>
+                  ) : null}
+
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: '22px', opacity: 0.7 }}>
+                    <button type="button" disabled style={{ ...btnSecondary, opacity: 0.55, cursor: 'not-allowed', fontSize: '12px' }}>Add points — coming soon</button>
+                    <button type="button" disabled style={{ ...btnSecondary, opacity: 0.55, cursor: 'not-allowed', fontSize: '12px' }}>Redeem — coming soon</button>
+                    <button type="button" disabled style={{ ...btnSecondary, opacity: 0.55, cursor: 'not-allowed', fontSize: '12px' }}>Enable portal — coming soon</button>
+                  </div>
+
+                  <div>
+                    <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '18px', fontWeight: 600, color: C.charcoal, marginBottom: '12px' }}>Reward activity</div>
+
+                    {profileTxState === 'loading' ? (
+                      <div style={{ ...emptyBox, borderStyle: 'solid' }}>Loading reward activity…</div>
+                    ) : null}
+                    {profileTxState === 'error' ? (
+                      <div style={{ ...emptyBox, borderStyle: 'solid', color: '#7D2B2E' }}>Reward activity could not be loaded.</div>
+                    ) : null}
+                    {profileTxState === 'ok' && profileTxRows.length === 0 ? (
+                      <div style={{ ...emptyBox, borderStyle: 'solid' }}>No reward activity yet.</div>
+                    ) : null}
+
+                    {profileTxState === 'ok' && profileTxRows.length > 0 ? (
+                      <div style={{ overflowX: 'auto', border: `1px solid ${C.border}`, borderRadius: '10px', background: '#fff' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                          <thead>
+                            <tr style={{ background: C.ivoryWarm, textAlign: 'left', color: C.graySoph, textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: '10px', fontWeight: 600 }}>
+                              <th style={th}>Date</th>
+                              <th style={th}>Type</th>
+                              <th style={th}>Status</th>
+                              <th style={th}>Points</th>
+                              <th style={th}>Value</th>
+                              <th style={th}>Reason / event</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {profileTxRows.map((row) => (
+                              <tr key={row.id} style={{ borderTop: `1px solid ${C.border}` }}>
+                                <td style={td}>{fmtActivityDate(row.created_at)}</td>
+                                <td style={td}>{row.transaction_type}</td>
+                                <td style={td}>{row.status}</td>
+                                <td style={td}>{formatPointsUi(row.points)}</td>
+                                <td style={td}>{formatGBPFromPence(row.value_pence)}</td>
+                                <td style={td}>{activityReasonSnippet(row)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : null}
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
       )}
