@@ -22,6 +22,7 @@ import Reports from './pages/Reports'
 import Fleet from './pages/Fleet'
 import ATACarnet from './pages/ATACarnet'
 import LabelGenerator from './pages/LabelGenerator'
+import Loyalty from './pages/Loyalty'
 
 const pageTitles = {
   dashboard: 'Dashboard',
@@ -37,6 +38,7 @@ const pageTitles = {
   atacarnet: 'ATA Carnet',
   labelGenerator: 'Label Generator',
   reports: 'Reports',
+  loyalty: 'Duchess Rewards',
   driverlinks: 'Driver Links',
   team: 'Team Access',
 }
@@ -114,7 +116,7 @@ function AppInner() {
     }
   }
 
-  const pages = { dashboard: Dashboard, notifications: Notifications, notes: Notes, evidences: DeliveryPhotos, livejobs: LiveJobs, orders: Orders, schedule: Schedule, inventory: Inventory, paperwork: Paperwork, fleet: Fleet, atacarnet: ATACarnet, labelGenerator: LabelGenerator, reports: Reports, driverlinks: DriverLinks, team: Team }
+  const pages = { dashboard: Dashboard, notifications: Notifications, notes: Notes, evidences: DeliveryPhotos, livejobs: LiveJobs, orders: Orders, schedule: Schedule, inventory: Inventory, paperwork: Paperwork, fleet: Fleet, atacarnet: ATACarnet, labelGenerator: LabelGenerator, reports: Reports, loyalty: Loyalty, driverlinks: DriverLinks, team: Team }
   const PageComponent = pages[page] || Dashboard
 
   return (
