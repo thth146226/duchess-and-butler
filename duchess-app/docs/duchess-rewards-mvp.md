@@ -60,6 +60,7 @@ The engine is deliberately cautious and prefers review over aggressive automatic
 ## Files added in this phase
 
 - SQL foundation: `src/database/duchess_rewards_foundation.sql`
+- RLS / security preparation (manual apply after foundation): `src/database/duchess_rewards_rls.sql`
 - Pure helper: `src/lib/duchessRewardsEngine.js`
 - Documentation: `docs/duchess-rewards-mvp.md`
 
@@ -78,6 +79,17 @@ It also adds:
 - one safe default active settings row if no active settings row exists yet
 
 RLS is intentionally left for a later security-specific step, once the internal admin workflow and the token-based client portal access model are finalised.
+
+## Security / RLS before applying SQL
+
+For any environment that will hold real loyalty data (client names, emails, portal tokens, transactions and balances):
+
+- **Do not apply `duchess_rewards_foundation.sql` alone** for live internal use once the Duchess App is pointing at Supabase — the foundation deliberately omits Row Level Security. Treat **foundation + reviewed RLS** as the minimal safe bundle for shared projects.
+- **Loyalty data is sensitive** (PII plus reward economics). Access should be locked down before non-admin staff or future public surfaces connect to the same database.
+- **MVP access model** is **admin-only** for loyalty tables. The reviewable policy file is `src/database/duchess_rewards_rls.sql`: it enables RLS on `loyalty_clients`, `loyalty_transactions`, and `loyalty_settings`, and grants **only** `public.users` rows with `role = 'admin'` the ability to select/insert/update (no delete policies in that file; no anonymous access).
+- **Operations and driver** users are **not** granted loyalty table access in that file unless you extend it deliberately.
+- **Client portal** access by magic link (`/rewards/:token`) is **not** implemented in the RLS file — anonymous or token-based reads must be designed later (e.g. narrow RPC or dedicated policy), not enabled by default.
+- **Application of SQL** remains **manual** (Supabase SQL Editor or your controlled migration process). The app does not run these scripts.
 
 ## Engine helper scope
 
