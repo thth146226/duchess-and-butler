@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../contexts/AuthContext'
 
 const C = {
   charcoal: '#1A1A1A',
@@ -79,6 +80,13 @@ function formatPointsUi(n) {
   return x.toLocaleString('en-GB')
 }
 
+function formatPointsSigned(n) {
+  const x = Number(n) || 0
+  if (x === 0) return '0'
+  const abs = Math.abs(x).toLocaleString('en-GB')
+  return x > 0 ? `+${abs}` : `-${abs}`
+}
+
 function aggregateTransactions(rows) {
   let available = 0
   let pending = 0
@@ -101,6 +109,7 @@ function aggregateTransactions(rows) {
 }
 
 export default function Loyalty() {
+  const { profile: authProfile } = useAuth()
   const [loading, setLoading] = useState(true)
   const [tablesActive, setTablesActive] = useState(false)
   const [activeSettings, setActiveSettings] = useState(null)
@@ -126,6 +135,18 @@ export default function Loyalty() {
   const [profileClientId, setProfileClientId] = useState(null)
   const [profileTxRows, setProfileTxRows] = useState([])
   const [profileTxState, setProfileTxState] = useState('idle')
+  const [profileActivityKey, setProfileActivityKey] = useState(0)
+
+  const [adjustPanelOpen, setAdjustPanelOpen] = useState(false)
+  const [adjustDirection, setAdjustDirection] = useState('add')
+  const [adjustPointsInput, setAdjustPointsInput] = useState('')
+  const [adjustStatusChoice, setAdjustStatusChoice] = useState('pending')
+  const [adjustReason, setAdjustReason] = useState('')
+  const [adjustNotes, setAdjustNotes] = useState('')
+  const [adjustSubmitting, setAdjustSubmitting] = useState(false)
+  const [adjustFormError, setAdjustFormError] = useState('')
+  const [manualAdjustToast, setManualAdjustToast] = useState(null)
+  const adjustBusyRef = useRef(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -268,16 +289,33 @@ export default function Loyalty() {
     setEnrollOpen(true)
   }, [resetEnrollForm])
 
-  const openClientProfile = useCallback((clientId) => {
-    setEnrollOpen(false)
-    setProfileClientId(clientId)
+  const resetManualAdjustForm = useCallback(() => {
+    setAdjustDirection('add')
+    setAdjustPointsInput('')
+    setAdjustStatusChoice('pending')
+    setAdjustReason('')
+    setAdjustNotes('')
+    setAdjustFormError('')
   }, [])
 
+  const openClientProfile = useCallback((clientId) => {
+    setEnrollOpen(false)
+    setAdjustPanelOpen(false)
+    resetManualAdjustForm()
+    setManualAdjustToast(null)
+    setProfileClientId(clientId)
+  }, [resetManualAdjustForm])
+
   const closeClientProfile = useCallback(() => {
+    if (adjustBusyRef.current) return
     setProfileClientId(null)
     setProfileTxRows([])
     setProfileTxState('idle')
-  }, [])
+    setProfileActivityKey(0)
+    setAdjustPanelOpen(false)
+    resetManualAdjustForm()
+    setManualAdjustToast(null)
+  }, [resetManualAdjustForm])
 
   const closeEnrollModal = useCallback(() => {
     if (enrollBusyRef.current) return
@@ -397,6 +435,12 @@ export default function Loyalty() {
     const onKey = (ev) => {
       if (ev.key !== 'Escape') return
       if (enrollBusyRef.current) return
+      if (adjustBusyRef.current) return
+      if (profileClientId && adjustPanelOpen) {
+        setAdjustPanelOpen(false)
+        resetManualAdjustForm()
+        return
+      }
       if (profileClientId) {
         closeClientProfile()
         return
@@ -408,7 +452,7 @@ export default function Loyalty() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [enrollOpen, profileClientId, resetEnrollForm, closeClientProfile])
+  }, [enrollOpen, profileClientId, adjustPanelOpen, resetEnrollForm, resetManualAdjustForm, closeClientProfile])
 
   useEffect(() => {
     if (!profileClientId) {
@@ -440,7 +484,13 @@ export default function Loyalty() {
     return () => {
       cancelled = true
     }
-  }, [profileClientId])
+  }, [profileClientId, profileActivityKey])
+
+  useEffect(() => {
+    if (!manualAdjustToast) return
+    const t = window.setTimeout(() => setManualAdjustToast(null), 6000)
+    return () => clearTimeout(t)
+  }, [manualAdjustToast])
 
   const badgeLabel = useMemo(() => {
     if (tablesActive) return 'Database active'
@@ -475,6 +525,100 @@ export default function Loyalty() {
 
   const profileNeedsReview =
     profileTxState === 'ok' && profileTxRows.some((t) => t.needs_attention === true)
+
+  async function submitManualAdjustment(e) {
+    e.preventDefault()
+    if (!profileClientId || !profileClient) return
+    setAdjustFormError('')
+    const pointsRaw = adjustPointsInput.trim()
+    const reasonTrim = adjustReason.trim()
+    const notesTrim = adjustNotes.trim()
+
+    if (!/^\d+$/.test(pointsRaw)) {
+      setAdjustFormError('Enter a positive whole number of points (minimum 1).')
+      return
+    }
+    const inputPts = parseInt(pointsRaw, 10)
+    if (inputPts < 1) {
+      setAdjustFormError('Enter a positive whole number of points (minimum 1).')
+      return
+    }
+    if (reasonTrim.length < 5) {
+      setAdjustFormError('Reason must be at least 5 characters.')
+      return
+    }
+
+    const availableNow = Number(profileRollup.av) || 0
+    if (adjustDirection === 'remove' && inputPts > availableNow) {
+      setAdjustFormError('You cannot remove more points than the client currently has available.')
+      return
+    }
+
+    const pv = getPointValuePence(activeSettings)
+    const signedPoints = adjustDirection === 'add' ? inputPts : -inputPts
+    const signedValuePence = Math.round(signedPoints * pv)
+
+    const snapshot = {
+      source: 'manual_adjustment',
+      direction: adjustDirection,
+      input_points: inputPts,
+      point_value_pence: pv,
+      signed_points: signedPoints,
+      signed_value_pence: signedValuePence,
+      status: adjustStatusChoice,
+      created_from: 'duchess_rewards_admin',
+    }
+
+    const insertRow = {
+      loyalty_client_id: profileClientId,
+      transaction_type: 'adjust',
+      status: adjustStatusChoice,
+      points: signedPoints,
+      value_pence: signedValuePence,
+      reason: reasonTrim,
+      notes: notesTrim.length ? notesTrim : null,
+      needs_attention: false,
+      needs_attention_reason: null,
+      available_at: adjustStatusChoice === 'available' ? new Date().toISOString() : null,
+      calculation_snapshot: snapshot,
+    }
+
+    const createdLabel = typeof authProfile?.name === 'string' && authProfile.name.trim().length > 0
+      ? authProfile.name.trim()
+      : null
+    if (createdLabel) insertRow.created_by = createdLabel
+
+    adjustBusyRef.current = true
+    setAdjustSubmitting(true)
+    let insertError = null
+    try {
+      const { error } = await supabase.from('loyalty_transactions').insert(insertRow)
+      insertError = error || null
+    } finally {
+      adjustBusyRef.current = false
+      setAdjustSubmitting(false)
+    }
+
+    if (insertError) {
+      console.warn('[duchess-rewards] manual adjustment failed')
+      if (enrollmentPermissionDenied(insertError)) {
+        setAdjustFormError('You do not have permission to add rewards adjustments.')
+      } else {
+        setAdjustFormError('Manual adjustment could not be saved.')
+      }
+      return
+    }
+
+    setManualAdjustToast('Manual points adjustment added.')
+    setAdjustPanelOpen(false)
+    resetManualAdjustForm()
+    try {
+      await load()
+    } catch {
+      console.warn('[duchess-rewards] loyalty clients refresh failed')
+    }
+    setProfileActivityKey((k) => k + 1)
+  }
 
   const subtitle =
     'Manage loyalty points, pending approvals and client reward balances.'
@@ -967,7 +1111,13 @@ export default function Loyalty() {
             background: 'rgba(26, 26, 26, 0.45)',
           }}
           onClick={(ev) => {
-            if (ev.target === ev.currentTarget && !enrollBusyRef.current) closeClientProfile()
+            if (
+              ev.target === ev.currentTarget &&
+              !enrollBusyRef.current &&
+              !adjustBusyRef.current
+            ) {
+              closeClientProfile()
+            }
           }}
         >
           <div
@@ -989,6 +1139,7 @@ export default function Loyalty() {
               <button
                 type="button"
                 aria-label="Close client profile"
+                disabled={adjustSubmitting}
                 onClick={closeClientProfile}
                 style={{
                   flexShrink: 0,
@@ -997,7 +1148,8 @@ export default function Loyalty() {
                   borderRadius: '6px',
                   border: `1px solid ${C.grayFog}`,
                   background: '#fff',
-                  cursor: 'pointer',
+                  cursor: adjustSubmitting ? 'not-allowed' : 'pointer',
+                  opacity: adjustSubmitting ? 0.55 : 1,
                   fontSize: '18px',
                   lineHeight: 1,
                   color: C.graySoph,
@@ -1065,7 +1217,7 @@ export default function Loyalty() {
                       <div style={{ padding: '12px 14px', background: '#fff', borderRadius: '8px', border: `1px solid ${C.border}`, gridColumn: '1 / -1' }}>
                         <div style={{ fontSize: '11px', color: C.graySoph, fontWeight: 600, marginBottom: '6px' }}>Portal access</div>
                         <div style={{ fontWeight: 600, color: C.charcoal }}>Not enabled yet</div>
-                        <div style={{ fontSize: '12px', marginTop: '8px', color: C.graySoph }}>Manual points workflow coming next.</div>
+                        <div style={{ fontSize: '12px', marginTop: '8px', color: C.graySoph }}>Manual points adjustments below; redemption and portal are not wired yet.</div>
                       </div>
                     </div>
                   </div>
@@ -1087,14 +1239,171 @@ export default function Loyalty() {
                     </div>
                   ) : null}
 
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: '22px', opacity: 0.7 }}>
-                    <button type="button" disabled style={{ ...btnSecondary, opacity: 0.55, cursor: 'not-allowed', fontSize: '12px' }}>Add points — coming soon</button>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: adjustPanelOpen ? '14px' : '22px', alignItems: 'center' }}>
+                    <button
+                      type="button"
+                      disabled={adjustSubmitting}
+                      onClick={() => {
+                        if (adjustPanelOpen) {
+                          setAdjustPanelOpen(false)
+                          resetManualAdjustForm()
+                        } else {
+                          setAdjustPanelOpen(true)
+                          setAdjustFormError('')
+                          setManualAdjustToast(null)
+                        }
+                      }}
+                      style={{
+                        ...btnPrimary,
+                        fontSize: '12px',
+                        padding: '8px 16px',
+                        opacity: adjustSubmitting ? 0.65 : 1,
+                        cursor: adjustSubmitting ? 'not-allowed' : 'pointer',
+                        background: adjustPanelOpen ? C.charcoalSoft : C.champagneMuted,
+                      }}
+                    >
+                      {adjustPanelOpen ? 'Close adjustment' : 'Add points'}
+                    </button>
                     <button type="button" disabled style={{ ...btnSecondary, opacity: 0.55, cursor: 'not-allowed', fontSize: '12px' }}>Redeem — coming soon</button>
                     <button type="button" disabled style={{ ...btnSecondary, opacity: 0.55, cursor: 'not-allowed', fontSize: '12px' }}>Enable portal — coming soon</button>
                   </div>
 
+                  {adjustPanelOpen ? (
+                    <form
+                      onSubmit={submitManualAdjustment}
+                      style={{
+                        marginBottom: '22px',
+                        padding: '16px 18px',
+                        borderRadius: '10px',
+                        border: `1px solid ${C.border}`,
+                        background: '#fff',
+                      }}
+                    >
+                      <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '17px', fontWeight: 600, color: C.charcoal, marginBottom: '12px' }}>
+                        Manual points adjustment
+                      </div>
+                      <p style={{ margin: '0 0 14px', fontSize: '12px', color: C.graySoph, lineHeight: 1.5 }}>
+                        Ledger entry only — not an order earn and not a redemption. Point value uses active programme settings ({getPointValuePence(activeSettings)}p per point).
+                      </p>
+
+                      <fieldset style={{ border: 'none', margin: 0, padding: 0, marginBottom: '14px' }}>
+                        <legend style={{ ...labelSpan, marginBottom: '8px' }}>Adjustment direction</legend>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px' }}>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: adjustSubmitting ? 'not-allowed' : 'pointer', fontSize: '14px' }}>
+                            <input
+                              type="radio"
+                              name="adjust-dir"
+                              checked={adjustDirection === 'add'}
+                              disabled={adjustSubmitting}
+                              onChange={() => setAdjustDirection('add')}
+                            />
+                            Add points
+                          </label>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: adjustSubmitting ? 'not-allowed' : 'pointer', fontSize: '14px' }}>
+                            <input
+                              type="radio"
+                              name="adjust-dir"
+                              checked={adjustDirection === 'remove'}
+                              disabled={adjustSubmitting}
+                              onChange={() => setAdjustDirection('remove')}
+                            />
+                            Remove points
+                          </label>
+                        </div>
+                      </fieldset>
+
+                      <label style={labelStyles}>
+                        <span style={labelSpan}>Points amount <span style={{ color: '#7D2B2E' }}>*</span></span>
+                        <input
+                          inputMode="numeric"
+                          value={adjustPointsInput}
+                          onChange={(e) => setAdjustPointsInput(e.target.value.replace(/[^\d]/g, ''))}
+                          disabled={adjustSubmitting}
+                          placeholder="e.g. 500"
+                          style={inputStyles}
+                        />
+                      </label>
+
+                      <label style={{ ...labelStyles, marginTop: '14px', display: 'block' }}>
+                        <span style={labelSpan}>Status <span style={{ color: '#7D2B2E' }}>*</span></span>
+                        <select
+                          value={adjustStatusChoice}
+                          onChange={(e) => setAdjustStatusChoice(e.target.value)}
+                          disabled={adjustSubmitting}
+                          style={{ ...inputStyles, cursor: adjustSubmitting ? 'not-allowed' : 'pointer' }}
+                        >
+                          <option value="pending">Pending</option>
+                          <option value="available">Available</option>
+                        </select>
+                      </label>
+
+                      <label style={{ ...labelStyles, marginTop: '14px' }}>
+                        <span style={labelSpan}>Reason <span style={{ color: '#7D2B2E' }}>*</span></span>
+                        <input
+                          value={adjustReason}
+                          onChange={(e) => setAdjustReason(e.target.value)}
+                          disabled={adjustSubmitting}
+                          placeholder="Opening balance, Goodwill adjustment, Manual correction…"
+                          style={inputStyles}
+                        />
+                      </label>
+
+                      <label style={{ ...labelStyles, marginTop: '14px' }}>
+                        <span style={labelSpan}>Notes</span>
+                        <textarea
+                          value={adjustNotes}
+                          onChange={(e) => setAdjustNotes(e.target.value)}
+                          disabled={adjustSubmitting}
+                          rows={2}
+                          placeholder="Optional internal note"
+                          style={{ ...inputStyles, resize: 'vertical', minHeight: '56px' }}
+                        />
+                      </label>
+
+                      {adjustFormError ? (
+                        <div role="alert" style={{ marginTop: '14px', fontSize: '13px', color: '#7D2B2E' }}>
+                          {adjustFormError}
+                        </div>
+                      ) : null}
+
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '18px' }}>
+                        <button
+                          type="button"
+                          disabled={adjustSubmitting}
+                          onClick={() => {
+                            setAdjustPanelOpen(false)
+                            resetManualAdjustForm()
+                          }}
+                          style={{ ...btnSecondary, fontSize: '12px', opacity: adjustSubmitting ? 0.55 : 1 }}
+                        >
+                          Cancel
+                        </button>
+                        <button type="submit" disabled={adjustSubmitting} style={{ ...btnPrimary, fontSize: '12px', opacity: adjustSubmitting ? 0.75 : 1, cursor: adjustSubmitting ? 'wait' : 'pointer' }}>
+                          {adjustSubmitting ? 'Saving…' : 'Save adjustment'}
+                        </button>
+                      </div>
+                    </form>
+                  ) : null}
+
                   <div>
                     <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '18px', fontWeight: 600, color: C.charcoal, marginBottom: '12px' }}>Reward activity</div>
+
+                    {manualAdjustToast ? (
+                      <div
+                        role="status"
+                        style={{
+                          marginBottom: '12px',
+                          padding: '10px 14px',
+                          borderRadius: '8px',
+                          border: `1px solid ${C.champagneMuted}`,
+                          background: C.ivoryWarm,
+                          fontSize: '13px',
+                          color: C.charcoalSoft,
+                        }}
+                      >
+                        {manualAdjustToast}
+                      </div>
+                    ) : null}
 
                     {profileTxState === 'loading' ? (
                       <div style={{ ...emptyBox, borderStyle: 'solid' }}>Loading reward activity…</div>
@@ -1125,7 +1434,7 @@ export default function Loyalty() {
                                 <td style={td}>{fmtActivityDate(row.created_at)}</td>
                                 <td style={td}>{row.transaction_type}</td>
                                 <td style={td}>{row.status}</td>
-                                <td style={td}>{formatPointsUi(row.points)}</td>
+                                <td style={td}>{formatPointsSigned(row.points)}</td>
                                 <td style={td}>{formatGBPFromPence(row.value_pence)}</td>
                                 <td style={td}>{activityReasonSnippet(row)}</td>
                               </tr>
@@ -1152,7 +1461,7 @@ export default function Loyalty() {
           <li>Client can later request redemption.</li>
         </ol>
         <p style={{ ...sectionMuted, marginTop: '14px', fontStyle: 'italic' }}>
-          Admins may manually enrol loyalty clients — no orders are scanned and no reward points are created automatically. Approval, redemption, and portal access are not wired yet.
+          Admins may enrol clients and post manual adjust transactions from a client profile — no order scanning, no automatic suggested points, and no redemption or client portal yet.
         </p>
       </section>
     </div>

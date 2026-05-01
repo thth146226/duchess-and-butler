@@ -53,7 +53,11 @@ Admins (`public.users.role = 'admin'`, matching RLS on `loyalty_clients`) can cr
 
 ## Client profile view (Phase 2B)
 
-From **Duchess Rewards → Clients → View**, admins open a **read-only** modal with enrolment metadata, balances derived from `clientRollups` / programme point value settings, optional **reward activity** (last 25 transactions for that `loyalty_client_id`). **Portal token and URLs are never shown** until a future portal phase. **Writes** beyond existing Phase 2A enrol insert are **not** added here.
+From **Duchess Rewards → Clients → View**, admins open a modal with enrolment metadata, balances derived from `clientRollups` / programme point value settings, optional **reward activity** (last 25 transactions for that `loyalty_client_id`). **Portal token and URLs are never shown** until a future portal phase.
+
+## Manual points adjustment (Phase 2C)
+
+Admins (`public.users.role = 'admin'`, matching RLS on `loyalty_transactions`) can record **manual** ledger rows from **View → Add points**. Each write inserts a single `loyalty_transactions` row with `transaction_type = 'adjust'` (add/remove as signed points and `value_pence`), status `pending` or `available` only — **not** redemptions (`redeem` / `redeemed` flows are untouched). No order scanning, no suggestions from CRMS jobs, no rewards engine against live orders, and **no portal** route, token visibility, or magic link exposure. Redemption workflows and `/rewards/:token` remain out of scope.
 
 ## Needs Attention
 
