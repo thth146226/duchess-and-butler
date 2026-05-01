@@ -63,12 +63,131 @@ function fmtActivityDate(iso) {
   }
 }
 
-function activityReasonSnippet(tx) {
-  const bits = []
-  if (tx.reason && String(tx.reason).trim()) bits.push(String(tx.reason).trim())
-  if (tx.event_name && String(tx.event_name).trim()) bits.push(String(tx.event_name).trim())
-  const s = bits.join(' · ')
-  return s.length ? s.slice(0, 140) : '—'
+/** Case-insensitive string equality for avoiding duplicate ledger display lines */
+function ledgerTextEquals(a, b) {
+  return String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase()
+}
+
+/** Human-readable ledger type for activity table display only */
+function formatTransactionTypeLabel(raw) {
+  const trimmed = String(raw ?? '').trim()
+  const k = trimmed.toLowerCase()
+  const mapped = {
+    adjust: 'Manual adjustment',
+    redeem: 'Manual redemption',
+    earn: 'Earned points',
+    bonus: 'Bonus points',
+    expire: 'Expired points',
+  }
+  if (mapped[k]) return mapped[k]
+  if (!trimmed) return '—'
+  return trimmed.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase())
+}
+
+/** Human-readable status for activity table display only */
+function formatTransactionStatusLabel(raw) {
+  const trimmed = String(raw ?? '').trim()
+  const k = trimmed.toLowerCase()
+  const mapped = {
+    suggested: 'Suggested',
+    pending: 'Pending',
+    available: 'Available',
+    redeemed: 'Redeemed',
+    rejected: 'Rejected',
+    cancelled: 'Cancelled',
+  }
+  if (mapped[k]) return mapped[k]
+  if (!trimmed) return '—'
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase()
+}
+
+/**
+ * Compose Reason / reference / event lines without duplicating identical text from the ledger (display-only).
+ * @returns {{ headline: string|null, secondary: string[], noteLine: string|null, attentionLine: string|null }}
+ */
+function composeActivityDetails(tx) {
+  const wr = String(tx.reason ?? '').trim()
+  const wcr = String(tx.crms_ref ?? '').trim()
+  const wev = String(tx.event_name ?? '').trim()
+  const wno = String(tx.notes ?? '').trim()
+
+  const appliedLine =
+    wcr.length && (!wr.length || !ledgerTextEquals(wcr, wr))
+      ? `Applied to: ${wcr}`
+      : null
+
+  const eventLine =
+    wev.length &&
+    (!wr.length || !ledgerTextEquals(wev, wr)) &&
+    (!wcr.length || !ledgerTextEquals(wev, wcr))
+      ? `Event: ${wev}`
+      : null
+
+  const secondary = []
+  if (appliedLine) secondary.push(appliedLine)
+  if (eventLine) secondary.push(eventLine)
+
+  let headline = wr.length ? wr : null
+
+  /** When no headline, promote first secondary (e.g. Applied to) into headline position */
+  if (!headline && secondary.length > 0) {
+    headline = secondary.shift()
+  }
+
+  /** Optional notes row: mute; skip if repeats reason/ref/event */
+  const notesUseful =
+    wno.length >= 5 &&
+    !ledgerTextEquals(wno, wr) &&
+    !ledgerTextEquals(wno, wcr) &&
+    !ledgerTextEquals(wno, wev)
+
+  const noteSnippet =
+    wno.length > 180 ? `${wno.slice(0, 177)}…` : wno
+
+  let noteLine = notesUseful ? `Notes: ${noteSnippet}` : null
+
+  /** Avoid repeating headline after promotion into Applied to / Event */
+  if (noteLine && headline && ledgerTextEquals(wno, headline)) noteLine = null
+
+  const attentionLine =
+    tx.needs_attention === true &&
+    typeof tx.needs_attention_reason === 'string' &&
+    tx.needs_attention_reason.trim().length > 0
+      ? tx.needs_attention_reason.trim()
+      : null
+
+  return {
+    headline: headline,
+    secondary,
+    noteLine,
+    attentionLine,
+  }
+}
+
+function pillStyleForLedgerType(typ) {
+  const t = String(typ ?? '').trim().toLowerCase()
+  if (t === 'adjust') {
+    return {
+      bg: '#E8E6E2',
+      border: `#CBC6BE`,
+      color: C.charcoalSoft,
+      label: formatTransactionTypeLabel(typ),
+    }
+  }
+  if (t === 'redeem') {
+    return {
+      bg: C.ivoryWarm,
+      border: C.champagneMuted,
+      color: C.charcoal,
+      label: formatTransactionTypeLabel(typ),
+    }
+  }
+  return {
+    bg: '#fff',
+    border: C.grayFog,
+    color: C.charcoalSoft,
+    label: formatTransactionTypeLabel(typ),
+  }
 }
 
 function formatPointsUi(n) {
@@ -490,7 +609,9 @@ export default function Loyalty() {
     async function fetchActivity() {
       const { data, error } = await supabase
         .from('loyalty_transactions')
-        .select('id, created_at, transaction_type, status, points, value_pence, reason, event_name, needs_attention')
+        .select(
+          'id, created_at, transaction_type, status, points, value_pence, reason, event_name, crms_ref, notes, needs_attention, needs_attention_reason',
+        )
         .eq('loyalty_client_id', profileClientId)
         .order('created_at', { ascending: false })
         .limit(25)
@@ -1345,7 +1466,7 @@ export default function Loyalty() {
                       <div style={{ padding: '12px 14px', background: '#fff', borderRadius: '8px', border: `1px solid ${C.border}`, gridColumn: '1 / -1' }}>
                         <div style={{ fontSize: '11px', color: C.graySoph, fontWeight: 600, marginBottom: '6px' }}>Portal access</div>
                         <div style={{ fontWeight: 600, color: C.charcoal }}>Not enabled yet</div>
-                        <div style={{ fontSize: '12px', marginTop: '8px', color: C.graySoph }}>Manual points adjustments and manual redemptions are available below. Client portal is not wired yet.</div>
+                        <div style={{ fontSize: '12px', marginTop: '8px', color: C.graySoph }}>Portal access is not enabled yet. Admins manage manual adjustments and redemptions from this profile.</div>
                       </div>
                     </div>
                   </div>
@@ -1696,20 +1817,98 @@ export default function Loyalty() {
                               <th style={th}>Status</th>
                               <th style={th}>Points</th>
                               <th style={th}>Value</th>
-                              <th style={th}>Reason / event</th>
+                              <th style={th}>Details</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {profileTxRows.map((row) => (
-                              <tr key={row.id} style={{ borderTop: `1px solid ${C.border}` }}>
-                                <td style={td}>{fmtActivityDate(row.created_at)}</td>
-                                <td style={td}>{row.transaction_type}</td>
-                                <td style={td}>{row.status}</td>
-                                <td style={td}>{formatPointsSigned(row.points)}</td>
-                                <td style={td}>{formatCurrencyFromPence(row.value_pence)}</td>
-                                <td style={td}>{activityReasonSnippet(row)}</td>
-                              </tr>
-                            ))}
+                            {profileTxRows.map((row) => {
+                              const pill = pillStyleForLedgerType(row.transaction_type)
+                              const details = composeActivityDetails(row)
+                              const emptyDetail =
+                                !details.headline &&
+                                details.secondary.length === 0 &&
+                                !details.noteLine &&
+                                !details.attentionLine
+                              return (
+                                <tr key={row.id} style={{ borderTop: `1px solid ${C.border}` }}>
+                                  <td style={{ ...td, verticalAlign: 'top' }}>{fmtActivityDate(row.created_at)}</td>
+                                  <td style={{ ...td, verticalAlign: 'top', minWidth: '140px' }}>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
+                                      <span
+                                        style={{
+                                          display: 'inline-block',
+                                          fontSize: '10px',
+                                          fontWeight: 600,
+                                          letterSpacing: '0.04em',
+                                          textTransform: 'uppercase',
+                                          padding: '4px 8px',
+                                          borderRadius: '5px',
+                                          border: `1px solid ${pill.border}`,
+                                          background: pill.bg,
+                                          color: pill.color,
+                                        }}
+                                      >
+                                        {pill.label}
+                                      </span>
+                                      {row.needs_attention === true ? (
+                                        <span
+                                          style={{
+                                            display: 'inline-block',
+                                            fontSize: '10px',
+                                            fontWeight: 600,
+                                            letterSpacing: '0.06em',
+                                            textTransform: 'uppercase',
+                                            padding: '4px 8px',
+                                            borderRadius: '5px',
+                                            border: `1px solid #D97706`,
+                                            background: '#FFFBEB',
+                                            color: '#92400E',
+                                          }}
+                                        >
+                                          Needs attention
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                  </td>
+                                  <td style={{ ...td, verticalAlign: 'top' }}>{formatTransactionStatusLabel(row.status)}</td>
+                                  <td style={{ ...td, verticalAlign: 'top' }}>{formatPointsSigned(row.points)}</td>
+                                  <td style={{ ...td, verticalAlign: 'top' }}>{formatCurrencyFromPence(row.value_pence)}</td>
+                                  <td style={{ ...td, verticalAlign: 'top', maxWidth: '260px', lineHeight: 1.45 }}>
+                                    {emptyDetail ? (
+                                      <span style={{ color: C.graySoph }}>—</span>
+                                    ) : (
+                                      <>
+                                        {details.headline ? (
+                                          <div style={{ fontWeight: 600, color: C.charcoal }}>{details.headline}</div>
+                                        ) : null}
+                                        {details.secondary.map((line, idx) => (
+                                          <div
+                                            key={`${row.id}-d${idx}`}
+                                            style={{
+                                              fontSize: '12px',
+                                              color: C.graySoph,
+                                              marginTop: details.headline || idx > 0 ? '6px' : 0,
+                                            }}
+                                          >
+                                            {line}
+                                          </div>
+                                        ))}
+                                        {details.noteLine ? (
+                                          <div style={{ fontSize: '11px', color: C.graySoph, marginTop: '6px', fontStyle: 'italic' }}>
+                                            {details.noteLine}
+                                          </div>
+                                        ) : null}
+                                        {details.attentionLine ? (
+                                          <div style={{ fontSize: '11px', color: '#92400E', marginTop: '6px' }}>
+                                            {details.attentionLine}
+                                          </div>
+                                        ) : null}
+                                      </>
+                                    )}
+                                  </td>
+                                </tr>
+                              )
+                            })}
                           </tbody>
                         </table>
                       </div>

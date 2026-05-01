@@ -63,6 +63,10 @@ Admins (`public.users.role = 'admin'`, matching RLS on `loyalty_transactions`) c
 
 Admins (`public.users.role = 'admin'`, matching RLS on `loyalty_transactions`) can record **manual redemptions** from **View → Redeem**. Each redemption inserts a single `loyalty_transactions` row with `transaction_type = 'redeem'`, `status = 'redeemed'`, and negative `points` / `value_pence`. Redemption is blocked when available balance is zero and cannot exceed current available points. This workflow is ledger-only: it does **not** apply discounts to RMS or invoices automatically, does **not** trigger order/invoice writes, and does **not** expose any client portal route, token, or link.
 
+## Reward activity clarity (Phase 2E)
+
+The Duchess Rewards admin **Reward activity** table uses **display-only** labels for transaction types and statuses (human-readable wording and small type badges); points and sterling values reflect the ledger (signed rows where applicable). A **details** helper composes reason, reference (`crms_ref`), event name and notes without repeating identical strings. **Needs attention** uses existing `needs_attention` / `needs_attention_reason` for read-only row highlighting only — schema and rollup logic are unchanged.
+
 ## Needs Attention
 
 The rewards engine includes a conservative `Needs Attention` concept for unclear cases. In MVP foundation terms, this means:
