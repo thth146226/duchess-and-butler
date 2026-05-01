@@ -98,6 +98,7 @@ function aggregateTransactions(rows) {
     const vp = Number(t.value_pence) || 0
     const typ = t.transaction_type
     if (st === 'available') available += pts
+    if (st === 'redeemed' && typ === 'redeem') available += pts
     if (st === 'suggested' || st === 'pending') pending += pts
     if (st === 'redeemed' && typ === 'redeem') redeemedPence += Math.abs(vp)
   }
@@ -142,6 +143,14 @@ export default function Loyalty() {
   const [adjustSubmitting, setAdjustSubmitting] = useState(false)
   const [adjustFormError, setAdjustFormError] = useState('')
   const [manualAdjustToast, setManualAdjustToast] = useState(null)
+  const [redeemPanelOpen, setRedeemPanelOpen] = useState(false)
+  const [redeemPointsInput, setRedeemPointsInput] = useState('')
+  const [redeemReference, setRedeemReference] = useState('')
+  const [redeemReason, setRedeemReason] = useState('')
+  const [redeemNotes, setRedeemNotes] = useState('')
+  const [redeemSubmitting, setRedeemSubmitting] = useState(false)
+  const [redeemFormError, setRedeemFormError] = useState('')
+  const [manualRedeemToast, setManualRedeemToast] = useState(null)
   const adjustBusyRef = useRef(false)
 
   const load = useCallback(async () => {
@@ -294,13 +303,24 @@ export default function Loyalty() {
     setAdjustFormError('')
   }, [])
 
+  const resetManualRedeemForm = useCallback(() => {
+    setRedeemPointsInput('')
+    setRedeemReference('')
+    setRedeemReason('')
+    setRedeemNotes('')
+    setRedeemFormError('')
+  }, [])
+
   const openClientProfile = useCallback((clientId) => {
     setEnrollOpen(false)
     setAdjustPanelOpen(false)
+    setRedeemPanelOpen(false)
     resetManualAdjustForm()
+    resetManualRedeemForm()
     setManualAdjustToast(null)
+    setManualRedeemToast(null)
     setProfileClientId(clientId)
-  }, [resetManualAdjustForm])
+  }, [resetManualAdjustForm, resetManualRedeemForm])
 
   const closeClientProfile = useCallback(() => {
     if (adjustBusyRef.current) return
@@ -309,9 +329,12 @@ export default function Loyalty() {
     setProfileTxState('idle')
     setProfileActivityKey(0)
     setAdjustPanelOpen(false)
+    setRedeemPanelOpen(false)
     resetManualAdjustForm()
+    resetManualRedeemForm()
     setManualAdjustToast(null)
-  }, [resetManualAdjustForm])
+    setManualRedeemToast(null)
+  }, [resetManualAdjustForm, resetManualRedeemForm])
 
   const closeEnrollModal = useCallback(() => {
     if (enrollBusyRef.current) return
@@ -437,6 +460,11 @@ export default function Loyalty() {
         resetManualAdjustForm()
         return
       }
+      if (profileClientId && redeemPanelOpen) {
+        setRedeemPanelOpen(false)
+        resetManualRedeemForm()
+        return
+      }
       if (profileClientId) {
         closeClientProfile()
         return
@@ -448,7 +476,7 @@ export default function Loyalty() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [enrollOpen, profileClientId, adjustPanelOpen, resetEnrollForm, resetManualAdjustForm, closeClientProfile])
+  }, [enrollOpen, profileClientId, adjustPanelOpen, redeemPanelOpen, resetEnrollForm, resetManualAdjustForm, resetManualRedeemForm, closeClientProfile])
 
   useEffect(() => {
     if (!profileClientId) {
@@ -488,6 +516,12 @@ export default function Loyalty() {
     return () => clearTimeout(t)
   }, [manualAdjustToast])
 
+  useEffect(() => {
+    if (!manualRedeemToast) return
+    const t = window.setTimeout(() => setManualRedeemToast(null), 6000)
+    return () => clearTimeout(t)
+  }, [manualRedeemToast])
+
   const badgeLabel = useMemo(() => {
     if (tablesActive) return 'Database active'
     return 'Admin preview'
@@ -503,6 +537,7 @@ export default function Loyalty() {
       const pts = Number(t.points) || 0
       const vp = Number(t.value_pence) || 0
       if (st === 'available') m[cid].av += pts
+      if (st === 'redeemed' && t.transaction_type === 'redeem') m[cid].av += pts
       if (st === 'suggested' || st === 'pending') m[cid].pe += pts
       if (st === 'redeemed' && t.transaction_type === 'redeem') m[cid].reP += Math.abs(vp)
     }
@@ -608,6 +643,103 @@ export default function Loyalty() {
     setManualAdjustToast('Manual points adjustment added.')
     setAdjustPanelOpen(false)
     resetManualAdjustForm()
+    try {
+      await load()
+    } catch {
+      console.warn('[duchess-rewards] loyalty clients refresh failed')
+    }
+    setProfileActivityKey((k) => k + 1)
+  }
+
+  async function submitManualRedemption(e) {
+    e.preventDefault()
+    if (!profileClientId || !profileClient) return
+    setRedeemFormError('')
+    const pointsRaw = redeemPointsInput.trim()
+    const reasonTrim = redeemReason.trim()
+    const notesTrim = redeemNotes.trim()
+    const refTrim = redeemReference.trim()
+    const availableNow = Number(profileRollup.av) || 0
+
+    if (availableNow <= 0) {
+      setRedeemFormError('This client has no available points to redeem.')
+      return
+    }
+    if (!/^\d+$/.test(pointsRaw)) {
+      setRedeemFormError('Enter a positive whole number of points (minimum 1).')
+      return
+    }
+    const inputPts = parseInt(pointsRaw, 10)
+    if (inputPts < 1) {
+      setRedeemFormError('Enter a positive whole number of points (minimum 1).')
+      return
+    }
+    if (inputPts > availableNow) {
+      setRedeemFormError('You cannot redeem more points than the client currently has available.')
+      return
+    }
+    if (reasonTrim.length < 5) {
+      setRedeemFormError('Reason must be at least 5 characters.')
+      return
+    }
+
+    const pv = getPointValuePence(activeSettings)
+    const signedPoints = -inputPts
+    const signedValuePence = -Math.round(inputPts * pv)
+    const snapshot = {
+      source: 'manual_redemption',
+      input_points: inputPts,
+      point_value_pence: pv,
+      signed_points: signedPoints,
+      signed_value_pence: signedValuePence,
+      applied_reference: refTrim.length ? refTrim : null,
+      created_from: 'duchess_rewards_admin',
+    }
+    const insertRow = {
+      loyalty_client_id: profileClientId,
+      transaction_type: 'redeem',
+      status: 'redeemed',
+      points: signedPoints,
+      value_pence: signedValuePence,
+      reason: reasonTrim,
+      notes: notesTrim.length ? notesTrim : null,
+      crms_ref: refTrim.length ? refTrim : null,
+      event_name: refTrim.length ? refTrim : null,
+      needs_attention: false,
+      needs_attention_reason: null,
+      available_at: new Date().toISOString(),
+      calculation_snapshot: snapshot,
+    }
+
+    const createdLabel = typeof authProfile?.name === 'string' && authProfile.name.trim().length > 0
+      ? authProfile.name.trim()
+      : null
+    if (createdLabel) insertRow.created_by = createdLabel
+
+    adjustBusyRef.current = true
+    setRedeemSubmitting(true)
+    let insertError = null
+    try {
+      const { error } = await supabase.from('loyalty_transactions').insert(insertRow)
+      insertError = error || null
+    } finally {
+      adjustBusyRef.current = false
+      setRedeemSubmitting(false)
+    }
+
+    if (insertError) {
+      console.warn('[duchess-rewards] redemption failed')
+      if (enrollmentPermissionDenied(insertError)) {
+        setRedeemFormError('You do not have permission to redeem rewards.')
+      } else {
+        setRedeemFormError('Reward redemption could not be saved.')
+      }
+      return
+    }
+
+    setManualRedeemToast('Reward redemption recorded.')
+    setRedeemPanelOpen(false)
+    resetManualRedeemForm()
     try {
       await load()
     } catch {
@@ -1135,7 +1267,7 @@ export default function Loyalty() {
               <button
                 type="button"
                 aria-label="Close client profile"
-                disabled={adjustSubmitting}
+                disabled={adjustSubmitting || redeemSubmitting}
                 onClick={closeClientProfile}
                 style={{
                   flexShrink: 0,
@@ -1144,8 +1276,8 @@ export default function Loyalty() {
                   borderRadius: '6px',
                   border: `1px solid ${C.grayFog}`,
                   background: '#fff',
-                  cursor: adjustSubmitting ? 'not-allowed' : 'pointer',
-                  opacity: adjustSubmitting ? 0.55 : 1,
+                  cursor: adjustSubmitting || redeemSubmitting ? 'not-allowed' : 'pointer',
+                  opacity: adjustSubmitting || redeemSubmitting ? 0.55 : 1,
                   fontSize: '18px',
                   lineHeight: 1,
                   color: C.graySoph,
@@ -1213,7 +1345,7 @@ export default function Loyalty() {
                       <div style={{ padding: '12px 14px', background: '#fff', borderRadius: '8px', border: `1px solid ${C.border}`, gridColumn: '1 / -1' }}>
                         <div style={{ fontSize: '11px', color: C.graySoph, fontWeight: 600, marginBottom: '6px' }}>Portal access</div>
                         <div style={{ fontWeight: 600, color: C.charcoal }}>Not enabled yet</div>
-                        <div style={{ fontSize: '12px', marginTop: '8px', color: C.graySoph }}>Manual points adjustments below; redemption and portal are not wired yet.</div>
+                        <div style={{ fontSize: '12px', marginTop: '8px', color: C.graySoph }}>Manual points adjustments and manual redemptions are available below. Client portal is not wired yet.</div>
                       </div>
                     </div>
                   </div>
@@ -1235,15 +1367,17 @@ export default function Loyalty() {
                     </div>
                   ) : null}
 
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: adjustPanelOpen ? '14px' : '22px', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: adjustPanelOpen || redeemPanelOpen ? '14px' : '22px', alignItems: 'center' }}>
                     <button
                       type="button"
-                      disabled={adjustSubmitting}
+                      disabled={adjustSubmitting || redeemSubmitting}
                       onClick={() => {
                         if (adjustPanelOpen) {
                           setAdjustPanelOpen(false)
                           resetManualAdjustForm()
                         } else {
+                          setRedeemPanelOpen(false)
+                          resetManualRedeemForm()
                           setAdjustPanelOpen(true)
                           setAdjustFormError('')
                           setManualAdjustToast(null)
@@ -1253,14 +1387,47 @@ export default function Loyalty() {
                         ...btnPrimary,
                         fontSize: '12px',
                         padding: '8px 16px',
-                        opacity: adjustSubmitting ? 0.65 : 1,
-                        cursor: adjustSubmitting ? 'not-allowed' : 'pointer',
+                        opacity: adjustSubmitting || redeemSubmitting ? 0.65 : 1,
+                        cursor: adjustSubmitting || redeemSubmitting ? 'not-allowed' : 'pointer',
                         background: adjustPanelOpen ? C.charcoalSoft : C.champagneMuted,
                       }}
                     >
                       {adjustPanelOpen ? 'Close adjustment' : 'Add points'}
                     </button>
-                    <button type="button" disabled style={{ ...btnSecondary, opacity: 0.55, cursor: 'not-allowed', fontSize: '12px' }}>Redeem — coming soon</button>
+                    <button
+                      type="button"
+                      disabled={adjustSubmitting || redeemSubmitting}
+                      onClick={() => {
+                        const availableNow = Number(profileRollup.av) || 0
+                        if (!redeemPanelOpen && availableNow <= 0) {
+                          setManualRedeemToast(null)
+                          setRedeemFormError('This client has no available points to redeem.')
+                          setRedeemPanelOpen(true)
+                          setAdjustPanelOpen(false)
+                          resetManualAdjustForm()
+                          return
+                        }
+                        if (redeemPanelOpen) {
+                          setRedeemPanelOpen(false)
+                          resetManualRedeemForm()
+                        } else {
+                          setAdjustPanelOpen(false)
+                          resetManualAdjustForm()
+                          setRedeemPanelOpen(true)
+                          setRedeemFormError('')
+                          setManualRedeemToast(null)
+                        }
+                      }}
+                      style={{
+                        ...btnSecondary,
+                        fontSize: '12px',
+                        opacity: adjustSubmitting || redeemSubmitting ? 0.55 : 1,
+                        cursor: adjustSubmitting || redeemSubmitting ? 'not-allowed' : 'pointer',
+                        background: redeemPanelOpen ? C.ivoryWarm : 'transparent',
+                      }}
+                    >
+                      {redeemPanelOpen ? 'Close redemption' : 'Redeem'}
+                    </button>
                     <button type="button" disabled style={{ ...btnSecondary, opacity: 0.55, cursor: 'not-allowed', fontSize: '12px' }}>Enable portal — coming soon</button>
                   </div>
 
@@ -1381,6 +1548,98 @@ export default function Loyalty() {
                     </form>
                   ) : null}
 
+                  {redeemPanelOpen ? (
+                    <form
+                      onSubmit={submitManualRedemption}
+                      style={{
+                        marginBottom: '22px',
+                        padding: '16px 18px',
+                        borderRadius: '10px',
+                        border: `1px solid ${C.border}`,
+                        background: '#fff',
+                      }}
+                    >
+                      <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '17px', fontWeight: 600, color: C.charcoal, marginBottom: '12px' }}>
+                        Manual reward redemption
+                      </div>
+                      <p style={{ margin: '0 0 14px', fontSize: '12px', color: C.graySoph, lineHeight: 1.5 }}>
+                        Admin-only ledger action. This records a redeemed transaction only; it does not apply any RMS or invoice discount automatically.
+                      </p>
+
+                      <label style={labelStyles}>
+                        <span style={labelSpan}>Points to redeem <span style={{ color: '#7D2B2E' }}>*</span></span>
+                        <input
+                          inputMode="numeric"
+                          value={redeemPointsInput}
+                          onChange={(e) => setRedeemPointsInput(e.target.value.replace(/[^\d]/g, ''))}
+                          disabled={redeemSubmitting}
+                          placeholder="e.g. 200"
+                          style={inputStyles}
+                        />
+                        <span style={{ marginTop: '8px', fontSize: '12px', color: C.graySoph, display: 'block' }}>
+                          Available now: {formatPointsUi(profileRollup.av)} points
+                        </span>
+                      </label>
+
+                      <label style={{ ...labelStyles, marginTop: '14px' }}>
+                        <span style={labelSpan}>Applied to / reference</span>
+                        <input
+                          value={redeemReference}
+                          onChange={(e) => setRedeemReference(e.target.value)}
+                          disabled={redeemSubmitting}
+                          placeholder="QDB8001, Future order credit, Manual reward redemption"
+                          style={inputStyles}
+                        />
+                      </label>
+
+                      <label style={{ ...labelStyles, marginTop: '14px' }}>
+                        <span style={labelSpan}>Reason <span style={{ color: '#7D2B2E' }}>*</span></span>
+                        <input
+                          value={redeemReason}
+                          onChange={(e) => setRedeemReason(e.target.value)}
+                          disabled={redeemSubmitting}
+                          placeholder="Client requested reward use"
+                          style={inputStyles}
+                        />
+                      </label>
+
+                      <label style={{ ...labelStyles, marginTop: '14px' }}>
+                        <span style={labelSpan}>Notes</span>
+                        <textarea
+                          value={redeemNotes}
+                          onChange={(e) => setRedeemNotes(e.target.value)}
+                          disabled={redeemSubmitting}
+                          rows={2}
+                          placeholder="Optional internal note"
+                          style={{ ...inputStyles, resize: 'vertical', minHeight: '56px' }}
+                        />
+                      </label>
+
+                      {redeemFormError ? (
+                        <div role="alert" style={{ marginTop: '14px', fontSize: '13px', color: '#7D2B2E' }}>
+                          {redeemFormError}
+                        </div>
+                      ) : null}
+
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '18px' }}>
+                        <button
+                          type="button"
+                          disabled={redeemSubmitting}
+                          onClick={() => {
+                            setRedeemPanelOpen(false)
+                            resetManualRedeemForm()
+                          }}
+                          style={{ ...btnSecondary, fontSize: '12px', opacity: redeemSubmitting ? 0.55 : 1 }}
+                        >
+                          Cancel
+                        </button>
+                        <button type="submit" disabled={redeemSubmitting} style={{ ...btnPrimary, fontSize: '12px', opacity: redeemSubmitting ? 0.75 : 1, cursor: redeemSubmitting ? 'wait' : 'pointer' }}>
+                          {redeemSubmitting ? 'Saving…' : 'Save redemption'}
+                        </button>
+                      </div>
+                    </form>
+                  ) : null}
+
                   <div>
                     <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '18px', fontWeight: 600, color: C.charcoal, marginBottom: '12px' }}>Reward activity</div>
 
@@ -1398,6 +1657,22 @@ export default function Loyalty() {
                         }}
                       >
                         {manualAdjustToast}
+                      </div>
+                    ) : null}
+                    {manualRedeemToast ? (
+                      <div
+                        role="status"
+                        style={{
+                          marginBottom: '12px',
+                          padding: '10px 14px',
+                          borderRadius: '8px',
+                          border: `1px solid ${C.champagneMuted}`,
+                          background: C.ivoryWarm,
+                          fontSize: '13px',
+                          color: C.charcoalSoft,
+                        }}
+                      >
+                        {manualRedeemToast}
                       </div>
                     ) : null}
 
@@ -1454,10 +1729,10 @@ export default function Loyalty() {
           <li>System suggests points from eligible orders.</li>
           <li>Admin reviews calculation and Needs Attention flags.</li>
           <li>Admin approves points as pending or available.</li>
-          <li>Client can later request redemption.</li>
+          <li>Admin can record manual redemptions from available balance.</li>
         </ol>
         <p style={{ ...sectionMuted, marginTop: '14px', fontStyle: 'italic' }}>
-          Admins may enrol clients and post manual adjust transactions from a client profile — no order scanning, no automatic suggested points, and no redemption or client portal yet.
+          Admins may enrol clients, post manual adjust transactions, and record manual redemptions from available balance — no order scanning, no automatic suggested points, no RMS/invoice discount application, and no client portal yet.
         </p>
       </section>
     </div>

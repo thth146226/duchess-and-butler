@@ -59,6 +59,10 @@ From **Duchess Rewards → Clients → View**, admins open a modal with enrolmen
 
 Admins (`public.users.role = 'admin'`, matching RLS on `loyalty_transactions`) can record **manual** ledger rows from **View → Add points**. Each write inserts a single `loyalty_transactions` row with `transaction_type = 'adjust'` (add/remove as signed points and `value_pence`), status `pending` or `available` only — **not** redemptions (`redeem` / `redeemed` flows are untouched). No order scanning, no suggestions from CRMS jobs, no rewards engine against live orders, and **no portal** route, token visibility, or magic link exposure. Redemption workflows and `/rewards/:token` remain out of scope.
 
+## Manual redemption (Phase 2D)
+
+Admins (`public.users.role = 'admin'`, matching RLS on `loyalty_transactions`) can record **manual redemptions** from **View → Redeem**. Each redemption inserts a single `loyalty_transactions` row with `transaction_type = 'redeem'`, `status = 'redeemed'`, and negative `points` / `value_pence`. Redemption is blocked when available balance is zero and cannot exceed current available points. This workflow is ledger-only: it does **not** apply discounts to RMS or invoices automatically, does **not** trigger order/invoice writes, and does **not** expose any client portal route, token, or link.
+
 ## Needs Attention
 
 The rewards engine includes a conservative `Needs Attention` concept for unclear cases. In MVP foundation terms, this means:
