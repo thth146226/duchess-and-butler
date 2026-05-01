@@ -15,15 +15,11 @@ const C = {
   cardBg: '#FDFBF7',
 }
 
-function formatGBPFromPence(pence) {
-  const n = Number(pence)
-  if (!Number.isFinite(n)) return '£0'
-  return new Intl.NumberFormat('en-GB', {
-    style: 'currency',
-    currency: 'GBP',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
-  }).format(n / 100)
+/** Display-only: GBP from integer pence, always 2 decimal places (e.g. £2.50, -£1.00). */
+function formatCurrencyFromPence(valuePence) {
+  const amount = Number(valuePence || 0) / 100
+  const sign = amount < 0 ? '-' : ''
+  return `${sign}£${Math.abs(amount).toFixed(2)}`
 }
 
 /** URL-safe opaque token — 256 bits from CSPRG; not suitable for secrecy if logged, safe for uniqueness and future portal binds. */
@@ -676,7 +672,7 @@ export default function Loyalty() {
           { label: 'Enrolled Clients', value: loading ? '…' : String(metrics.enrolled) },
           { label: 'Available Points', value: loading ? '…' : metrics.available.toLocaleString('en-GB') },
           { label: 'Pending Points', value: loading ? '…' : metrics.pending.toLocaleString('en-GB') },
-          { label: 'Redeemed Value', value: loading ? '…' : formatGBPFromPence(metrics.redeemedPence) },
+          { label: 'Redeemed Value', value: loading ? '…' : formatCurrencyFromPence(metrics.redeemedPence) },
           { label: 'Needs Attention', value: loading ? '…' : String(metrics.needsCount) },
         ].map((card) => (
           <div
@@ -930,7 +926,7 @@ export default function Loyalty() {
                       <td style={td}>{displayTierFriendly(c.tier)}</td>
                       <td style={td}>{formatPointsUi(r.av)}</td>
                       <td style={td}>{formatPointsUi(r.pe)}</td>
-                      <td style={td}>{formatGBPFromPence(r.reP)}</td>
+                      <td style={td}>{formatCurrencyFromPence(r.reP)}</td>
                       <td style={td}>{c.status}</td>
                       <td style={{ ...td, color: C.graySoph }}>Not enabled yet</td>
                       <td style={td}>
@@ -1203,7 +1199,7 @@ export default function Loyalty() {
                       <div style={{ padding: '12px 14px', background: '#fff', borderRadius: '8px', border: `1px solid ${C.border}` }}>
                         <div style={{ fontSize: '11px', color: C.graySoph, fontWeight: 600, marginBottom: '6px' }}>Available reward value</div>
                         <div style={{ fontWeight: 600, color: C.charcoal }}>
-                          {formatGBPFromPence(estimateAvailableRewardPence(profileRollup.av, activeSettings))}
+                          {formatCurrencyFromPence(estimateAvailableRewardPence(profileRollup.av, activeSettings))}
                         </div>
                       </div>
                       <div style={{ padding: '12px 14px', background: '#fff', borderRadius: '8px', border: `1px solid ${C.border}` }}>
@@ -1212,7 +1208,7 @@ export default function Loyalty() {
                       </div>
                       <div style={{ padding: '12px 14px', background: '#fff', borderRadius: '8px', border: `1px solid ${C.border}` }}>
                         <div style={{ fontSize: '11px', color: C.graySoph, fontWeight: 600, marginBottom: '6px' }}>Redeemed value</div>
-                        <div style={{ fontWeight: 600, color: C.charcoal }}>{formatGBPFromPence(profileRollup.reP)}</div>
+                        <div style={{ fontWeight: 600, color: C.charcoal }}>{formatCurrencyFromPence(profileRollup.reP)}</div>
                       </div>
                       <div style={{ padding: '12px 14px', background: '#fff', borderRadius: '8px', border: `1px solid ${C.border}`, gridColumn: '1 / -1' }}>
                         <div style={{ fontSize: '11px', color: C.graySoph, fontWeight: 600, marginBottom: '6px' }}>Portal access</div>
@@ -1435,7 +1431,7 @@ export default function Loyalty() {
                                 <td style={td}>{row.transaction_type}</td>
                                 <td style={td}>{row.status}</td>
                                 <td style={td}>{formatPointsSigned(row.points)}</td>
-                                <td style={td}>{formatGBPFromPence(row.value_pence)}</td>
+                                <td style={td}>{formatCurrencyFromPence(row.value_pence)}</td>
                                 <td style={td}>{activityReasonSnippet(row)}</td>
                               </tr>
                             ))}
