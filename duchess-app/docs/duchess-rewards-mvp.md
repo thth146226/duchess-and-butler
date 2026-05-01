@@ -67,6 +67,10 @@ Admins (`public.users.role = 'admin'`, matching RLS on `loyalty_transactions`) c
 
 The Duchess Rewards admin **Reward activity** table uses **display-only** labels for transaction types and statuses (human-readable wording and small type badges); points and sterling values reflect the ledger (signed rows where applicable). A **details** helper composes reason, reference (`crms_ref`), event name and notes without repeating identical strings. **Needs attention** uses existing `needs_attention` / `needs_attention_reason` for read-only row highlighting only — schema and rollup logic are unchanged.
 
+## Transaction audit details (Phase 2F)
+
+From **Reward activity → View**, admins open a **read-only** ledger audit overlay for that row: identifiers, timestamps, signed points/value, reason, references, snapshot JSON, approval metadata, client name/email, needs-attention flags, and **`calculation_snapshot`** as monospace text — no writes and no portal or `portal_token` exposure.
+
 ## Needs Attention
 
 The rewards engine includes a conservative `Needs Attention` concept for unclear cases. In MVP foundation terms, this means:

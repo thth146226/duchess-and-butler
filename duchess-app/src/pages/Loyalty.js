@@ -190,6 +190,95 @@ function pillStyleForLedgerType(typ) {
   }
 }
 
+function pillStyleForStatusBadge(statusRaw) {
+  const s = String(statusRaw ?? '').trim().toLowerCase()
+  if (s === 'available')
+    return { bg: '#EEF4FA', border: '#B8CDE4', color: '#1F3E5F' }
+  if (s === 'redeemed')
+    return { bg: C.ivoryWarm, border: C.champagneMuted, color: C.charcoal }
+  if (s === 'pending' || s === 'suggested')
+    return { bg: '#FFFBEB', border: '#F59E0B', color: '#78350F' }
+  if (s === 'rejected' || s === 'cancelled')
+    return { bg: '#F5F5F5', border: C.grayFog, color: C.charcoalSoft }
+  return { bg: '#fff', border: C.grayFog, color: C.charcoalSoft }
+}
+
+/** Audit grid: omit row when value resolves to dash-only if desired — callers pass content */
+function LoyaltyAuditFieldRow({ label, children }) {
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'minmax(132px, 34%) 1fr',
+        gap: '8px 16px',
+        alignItems: 'start',
+        padding: '10px 0',
+        borderBottom: `1px solid ${C.border}`,
+      }}
+    >
+      <div
+        style={{
+          margin: 0,
+          fontSize: '11px',
+          fontWeight: 600,
+          textTransform: 'uppercase',
+          letterSpacing: '0.06em',
+          color: C.graySoph,
+        }}
+      >
+        {label}
+      </div>
+      <div
+        style={{
+          margin: 0,
+          fontSize: '14px',
+          color: C.charcoalSoft,
+          wordBreak: 'break-word',
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  )
+}
+
+/** Read-only audit field trim */
+function formatAuditDisplayValue(value) {
+  if (value === null || value === undefined) return '—'
+  const s = typeof value === 'string' ? value : String(value)
+  const t = s.trim()
+  return t.length ? t : '—'
+}
+
+/**
+ * Safe calculation_snapshot rendering for audit (no HTML injection).
+ * @returns {{ kind: 'empty' } | { kind: 'text', text: string }}
+ */
+function formatCalculationSnapshotDisplay(snapshot) {
+  if (snapshot === null || snapshot === undefined || snapshot === '')
+    return { kind: 'empty' }
+  if (typeof snapshot === 'object') {
+    try {
+      return { kind: 'text', text: JSON.stringify(snapshot, null, 2) }
+    } catch {
+      return { kind: 'text', text: String(snapshot) }
+    }
+  }
+  if (typeof snapshot === 'string') {
+    const t = snapshot.trim()
+    if (!t.length) return { kind: 'empty' }
+    try {
+      const parsed = JSON.parse(t)
+      if (parsed !== null && typeof parsed === 'object')
+        return { kind: 'text', text: JSON.stringify(parsed, null, 2) }
+    } catch {
+      /* plain string */
+    }
+    return { kind: 'text', text: t }
+  }
+  return { kind: 'text', text: String(snapshot) }
+}
+
 function formatPointsUi(n) {
   const x = Number(n) || 0
   return x.toLocaleString('en-GB')
@@ -252,6 +341,8 @@ export default function Loyalty() {
   const [profileTxRows, setProfileTxRows] = useState([])
   const [profileTxState, setProfileTxState] = useState('idle')
   const [profileActivityKey, setProfileActivityKey] = useState(0)
+  /** Transaction audit panel (Reward activity → View); read-only overlay */
+  const [auditTransactionId, setAuditTransactionId] = useState(null)
 
   const [adjustPanelOpen, setAdjustPanelOpen] = useState(false)
   const [adjustDirection, setAdjustDirection] = useState('add')
@@ -438,6 +529,7 @@ export default function Loyalty() {
     resetManualRedeemForm()
     setManualAdjustToast(null)
     setManualRedeemToast(null)
+    setAuditTransactionId(null)
     setProfileClientId(clientId)
   }, [resetManualAdjustForm, resetManualRedeemForm])
 
@@ -453,7 +545,12 @@ export default function Loyalty() {
     resetManualRedeemForm()
     setManualAdjustToast(null)
     setManualRedeemToast(null)
+    setAuditTransactionId(null)
   }, [resetManualAdjustForm, resetManualRedeemForm])
+
+  const closeTransactionAudit = useCallback(() => {
+    setAuditTransactionId(null)
+  }, [])
 
   const closeEnrollModal = useCallback(() => {
     if (enrollBusyRef.current) return
@@ -574,6 +671,10 @@ export default function Loyalty() {
       if (ev.key !== 'Escape') return
       if (enrollBusyRef.current) return
       if (adjustBusyRef.current) return
+      if (auditTransactionId) {
+        setAuditTransactionId(null)
+        return
+      }
       if (profileClientId && adjustPanelOpen) {
         setAdjustPanelOpen(false)
         resetManualAdjustForm()
@@ -595,7 +696,17 @@ export default function Loyalty() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [enrollOpen, profileClientId, adjustPanelOpen, redeemPanelOpen, resetEnrollForm, resetManualAdjustForm, resetManualRedeemForm, closeClientProfile])
+  }, [
+    enrollOpen,
+    profileClientId,
+    adjustPanelOpen,
+    redeemPanelOpen,
+    auditTransactionId,
+    resetEnrollForm,
+    resetManualAdjustForm,
+    resetManualRedeemForm,
+    closeClientProfile,
+  ])
 
   useEffect(() => {
     if (!profileClientId) {
@@ -610,7 +721,7 @@ export default function Loyalty() {
       const { data, error } = await supabase
         .from('loyalty_transactions')
         .select(
-          'id, created_at, transaction_type, status, points, value_pence, reason, event_name, crms_ref, notes, needs_attention, needs_attention_reason',
+          'id, created_at, transaction_type, status, points, value_pence, reason, event_name, crms_ref, notes, needs_attention, needs_attention_reason, available_at, approved_by, approved_at, created_by, calculation_snapshot',
         )
         .eq('loyalty_client_id', profileClientId)
         .order('created_at', { ascending: false })
@@ -677,6 +788,11 @@ export default function Loyalty() {
 
   const profileNeedsReview =
     profileTxState === 'ok' && profileTxRows.some((t) => t.needs_attention === true)
+
+  const auditTransaction = useMemo(() => {
+    if (!auditTransactionId) return null
+    return profileTxRows.find((r) => r.id === auditTransactionId) ?? null
+  }, [auditTransactionId, profileTxRows])
 
   async function submitManualAdjustment(e) {
     e.preventDefault()
@@ -1818,6 +1934,7 @@ export default function Loyalty() {
                               <th style={th}>Points</th>
                               <th style={th}>Value</th>
                               <th style={th}>Details</th>
+                              <th style={th}>Action</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1906,6 +2023,26 @@ export default function Loyalty() {
                                       </>
                                     )}
                                   </td>
+                                  <td style={{ ...td, verticalAlign: 'top' }}>
+                                    <button
+                                      type="button"
+                                      onClick={() => setAuditTransactionId(row.id)}
+                                      style={{
+                                        background: 'transparent',
+                                        border: 'none',
+                                        color: C.champagneMuted,
+                                        fontWeight: 600,
+                                        fontSize: '13px',
+                                        cursor: 'pointer',
+                                        textDecoration: 'underline',
+                                        textUnderlineOffset: '3px',
+                                        padding: 0,
+                                        fontFamily: "'DM Sans', sans-serif",
+                                      }}
+                                    >
+                                      View
+                                    </button>
+                                  </td>
                                 </tr>
                               )
                             })}
@@ -1920,6 +2057,255 @@ export default function Loyalty() {
           </div>
         </div>
       )}
+
+      {profileClientId && auditTransactionId ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="loyalty-audit-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 225,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+            background: 'rgba(26, 26, 26, 0.5)',
+          }}
+          onClick={(ev) => {
+            if (ev.target === ev.currentTarget) closeTransactionAudit()
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: '520px',
+              maxHeight: '90vh',
+              overflow: 'auto',
+              background: '#FDFBF7',
+              borderRadius: '12px',
+              border: `1px solid ${C.border}`,
+              boxShadow: '0 20px 56px rgba(26,26,26,0.18)',
+            }}
+            onClick={(ev) => ev.stopPropagation()}
+          >
+            <div
+              style={{
+                padding: '18px 20px 12px',
+                borderBottom: `1px solid ${C.border}`,
+                display: 'flex',
+                justifyContent: 'space-between',
+                gap: '12px',
+                alignItems: 'flex-start',
+              }}
+            >
+              <div>
+                <h3
+                  id="loyalty-audit-title"
+                  style={{
+                    margin: 0,
+                    fontFamily: "'Cormorant Garamond', serif",
+                    fontSize: '22px',
+                    fontWeight: 600,
+                    color: C.charcoal,
+                  }}
+                >
+                  Transaction audit
+                </h3>
+                <p style={{ margin: '6px 0 0', fontSize: '12px', color: C.graySoph, letterSpacing: '0.04em', textTransform: 'uppercase', fontWeight: 600 }}>
+                  Read-only ledger details
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="Close transaction audit"
+                onClick={closeTransactionAudit}
+                style={{
+                  flexShrink: 0,
+                  width: '34px',
+                  height: '34px',
+                  borderRadius: '6px',
+                  border: `1px solid ${C.grayFog}`,
+                  background: '#fff',
+                  cursor: 'pointer',
+                  fontSize: '18px',
+                  lineHeight: 1,
+                  color: C.graySoph,
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <div style={{ padding: '16px 20px 20px' }}>
+              {!auditTransaction && profileTxState === 'loading' ? (
+                <>
+                  <p style={{ margin: 0, fontSize: '14px', color: C.graySoph }}>Loading transaction…</p>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px' }}>
+                    <button type="button" onClick={closeTransactionAudit} style={{ ...btnSecondary, fontSize: '13px', cursor: 'pointer' }}>
+                      Close
+                    </button>
+                  </div>
+                </>
+              ) : !auditTransaction && profileTxState === 'error' ? (
+                <>
+                  <p style={{ margin: 0, fontSize: '14px', color: '#7D2B2E' }}>Reward activity could not be loaded. Close this panel and try again.</p>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px' }}>
+                    <button type="button" onClick={closeTransactionAudit} style={{ ...btnSecondary, fontSize: '13px', cursor: 'pointer' }}>
+                      Close
+                    </button>
+                  </div>
+                </>
+              ) : !auditTransaction && profileTxState === 'ok' ? (
+                <>
+                  <p style={{ margin: 0, fontSize: '14px', color: '#7D2B2E' }}>
+                    This transaction is not in the loaded activity list. Close and reopen the profile to refresh.
+                  </p>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px' }}>
+                    <button type="button" onClick={closeTransactionAudit} style={{ ...btnSecondary, fontSize: '13px', cursor: 'pointer' }}>
+                      Close
+                    </button>
+                  </div>
+                </>
+              ) : auditTransaction ? (
+                <>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '16px', alignItems: 'center' }}>
+                    {(() => {
+                      const p = pillStyleForLedgerType(auditTransaction.transaction_type)
+                      return (
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            fontSize: '10px',
+                            fontWeight: 600,
+                            letterSpacing: '0.05em',
+                            textTransform: 'uppercase',
+                            padding: '4px 10px',
+                            borderRadius: '5px',
+                            border: `1px solid ${p.border}`,
+                            background: p.bg,
+                            color: p.color,
+                          }}
+                        >
+                          {p.label}
+                        </span>
+                      )
+                    })()}
+                    {(() => {
+                      const s = pillStyleForStatusBadge(auditTransaction.status)
+                      return (
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            fontSize: '10px',
+                            fontWeight: 600,
+                            letterSpacing: '0.05em',
+                            textTransform: 'uppercase',
+                            padding: '4px 10px',
+                            borderRadius: '5px',
+                            border: `1px solid ${s.border}`,
+                            background: s.bg,
+                            color: s.color,
+                          }}
+                        >
+                          {formatTransactionStatusLabel(auditTransaction.status)}
+                        </span>
+                      )
+                    })()}
+                  </div>
+
+                  <div style={{ margin: 0 }}>
+                    <LoyaltyAuditFieldRow label="Transaction ID">{formatAuditDisplayValue(auditTransaction.id)}</LoyaltyAuditFieldRow>
+                    <LoyaltyAuditFieldRow label="Created">{fmtActivityDate(auditTransaction.created_at)}</LoyaltyAuditFieldRow>
+                    <LoyaltyAuditFieldRow label="Type">{formatTransactionTypeLabel(auditTransaction.transaction_type)}</LoyaltyAuditFieldRow>
+                    <LoyaltyAuditFieldRow label="Status">{formatTransactionStatusLabel(auditTransaction.status)}</LoyaltyAuditFieldRow>
+                    <LoyaltyAuditFieldRow label="Points">{formatPointsSigned(auditTransaction.points)}</LoyaltyAuditFieldRow>
+                    <LoyaltyAuditFieldRow label="Value">{formatCurrencyFromPence(auditTransaction.value_pence)}</LoyaltyAuditFieldRow>
+                    <LoyaltyAuditFieldRow label="Reason">{formatAuditDisplayValue(auditTransaction.reason)}</LoyaltyAuditFieldRow>
+                    <LoyaltyAuditFieldRow label="Notes">{formatAuditDisplayValue(auditTransaction.notes)}</LoyaltyAuditFieldRow>
+                    <LoyaltyAuditFieldRow label="Applied reference (crms_ref)">{formatAuditDisplayValue(auditTransaction.crms_ref)}</LoyaltyAuditFieldRow>
+                    <LoyaltyAuditFieldRow label="Event (event_name)">{formatAuditDisplayValue(auditTransaction.event_name)}</LoyaltyAuditFieldRow>
+                    <LoyaltyAuditFieldRow label="Needs attention">
+                      {auditTransaction.needs_attention === true ? 'Yes' : 'No'}
+                    </LoyaltyAuditFieldRow>
+                    <LoyaltyAuditFieldRow label="Needs attention reason">
+                      {formatAuditDisplayValue(auditTransaction.needs_attention_reason)}
+                    </LoyaltyAuditFieldRow>
+                    <LoyaltyAuditFieldRow label="Available at">
+                      {auditTransaction.available_at ? fmtActivityDate(auditTransaction.available_at) : '—'}
+                    </LoyaltyAuditFieldRow>
+                    <LoyaltyAuditFieldRow label="Approved by">{formatAuditDisplayValue(auditTransaction.approved_by)}</LoyaltyAuditFieldRow>
+                    <LoyaltyAuditFieldRow label="Approved at">
+                      {auditTransaction.approved_at ? fmtActivityDate(auditTransaction.approved_at) : '—'}
+                    </LoyaltyAuditFieldRow>
+                    <LoyaltyAuditFieldRow label="Created by">{formatAuditDisplayValue(auditTransaction.created_by)}</LoyaltyAuditFieldRow>
+                  </div>
+
+                  <div style={{ marginTop: '14px', paddingTop: '6px', borderTop: `1px solid ${C.border}` }}>
+                    <div style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.08em', color: C.graySoph, marginBottom: '10px', textTransform: 'uppercase' }}>
+                      Client
+                    </div>
+                    <div style={{ margin: 0 }}>
+                      <LoyaltyAuditFieldRow label="Client name">{formatAuditDisplayValue(profileClient?.client_name)}</LoyaltyAuditFieldRow>
+                      <LoyaltyAuditFieldRow label="Client email">{formatAuditDisplayValue(profileClient?.client_email)}</LoyaltyAuditFieldRow>
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: '18px' }}>
+                    <div style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.08em', color: C.graySoph, marginBottom: '8px', textTransform: 'uppercase' }}>
+                      Calculation snapshot
+                    </div>
+                    {(() => {
+                      const snap = formatCalculationSnapshotDisplay(auditTransaction.calculation_snapshot)
+                      if (snap.kind === 'empty') {
+                        return (
+                          <p style={{ margin: 0, fontSize: '13px', color: C.graySoph, fontStyle: 'italic' }}>
+                            No calculation snapshot recorded.
+                          </p>
+                        )
+                      }
+                      return (
+                        <pre
+                          style={{
+                            margin: 0,
+                            padding: '14px 16px',
+                            borderRadius: '8px',
+                            background: '#1A1A1A',
+                            color: '#E8E6E0',
+                            fontSize: '12px',
+                            lineHeight: 1.5,
+                            overflowX: 'auto',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                            fontFamily: "ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, monospace",
+                            border: `1px solid ${C.charcoal}`,
+                            maxHeight: '280px',
+                          }}
+                        >
+                          {snap.text}
+                        </pre>
+                      )
+                    })()}
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px' }}>
+                    <button type="button" onClick={closeTransactionAudit} style={{ ...btnSecondary, fontSize: '13px', cursor: 'pointer' }}>
+                      Close
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
+                  <button type="button" onClick={closeTransactionAudit} style={{ ...btnSecondary, fontSize: '13px', cursor: 'pointer' }}>
+                    Close
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Workflow */}
       <section style={{ marginBottom: '24px' }}>
