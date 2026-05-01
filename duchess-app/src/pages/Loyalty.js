@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
 const C = {
@@ -23,6 +23,21 @@ function formatGBPFromPence(pence) {
     minimumFractionDigits: 0,
     maximumFractionDigits: 2,
   }).format(n / 100)
+}
+
+/** URL-safe opaque token — 256 bits from CSPRG; not suitable for secrecy if logged, safe for uniqueness and future portal binds. */
+function generatePortalToken() {
+  const bytes = new Uint8Array(32)
+  crypto.getRandomValues(bytes)
+  let binary = ''
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+function displayTierFriendly(tier) {
+  const t = (tier || '').trim().toLowerCase()
+  if (t === 'standard') return 'Pearl'
+  return tier || '—'
 }
 
 function aggregateTransactions(rows) {
@@ -60,6 +75,14 @@ export default function Loyalty() {
   const [needsRows, setNeedsRows] = useState([])
   const [clientsRows, setClientsRows] = useState([])
   const [allTxs, setAllTxs] = useState([])
+  const [enrollOpen, setEnrollOpen] = useState(false)
+  const [enrollName, setEnrollName] = useState('')
+  const [enrollEmail, setEnrollEmail] = useState('')
+  const [enrollCrms, setEnrollCrms] = useState('')
+  const [enrollSubmitting, setEnrollSubmitting] = useState(false)
+  const [enrollFormError, setEnrollFormError] = useState('')
+  const [enrollBanner, setEnrollBanner] = useState(null)
+  const enrollBusyRef = useRef(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -147,7 +170,7 @@ export default function Loyalty() {
 
     const { data: cliData, error: cliErr } = await supabase
       .from('loyalty_clients')
-      .select('id, client_name, tier, status, created_at')
+      .select('id, client_name, client_email, crms_client_id, tier, status, created_at')
       .order('created_at', { ascending: false })
       .limit(50)
 
@@ -187,6 +210,144 @@ export default function Loyalty() {
   useEffect(() => {
     load()
   }, [load])
+
+  const resetEnrollForm = useCallback(() => {
+    setEnrollName('')
+    setEnrollEmail('')
+    setEnrollCrms('')
+    setEnrollFormError('')
+  }, [])
+
+  const openEnrollModal = useCallback(() => {
+    setEnrollBanner(null)
+    resetEnrollForm()
+    setEnrollOpen(true)
+  }, [resetEnrollForm])
+
+  const closeEnrollModal = useCallback(() => {
+    if (enrollBusyRef.current) return
+    setEnrollOpen(false)
+    resetEnrollForm()
+  }, [resetEnrollForm])
+
+  function findDuplicatesInLoaded(emailNorm, crmsTrim) {
+    if (emailNorm) {
+      const hit = clientsRows.some(
+        (c) =>
+          typeof c.client_email === 'string' &&
+          c.client_email.trim().toLowerCase() === emailNorm,
+      )
+      if (hit) return { field: 'email' }
+    }
+    if (crmsTrim && crmsTrim.length > 0) {
+      const hit = clientsRows.some(
+        (c) =>
+          c.crms_client_id != null &&
+          String(c.crms_client_id).trim() === crmsTrim,
+      )
+      if (hit) return { field: 'crms' }
+    }
+    return null
+  }
+
+  function enrollmentPermissionDenied(err) {
+    const code = err?.code
+    const msg = (err?.message || '').toLowerCase()
+    if (code === '42501') return true
+    if (code === 'PGRST301') return true
+    if (msg.includes('permission') || msg.includes('rls')) return true
+    return false
+  }
+
+  async function submitEnrollment(e) {
+    e.preventDefault()
+    setEnrollFormError('')
+    setEnrollBanner(null)
+    const nameTrim = enrollName.trim()
+    const emailTrim = enrollEmail.trim()
+    const crmsTrim = enrollCrms.trim()
+    const emailNorm = emailTrim.length ? emailTrim.toLowerCase() : ''
+
+    if (!nameTrim.length) {
+      setEnrollFormError('Client name is required.')
+      return
+    }
+
+    const dup = findDuplicatesInLoaded(emailNorm, crmsTrim)
+    if (dup?.field === 'email') {
+      setEnrollFormError('Another rewards client already uses this email address.')
+      return
+    }
+    if (dup?.field === 'crms') {
+      setEnrollFormError('Another rewards client already uses this CRMS client ID.')
+      return
+    }
+
+    enrollBusyRef.current = true
+    setEnrollSubmitting(true)
+
+    let insertError = null
+    try {
+      insertLoop: for (let attempt = 0; attempt < 2; attempt++) {
+        const portal_token = generatePortalToken()
+        const { error } = await supabase.from('loyalty_clients').insert({
+          client_name: nameTrim,
+          client_email: emailTrim.length ? emailTrim : null,
+          crms_client_id: crmsTrim.length ? crmsTrim : null,
+          portal_token,
+          status: 'active',
+          tier: 'standard',
+        })
+        if (!error) {
+          insertError = null
+          break insertLoop
+        }
+        insertError = error
+        if (String(error.code) === '23505' && attempt === 0) continue
+        break insertLoop
+      }
+    } finally {
+      enrollBusyRef.current = false
+      setEnrollSubmitting(false)
+    }
+
+    if (insertError) {
+      console.warn('[duchess-rewards] client enrolment failed')
+      if (enrollmentPermissionDenied(insertError)) {
+        setEnrollFormError('You do not have permission to enrol rewards clients.')
+      } else {
+        setEnrollFormError('Could not enrol this client. Please try again.')
+      }
+      return
+    }
+
+    setEnrollOpen(false)
+    resetEnrollForm()
+    setEnrollBanner({ kind: 'ok', message: 'Client enrolled in Duchess Rewards.' })
+    try {
+      await load()
+    } catch {
+      console.warn('[duchess-rewards] loyalty clients refresh failed')
+    }
+  }
+
+  useEffect(() => {
+    if (!enrollBanner || enrollBanner.kind !== 'ok') return
+    const t = window.setTimeout(() => setEnrollBanner(null), 6000)
+    return () => clearTimeout(t)
+  }, [enrollBanner])
+
+  useEffect(() => {
+    if (!enrollOpen) return
+    const onKey = (ev) => {
+      if (ev.key !== 'Escape') return
+      if (enrollBusyRef.current) return
+      setEnrollOpen(false)
+      resetEnrollForm()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [enrollOpen, resetEnrollForm])
 
   const badgeLabel = useMemo(() => {
     if (tablesActive) return 'Database active'
@@ -453,12 +614,13 @@ export default function Loyalty() {
           <h2 style={{ ...sectionTitle, marginBottom: 0 }}>Clients</h2>
           <button
             type="button"
-            disabled
+            disabled={!tablesActive || loading}
+            onClick={openEnrollModal}
             style={{
-              opacity: 0.45,
-              cursor: 'not-allowed',
-              background: C.charcoalSoft,
-              color: C.ivory,
+              opacity: tablesActive && !loading ? 1 : 0.45,
+              cursor: tablesActive && !loading ? 'pointer' : 'not-allowed',
+              background: tablesActive ? C.champagneMuted : C.charcoalSoft,
+              color: '#fff',
               border: 'none',
               borderRadius: '6px',
               padding: '8px 16px',
@@ -467,9 +629,25 @@ export default function Loyalty() {
               letterSpacing: '0.04em',
             }}
           >
-            Add client — coming soon
+            Add client
           </button>
         </div>
+        {enrollBanner?.kind === 'ok' && (
+          <div
+            role="status"
+            style={{
+              marginBottom: '14px',
+              padding: '12px 16px',
+              borderRadius: '8px',
+              border: `1px solid ${C.champagneMuted}`,
+              background: C.ivoryWarm,
+              fontSize: '14px',
+              color: C.charcoalSoft,
+            }}
+          >
+            {enrollBanner.message}
+          </div>
+        )}
         {clientsRows.length === 0 ? (
           <div style={emptyBox}>
             {tablesActive
@@ -482,6 +660,7 @@ export default function Loyalty() {
               <thead>
                 <tr style={{ background: C.ivoryWarm, textAlign: 'left', color: C.graySoph, textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: '10px', fontWeight: 600 }}>
                   <th style={th}>Client</th>
+                  <th style={th}>Email</th>
                   <th style={th}>Tier</th>
                   <th style={th}>Available</th>
                   <th style={th}>Pending</th>
@@ -496,12 +675,13 @@ export default function Loyalty() {
                   return (
                     <tr key={c.id} style={{ borderTop: `1px solid ${C.border}` }}>
                       <td style={td}>{c.client_name}</td>
-                      <td style={td}>{c.tier || '—'}</td>
+                      <td style={td}>{c.client_email || '—'}</td>
+                      <td style={td}>{displayTierFriendly(c.tier)}</td>
                       <td style={td}>{r.av.toLocaleString('en-GB')}</td>
                       <td style={td}>{r.pe.toLocaleString('en-GB')}</td>
                       <td style={td}>{formatGBPFromPence(r.reP)}</td>
                       <td style={td}>{c.status}</td>
-                      <td style={{ ...td, color: C.graySoph }}>—</td>
+                      <td style={{ ...td, color: C.graySoph }}>Not enabled yet</td>
                     </tr>
                   )
                 })}
@@ -510,6 +690,139 @@ export default function Loyalty() {
           </div>
         )}
       </section>
+
+      {enrollOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="enroll-modal-title"
+          data-enroll-modal
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 200,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+            background: 'rgba(26, 26, 26, 0.45)',
+          }}
+          onClick={(ev) => {
+            if (ev.target === ev.currentTarget && !enrollBusyRef.current) closeEnrollModal()
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: '480px',
+              background: '#FDFBF7',
+              borderRadius: '12px',
+              border: `1px solid ${C.border}`,
+              boxShadow: '0 16px 48px rgba(26,26,26,0.12)',
+              maxHeight: '90vh',
+              overflow: 'auto',
+            }}
+          >
+            <div style={{ padding: '20px 22px 14px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px' }}>
+              <h3 id="enroll-modal-title" style={{ margin: 0, fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', fontWeight: 600, color: C.charcoal }}>
+                Enrol rewards client
+              </h3>
+              <button
+                type="button"
+                aria-label="Close"
+                disabled={enrollSubmitting}
+                onClick={closeEnrollModal}
+                style={{
+                  flexShrink: 0,
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '6px',
+                  border: `1px solid ${C.grayFog}`,
+                  background: '#fff',
+                  cursor: enrollSubmitting ? 'not-allowed' : 'pointer',
+                  fontSize: '16px',
+                  lineHeight: 1,
+                  color: C.graySoph,
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <form onSubmit={submitEnrollment} style={{ padding: '20px 22px 22px' }}>
+              <p style={{ margin: '0 0 18px', fontSize: '13px', color: C.graySoph, lineHeight: 1.55 }}>
+                Create a Duchess Rewards loyalty record. No points or portal access are granted yet.
+              </p>
+
+              <label style={labelStyles}>
+                <span style={labelSpan}>Client name <span style={{ color: '#7D2B2E' }}>*</span></span>
+                <input
+                  autoFocus
+                  value={enrollName}
+                  onChange={(e) => setEnrollName(e.target.value)}
+                  disabled={enrollSubmitting}
+                  placeholder="e.g. Acme Weddings Ltd"
+                  style={inputStyles}
+                />
+              </label>
+
+              <label style={{ ...labelStyles, marginTop: '14px' }}>
+                <span style={labelSpan}>Email</span>
+                <input
+                  type="email"
+                  value={enrollEmail}
+                  onChange={(e) => setEnrollEmail(e.target.value)}
+                  disabled={enrollSubmitting}
+                  placeholder="Optional — recommended for receipts"
+                  style={inputStyles}
+                />
+              </label>
+
+              <label style={{ ...labelStyles, marginTop: '14px' }}>
+                <span style={labelSpan}>CRMS client ID</span>
+                <input
+                  value={enrollCrms}
+                  onChange={(e) => setEnrollCrms(e.target.value)}
+                  disabled={enrollSubmitting}
+                  placeholder="Optional"
+                  style={inputStyles}
+                />
+              </label>
+
+              <div style={{ marginTop: '14px', padding: '12px 14px', background: '#fff', border: `1px solid ${C.border}`, borderRadius: '8px' }}>
+                <div style={{ fontSize: '12px', color: C.graySoph, marginBottom: '6px', fontWeight: 600 }}>Tier</div>
+                <div style={{ fontSize: '14px', color: C.charcoalSoft }}>Pearl <span style={{ color: C.graySoph }}>(standard entry tier · stored as standard)</span></div>
+                <div style={{ fontSize: '12px', color: C.graySoph, marginTop: '10px', fontWeight: 600 }}>Status</div>
+                <div style={{ fontSize: '14px', color: C.charcoalSoft }}>Active</div>
+              </div>
+
+              {enrollFormError ? (
+                <div role="alert" style={{ marginTop: '16px', fontSize: '13px', color: '#7D2B2E' }}>
+                  {enrollFormError}
+                </div>
+              ) : null}
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '22px' }}>
+                <button
+                  type="button"
+                  disabled={enrollSubmitting}
+                  onClick={closeEnrollModal}
+                  style={{
+                    ...btnSecondary,
+                    opacity: enrollSubmitting ? 0.5 : 1,
+                    cursor: enrollSubmitting ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  Cancel
+                </button>
+                <button type="submit" disabled={enrollSubmitting} style={{ ...btnPrimary, opacity: enrollSubmitting ? 0.7 : 1, cursor: enrollSubmitting ? 'wait' : 'pointer' }}>
+                  {enrollSubmitting ? 'Enrolling…' : 'Enrol client'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Workflow */}
       <section style={{ marginBottom: '24px' }}>
@@ -521,7 +834,7 @@ export default function Loyalty() {
           <li>Client can later request redemption.</li>
         </ol>
         <p style={{ ...sectionMuted, marginTop: '14px', fontStyle: 'italic' }}>
-          This admin shell does not scan jobs, calculate suggestions, approve, or redeem — Phase 1C is read-only and placeholder-first.
+          Admins may manually enrol loyalty clients — no orders are scanned and no reward points are created automatically. Approval, redemption, and portal access are not wired yet.
         </p>
       </section>
     </div>
@@ -555,3 +868,38 @@ const emptyBox = {
 
 const th = { padding: '12px 14px' }
 const td = { padding: '12px 14px', color: C.charcoalSoft }
+
+const labelStyles = { display: 'block' }
+const labelSpan = { display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '6px', color: C.charcoalSoft }
+const inputStyles = {
+  width: '100%',
+  boxSizing: 'border-box',
+  padding: '10px 12px',
+  borderRadius: '8px',
+  border: `1px solid ${C.grayFog}`,
+  fontSize: '14px',
+  fontFamily: "'DM Sans', sans-serif",
+  background: '#fff',
+}
+
+const btnPrimary = {
+  background: C.champagneMuted,
+  color: '#fff',
+  border: 'none',
+  borderRadius: '8px',
+  padding: '10px 20px',
+  fontWeight: 600,
+  fontSize: '13px',
+  fontFamily: "'DM Sans', sans-serif",
+}
+
+const btnSecondary = {
+  background: 'transparent',
+  color: C.charcoalSoft,
+  border: `1px solid ${C.border}`,
+  borderRadius: '8px',
+  padding: '10px 18px',
+  fontWeight: 600,
+  fontSize: '13px',
+  fontFamily: "'DM Sans', sans-serif",
+}

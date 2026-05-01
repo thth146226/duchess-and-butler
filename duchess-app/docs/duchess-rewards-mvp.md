@@ -47,6 +47,10 @@ Points become eligible to become available after the event date delay. For MVP, 
 
 Manual approval is mandatory before points can become `available`. This phase does not make any points available automatically.
 
+## Manual client enrolment (Phase 2A)
+
+Admins (`public.users.role = 'admin'`, matching RLS on `loyalty_clients`) can create loyalty client rows from **Duchess Rewards → Add client**. The database stores **`tier = 'standard'`** (entry tier); the admin UI labels this as **Pearl**. **No** loyalty transactions are created; **no** points are calculated from orders or the rewards engine in this step; a **cryptographic `portal_token`** is generated for future portal use only and **must not** be exposed as a public link in MVP admin.
+
 ## Needs Attention
 
 The rewards engine includes a conservative `Needs Attention` concept for unclear cases. In MVP foundation terms, this means:
