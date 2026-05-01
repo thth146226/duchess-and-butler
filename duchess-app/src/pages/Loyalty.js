@@ -49,6 +49,7 @@ function aggregateTransactions(rows) {
 export default function Loyalty() {
   const [loading, setLoading] = useState(true)
   const [tablesActive, setTablesActive] = useState(false)
+  const [activeSettings, setActiveSettings] = useState(null)
   const [metrics, setMetrics] = useState({
     enrolled: 0,
     available: 0,
@@ -62,6 +63,7 @@ export default function Loyalty() {
 
   const load = useCallback(async () => {
     setLoading(true)
+    setActiveSettings(null)
     const fallback = {
       enrolled: 0,
       available: 0,
@@ -77,6 +79,7 @@ export default function Loyalty() {
     if (clientsErr) {
       console.warn('[duchess-rewards] loyalty tables unavailable')
       setTablesActive(false)
+      setActiveSettings(null)
       setMetrics(fallback)
       setNeedsRows([])
       setClientsRows([])
@@ -92,6 +95,7 @@ export default function Loyalty() {
     if (countErr) {
       console.warn('[duchess-rewards] loyalty tables unavailable')
       setTablesActive(false)
+      setActiveSettings(null)
       setMetrics(fallback)
       setNeedsRows([])
       setClientsRows([])
@@ -109,12 +113,28 @@ export default function Loyalty() {
     if (txsErr) {
       console.warn('[duchess-rewards] loyalty tables unavailable')
       setTablesActive(false)
+      setActiveSettings(null)
       setMetrics({ ...fallback, enrolled: enrolled ?? 0 })
       setNeedsRows([])
       setClientsRows([])
       setAllTxs([])
       setLoading(false)
       return
+    }
+
+    const { data: setData, error: setErr } = await supabase
+      .from('loyalty_settings')
+      .select(
+        'point_value_pence, base_reward_percent, linen_bonus_percent, chair_bonus_percent, furniture_bonus_percent, availability_delay_days',
+      )
+      .eq('active', true)
+      .limit(1)
+
+    if (!setErr && setData?.length) {
+      setActiveSettings(setData[0])
+    } else {
+      setActiveSettings(null)
+      if (setErr) console.warn('[duchess-rewards] loyalty settings read skipped')
     }
 
     const txRows = txs || []
@@ -168,10 +188,10 @@ export default function Loyalty() {
     load()
   }, [load])
 
-  const badgeLabel = useMemo(
-    () => (tablesActive ? 'Foundation ready' : 'Admin preview'),
-    [tablesActive],
-  )
+  const badgeLabel = useMemo(() => {
+    if (tablesActive) return 'Database active'
+    return 'Admin preview'
+  }, [tablesActive])
 
   const clientRollups = useMemo(() => {
     const m = {}
@@ -266,30 +286,124 @@ export default function Loyalty() {
         ))}
       </div>
 
-      {/* Foundation / setup */}
-      <div
-        style={{
-          background: `linear-gradient(135deg, ${C.ivory} 0%, ${C.ivoryWarm} 100%)`,
-          border: `1px solid ${C.border}`,
-          borderLeft: `4px solid ${C.champagne}`,
-          borderRadius: '10px',
-          padding: '20px 22px',
-          marginBottom: '28px',
-        }}
-      >
-        <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '20px', fontWeight: 600, color: C.charcoal, marginBottom: '10px' }}>
-          Duchess Rewards foundation
-        </div>
-        <p style={{ margin: 0, fontSize: '14px', color: C.graySoph, lineHeight: 1.6 }}>
-          The database foundation has been prepared in the repo. Apply the reviewed SQL file when ready to activate live loyalty data:{' '}
-          <code style={{ background: 'rgba(26,26,26,0.06)', padding: '2px 6px', borderRadius: '4px', fontSize: '13px' }}>src/database/duchess_rewards_foundation.sql</code>
-        </p>
-        {!tablesActive && !loading && (
-          <p style={{ margin: '14px 0 0', fontSize: '14px', color: C.charcoalSoft, fontWeight: 500 }}>
-            Loyalty tables are not active yet. Apply the Duchess Rewards foundation SQL to enable live data.
+      {/* Foundation / database status */}
+      {!loading && tablesActive && (
+        <div
+          style={{
+            background: `linear-gradient(135deg, #F8F9F7 0%, ${C.ivoryWarm} 100%)`,
+            border: `1px solid ${C.border}`,
+            borderLeft: `4px solid ${C.champagneMuted}`,
+            borderRadius: '10px',
+            padding: '20px 22px',
+            marginBottom: '20px',
+          }}
+        >
+          <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '20px', fontWeight: 600, color: C.charcoal, marginBottom: '10px' }}>
+            Duchess Rewards database active
+          </div>
+          <p style={{ margin: 0, fontSize: '14px', color: C.graySoph, lineHeight: 1.6, maxWidth: '720px' }}>
+            The loyalty foundation is active. You can now begin enrolling clients and reviewing reward activity once the next workflow steps are enabled.
           </p>
-        )}
-      </div>
+          <ul style={{ margin: '16px 0 0', paddingLeft: '20px', fontSize: '13px', color: C.charcoalSoft, lineHeight: 1.85, listStyle: 'disc' }}>
+            <li style={{ marginBottom: '4px' }}><strong style={{ fontWeight: 600, color: C.charcoal }}>Foundation SQL:</strong> Applied</li>
+            <li style={{ marginBottom: '4px' }}><strong style={{ fontWeight: 600, color: C.charcoal }}>RLS:</strong> Active</li>
+            <li style={{ marginBottom: '4px' }}><strong style={{ fontWeight: 600, color: C.charcoal }}>Access:</strong> Admin only</li>
+            <li><strong style={{ fontWeight: 600, color: C.charcoal }}>Client portal:</strong> Not enabled yet</li>
+          </ul>
+        </div>
+      )}
+
+      {!loading && !tablesActive && (
+        <div
+          style={{
+            background: `linear-gradient(135deg, ${C.ivory} 0%, ${C.ivoryWarm} 100%)`,
+            border: `1px solid ${C.border}`,
+            borderLeft: `4px solid ${C.champagne}`,
+            borderRadius: '10px',
+            padding: '20px 22px',
+            marginBottom: '28px',
+          }}
+        >
+          <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '20px', fontWeight: 600, color: C.charcoal, marginBottom: '10px' }}>
+            Duchess Rewards foundation
+          </div>
+          <p style={{ margin: 0, fontSize: '14px', color: C.graySoph, lineHeight: 1.6 }}>
+            The database scripts are prepared in the repo for manual Supabase setup. Apply the reviewed SQL{' '}
+            <strong style={{ fontWeight: 600, color: C.charcoalSoft }}>in this order</strong> when ready to activate loyalty data:
+          </p>
+          <ul style={{ margin: '14px 0 0', paddingLeft: '20px', fontSize: '13px', color: C.graySoph, lineHeight: 1.75 }}>
+            <li style={{ marginBottom: '6px' }}>
+              <code style={{ background: 'rgba(26,26,26,0.06)', padding: '2px 6px', borderRadius: '4px', fontSize: '13px' }}>src/database/duchess_rewards_foundation.sql</code>{' '}
+              — tables, indexes and seed settings
+            </li>
+            <li>
+              <code style={{ background: 'rgba(26,26,26,0.06)', padding: '2px 6px', borderRadius: '4px', fontSize: '13px' }}>src/database/duchess_rewards_rls.sql</code>{' '}
+              — row level security before production reads/writes from the admin app
+            </li>
+          </ul>
+          <p style={{ margin: '14px 0 0', fontSize: '14px', color: C.charcoalSoft, fontWeight: 500 }}>
+            Loyalty tables are not active from this workspace yet. Metrics above show zeros until connectivity and migration are confirmed.
+          </p>
+        </div>
+      )}
+
+      {/* Active settings preview (read-only) */}
+      {loading ? null : tablesActive && activeSettings ? (
+        <div
+          style={{
+            border: `1px solid ${C.border}`,
+            borderRadius: '10px',
+            padding: '16px 20px',
+            marginBottom: '28px',
+            background: '#fff',
+          }}
+        >
+          <div style={{ fontSize: '11px', letterSpacing: '0.1em', textTransform: 'uppercase', color: C.graySoph, fontWeight: 600, marginBottom: '12px' }}>
+            Active programme settings · read-only
+          </div>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+              gap: '10px 20px',
+              fontSize: '13px',
+              color: C.charcoalSoft,
+            }}
+          >
+            <div>
+              <strong style={{ color: C.charcoal, fontWeight: 600 }}>Point value</strong>
+              <div>
+                {(() => {
+                  const pv = Number(activeSettings.point_value_pence)
+                  const v = Number.isFinite(pv) ? pv : 0.5
+                  const display = Number.isInteger(v) ? String(v) : String(v).replace(/\.?0+$/, '')
+                  return <>1 point = {display}p</>
+                })()}
+              </div>
+            </div>
+            <div>
+              <strong style={{ color: C.charcoal, fontWeight: 600 }}>Base reward</strong>
+              <div>{Number(activeSettings.base_reward_percent) || 3}%</div>
+            </div>
+            <div>
+              <strong style={{ color: C.charcoal, fontWeight: 600 }}>Linen bonus</strong>
+              <div>{Number(activeSettings.linen_bonus_percent) || 20}%</div>
+            </div>
+            <div>
+              <strong style={{ color: C.charcoal, fontWeight: 600 }}>Chair bonus</strong>
+              <div>{Number(activeSettings.chair_bonus_percent) || 15}%</div>
+            </div>
+            <div>
+              <strong style={{ color: C.charcoal, fontWeight: 600 }}>Furniture bonus</strong>
+              <div>{Number(activeSettings.furniture_bonus_percent) || 15}%</div>
+            </div>
+            <div>
+              <strong style={{ color: C.charcoal, fontWeight: 600 }}>Availability delay</strong>
+              <div>{Number(activeSettings.availability_delay_days) || 3} days</div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Needs Attention */}
       <section style={{ marginBottom: '32px' }}>
@@ -358,7 +472,9 @@ export default function Loyalty() {
         </div>
         {clientsRows.length === 0 ? (
           <div style={emptyBox}>
-            Rewards clients will appear here once the loyalty tables are active and clients are enrolled.
+            {tablesActive
+              ? 'No rewards clients enrolled yet.'
+              : 'Rewards clients will appear here once the loyalty tables are active and clients are enrolled.'}
           </div>
         ) : (
           <div style={{ overflowX: 'auto', border: `1px solid ${C.border}`, borderRadius: '10px', background: '#fff' }}>
