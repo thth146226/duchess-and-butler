@@ -361,6 +361,8 @@ export default function Loyalty() {
   const [redeemSubmitting, setRedeemSubmitting] = useState(false)
   const [redeemFormError, setRedeemFormError] = useState('')
   const [manualRedeemToast, setManualRedeemToast] = useState(null)
+  const [inviteSending, setInviteSending] = useState(false)
+  const [inviteToast, setInviteToast] = useState(null)
   const adjustBusyRef = useRef(false)
 
   const load = useCallback(async () => {
@@ -449,7 +451,7 @@ export default function Loyalty() {
 
     const { data: cliData, error: cliErr } = await supabase
       .from('loyalty_clients')
-      .select('id, client_name, client_email, crms_client_id, tier, status, created_at')
+      .select('id, client_name, client_email, crms_client_id, tier, status, created_at, invite_sent_at, invite_accepted_at')
       .order('created_at', { ascending: false })
       .limit(50)
 
@@ -987,6 +989,73 @@ export default function Loyalty() {
 
   const subtitle =
     'Manage loyalty points, pending approvals and client reward balances.'
+
+  async function handleInviteClient() {
+    if (!profileClientId || !profileClient?.client_email) return
+
+    setInviteSending(true)
+    setInviteToast(null)
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+
+      const token = session?.access_token
+
+      if (!token) {
+        setInviteToast({
+          kind: 'error',
+          message: 'Session expired. Please reload and try again.',
+        })
+        return
+      }
+
+      const res = await fetch('/api/invite-client', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ loyalty_client_id: profileClientId }),
+      })
+
+      let json = {}
+      try {
+        json = await res.json()
+      } catch {
+        json = {}
+      }
+
+      if (!res.ok) {
+        setInviteToast({
+          kind: 'error',
+          message: json.error || 'Invite failed. Please try again.',
+        })
+        return
+      }
+
+      setInviteToast({
+        kind: 'ok',
+        message: json.warning
+          ? `Invite sent to ${json.email}. Note: ${json.warning}`
+          : `Invitation sent to ${json.email}.`,
+      })
+
+      try {
+        await load()
+      } catch {
+        console.warn('[duchess-rewards] loyalty clients refresh failed after invite')
+      }
+    } catch {
+      setInviteToast({
+        kind: 'error',
+        message: 'Unexpected error. Please try again.',
+      })
+    } finally {
+      setInviteSending(false)
+    }
+  }
 
   return (
     <div style={{ fontFamily: "'DM Sans', sans-serif", color: C.charcoal, maxWidth: '1200px' }}>
@@ -1581,8 +1650,26 @@ export default function Loyalty() {
                       </div>
                       <div style={{ padding: '12px 14px', background: '#fff', borderRadius: '8px', border: `1px solid ${C.border}`, gridColumn: '1 / -1' }}>
                         <div style={{ fontSize: '11px', color: C.graySoph, fontWeight: 600, marginBottom: '6px' }}>Portal access</div>
-                        <div style={{ fontWeight: 600, color: C.charcoal }}>Not enabled yet</div>
-                        <div style={{ fontSize: '12px', marginTop: '8px', color: C.graySoph }}>Portal access is not enabled yet. Admins manage manual adjustments and redemptions from this profile.</div>
+                        {profileClient.invite_sent_at ? (
+                          <>
+                            <div style={{ fontWeight: 600, color: C.charcoal }}>Invite sent</div>
+                            <div style={{ fontSize: '12px', marginTop: '6px', color: C.graySoph }}>
+                              Invitation sent {fmtActivityDate(profileClient.invite_sent_at)}.
+                              {profileClient.invite_accepted_at
+                                ? ` Account activated ${fmtActivityDate(profileClient.invite_accepted_at)}.`
+                                : ' Awaiting client to set up account.'}
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div style={{ fontWeight: 600, color: C.charcoal }}>Not enabled yet</div>
+                            <div style={{ fontSize: '12px', marginTop: '6px', color: C.graySoph }}>
+                              {profileClient.client_email
+                                ? "Send an invitation to activate this client's portal access."
+                                : 'Add an email address to this client before sending a portal invitation.'}
+                            </div>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1601,6 +1688,23 @@ export default function Loyalty() {
                       }}
                     >
                       This client has reward activity needing review.
+                    </div>
+                  ) : null}
+
+                  {inviteToast ? (
+                    <div
+                      role="status"
+                      style={{
+                        marginBottom: '16px',
+                        padding: '12px 14px',
+                        borderRadius: '8px',
+                        borderLeft: `4px solid ${inviteToast.kind === 'ok' ? C.champagneMuted : '#B45309'}`,
+                        background: inviteToast.kind === 'ok' ? C.ivoryWarm : '#FFFBEB',
+                        fontSize: '13px',
+                        color: inviteToast.kind === 'ok' ? C.charcoalSoft : '#78350F',
+                      }}
+                    >
+                      {inviteToast.message}
                     </div>
                   ) : null}
 
@@ -1665,7 +1769,20 @@ export default function Loyalty() {
                     >
                       {redeemPanelOpen ? 'Close redemption' : 'Redeem'}
                     </button>
-                    <button type="button" disabled style={{ ...btnSecondary, opacity: 0.55, cursor: 'not-allowed', fontSize: '12px' }}>Enable portal — coming soon</button>
+                    <button
+                      type="button"
+                      disabled={adjustSubmitting || redeemSubmitting || inviteSending || !profileClient.client_email}
+                      onClick={handleInviteClient}
+                      title={!profileClient.client_email ? 'Add an email address before sending an invitation' : undefined}
+                      style={{
+                        ...btnSecondary,
+                        fontSize: '12px',
+                        opacity: adjustSubmitting || redeemSubmitting || inviteSending || !profileClient.client_email ? 0.55 : 1,
+                        cursor: adjustSubmitting || redeemSubmitting || inviteSending || !profileClient.client_email ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {inviteSending ? 'Sending…' : profileClient.invite_sent_at ? 'Resend invite' : 'Invite to portal'}
+                    </button>
                   </div>
 
                   {adjustPanelOpen ? (
