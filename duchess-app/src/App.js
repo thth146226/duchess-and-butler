@@ -23,6 +23,7 @@ import Fleet from './pages/Fleet'
 import ATACarnet from './pages/ATACarnet'
 import LabelGenerator from './pages/LabelGenerator'
 import Loyalty from './pages/Loyalty'
+import RewardsPortal from './pages/RewardsPortal'   // ← ADICIONADO
 
 const pageTitles = {
   dashboard: 'Dashboard',
@@ -65,6 +66,9 @@ function AppInner() {
   // Public driver portal — no auth required
   const params = new URLSearchParams(window.location.search)
   if (params.get('token')) return <DriverAccess />
+
+  // Public rewards portal — no auth required   // ← ADICIONADO
+  if (window.location.pathname.startsWith('/rewards/')) return <RewardsPortal />   // ← ADICIONADO
 
   if (loading) return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#F7F3EE', fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', color: '#1C1C1E' }}>
