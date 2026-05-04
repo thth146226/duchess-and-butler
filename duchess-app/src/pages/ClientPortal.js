@@ -1,7 +1,8 @@
 // Duchess Client Portal — Authenticated Dashboard (Phase 3 minimal)
 // Route: /portal/
 // Requires active Supabase session.
-// Shows: name, tier, points, pending, logout.
+// Shows: name, tier, points, pending, redeemed value, logout.
+// Future phases: catalogue, designer, saved tablescapes, quotes, events.
 
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
@@ -24,6 +25,12 @@ function formatPoints(n) {
   return new Intl.NumberFormat('en-GB').format(Number(n) || 0)
 }
 
+function getFirstName(name) {
+  const clean = String(name || '').trim()
+  if (!clean) return ''
+  return clean.split(/\s+/)[0]
+}
+
 const S = {
   portal: {
     maxWidth: 680,
@@ -38,6 +45,7 @@ const S = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 18,
   },
   brand: {
     fontFamily: "'Cormorant Garamond', serif",
@@ -46,6 +54,7 @@ const S = {
     letterSpacing: '0.12em',
     color: '#1a1a1a',
     textTransform: 'uppercase',
+    whiteSpace: 'nowrap',
   },
   signOut: {
     fontSize: 11,
@@ -58,6 +67,7 @@ const S = {
     fontFamily: "'DM Sans', sans-serif",
     fontWeight: 400,
     padding: '6px 0',
+    whiteSpace: 'nowrap',
   },
   hero: {
     padding: '40px 28px 32px',
@@ -109,12 +119,18 @@ const S = {
     padding: '0 28px',
   },
   balanceGrid: {
-    display: 'flex',
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
     padding: '24px 0 28px',
     gap: 0,
   },
   balanceStat: {
-    flex: 1,
+    minWidth: 0,
+  },
+  balanceStatWithBorder: {
+    minWidth: 0,
+    borderLeft: '0.5px solid rgba(255,255,255,0.1)',
+    paddingLeft: 20,
   },
   balanceLabel: {
     fontSize: 10,
@@ -179,7 +195,7 @@ const S = {
   },
   accountGrid: {
     display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
     gap: 12,
   },
   accountItem: {
@@ -187,6 +203,7 @@ const S = {
     background: '#fff',
     border: '0.5px solid #d4cec6',
     borderRadius: 2,
+    minWidth: 0,
   },
   accountItemLabel: {
     fontSize: 10,
@@ -200,6 +217,7 @@ const S = {
     fontSize: 14,
     color: '#1a1a1a',
     fontWeight: 400,
+    overflowWrap: 'anywhere',
   },
   footer: {
     margin: '0 28px',
@@ -209,6 +227,7 @@ const S = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 16,
   },
   footerBrand: {
     fontFamily: "'Cormorant Garamond', serif",
@@ -221,7 +240,40 @@ const S = {
     fontSize: 10,
     color: '#d4cec6',
     fontWeight: 300,
+    whiteSpace: 'nowrap',
   },
+}
+
+function CenterState({ title, text, action }) {
+  return (
+    <div
+      style={{
+        ...S.portal,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexDirection: 'column',
+        gap: 16,
+        padding: 32,
+        boxSizing: 'border-box',
+        textAlign: 'center',
+      }}
+    >
+      <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 22, color: '#1a1a1a' }}>
+        {title || (
+          <>
+            Duchess <span style={{ color: '#c9a84c' }}>&</span> Butler
+          </>
+        )}
+      </div>
+      {text ? (
+        <div style={{ fontSize: 14, color: '#8a7e72', fontWeight: 300, lineHeight: 1.6, maxWidth: 420 }}>
+          {text}
+        </div>
+      ) : null}
+      {action || null}
+    </div>
+  )
 }
 
 export default function ClientPortal() {
@@ -230,71 +282,129 @@ export default function ClientPortal() {
   const [rewards, setRewards] = useState(null)
 
   useEffect(() => {
+    let cancelled = false
+
     async function init() {
-      const { data: { session }, error: sessionError } =
-        await supabase.auth.getSession()
+      try {
+        const {
+          data: { session },
+          error: sessionError,
+        } = await supabase.auth.getSession()
 
-      if (sessionError || !session) {
-        setStage('unauthenticated')
-        return
-      }
+        if (cancelled) return
 
-      const userId = session.user.id
-
-      const { data: cp, error: cpError } = await supabase
-        .from('client_profiles')
-        .select('display_name, email, loyalty_client_id')
-        .eq('id', userId)
-        .single()
-
-      if (cpError || !cp?.loyalty_client_id) {
-        setStage('no_profile')
-        return
-      }
-
-      setProfile({
-        displayName: cp.display_name,
-        email: session.user.email,
-      })
-
-      const { data: lc } = await supabase
-        .from('loyalty_clients')
-        .select('client_name, tier')
-        .eq('id', cp.loyalty_client_id)
-        .single()
-
-      const { data: txs } = await supabase
-        .from('loyalty_transactions')
-        .select('points, value_pence, status, transaction_type')
-        .eq('loyalty_client_id', cp.loyalty_client_id)
-
-      let available = 0
-      let pending = 0
-      let redeemedPence = 0
-
-      for (const tx of txs || []) {
-        const points = Number(tx.points) || 0
-        const valuePence = Number(tx.value_pence) || 0
-        if (tx.status === 'available') available += points
-        if (tx.status === 'pending') pending += points
-        if (tx.status === 'redeemed' && tx.transaction_type === 'redeem') {
-          available += points
-          redeemedPence += Math.abs(valuePence)
+        if (sessionError || !session) {
+          setStage('unauthenticated')
+          return
         }
+
+        const userId = session.user.id
+
+        const { data: cp, error: cpError } = await supabase
+          .from('client_profiles')
+          .select('display_name, email, loyalty_client_id')
+          .eq('id', userId)
+          .single()
+
+        if (cancelled) return
+
+        if (cpError || !cp?.loyalty_client_id) {
+          setStage('no_profile')
+          return
+        }
+
+        const safeDisplayName = cp.display_name || session.user.email || 'Client'
+
+        setProfile({
+          displayName: safeDisplayName,
+          email: session.user.email || cp.email || '',
+        })
+
+        const { data: lc, error: lcError } = await supabase
+          .from('loyalty_clients')
+          .select('client_name, tier')
+          .eq('id', cp.loyalty_client_id)
+          .single()
+
+        if (cancelled) return
+
+        if (lcError) {
+          setStage('no_profile')
+          return
+        }
+
+        const { data: settings } = await supabase
+          .from('loyalty_settings')
+          .select('point_value_pence')
+          .eq('active', true)
+          .limit(1)
+
+        const pointValuePenceRaw = Number(settings?.[0]?.point_value_pence)
+        const pointValuePence =
+          Number.isFinite(pointValuePenceRaw) && pointValuePenceRaw > 0
+            ? pointValuePenceRaw
+            : 0.5
+
+        const { data: txs, error: txsError } = await supabase
+          .from('loyalty_transactions')
+          .select('points, value_pence, status, transaction_type')
+          .eq('loyalty_client_id', cp.loyalty_client_id)
+
+        if (cancelled) return
+
+        if (txsError) {
+          setStage('error')
+          return
+        }
+
+        let available = 0
+        let pending = 0
+        let redeemedPence = 0
+
+        for (const tx of txs || []) {
+          const points = Number(tx.points) || 0
+          const valuePence = Number(tx.value_pence) || 0
+          const status = String(tx.status || '').toLowerCase()
+          const type = String(tx.transaction_type || '').toLowerCase()
+
+          if (status === 'available') {
+            available += points
+          }
+
+          if (status === 'pending' || status === 'suggested') {
+            pending += points
+          }
+
+          if (status === 'redeemed' && type === 'redeem') {
+            available += points
+            redeemedPence += Math.abs(valuePence)
+          }
+        }
+
+        const clientName = lc?.client_name || safeDisplayName
+        const tierRaw = String(lc?.tier || 'standard').toLowerCase()
+
+        setRewards({
+          clientName,
+          tier: TIER_DISPLAY[tierRaw] || 'Pearl',
+          available,
+          pending,
+          redeemedPence,
+          rewardValuePence: Math.round(available * pointValuePence),
+          pointValuePence,
+        })
+
+        setStage('ready')
+      } catch {
+        if (!cancelled) setStage('error')
       }
-
-      setRewards({
-        clientName: lc?.client_name ?? cp.display_name,
-        tier: TIER_DISPLAY[lc?.tier] ?? 'Pearl',
-        available,
-        pending,
-        redeemedPence,
-      })
-
-      setStage('ready')
     }
 
     init()
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   async function handleSignOut() {
@@ -314,31 +424,49 @@ export default function ClientPortal() {
 
   if (stage === 'unauthenticated') {
     return (
-      <div style={{ ...S.portal, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16, padding: 32 }}>
-        <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 22, color: '#1a1a1a' }}>
-          Duchess <span style={{ color: '#c9a84c' }}>&</span> Butler
-        </div>
-        <div style={{ fontSize: 14, color: '#8a7e72', fontWeight: 300, textAlign: 'center' }}>
-          Your session has expired. Please use your invitation link or contact your event team.
-        </div>
-      </div>
+      <CenterState
+        text="Your session has expired. Please use your invitation link or contact your event team."
+      />
     )
   }
 
   if (stage === 'no_profile') {
     return (
-      <div style={{ ...S.portal, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16, padding: 32 }}>
-        <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 22, color: '#1a1a1a' }}>
-          Duchess <span style={{ color: '#c9a84c' }}>&</span> Butler
-        </div>
-        <div style={{ fontSize: 14, color: '#8a7e72', fontWeight: 300, textAlign: 'center' }}>
-          Your account is not yet linked to a rewards profile. Please contact your event team.
-        </div>
-      </div>
+      <CenterState
+        text="Your account is not yet linked to a rewards profile. Please contact your event team."
+      />
     )
   }
 
-  const firstName = rewards?.clientName?.split(' ')[0] ?? profile?.displayName ?? ''
+  if (stage === 'error') {
+    return (
+      <CenterState
+        text="We could not load your private portal at this moment. Please refresh the page or contact your Duchess & Butler event team."
+        action={
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            style={{
+              marginTop: 8,
+              padding: '12px 18px',
+              border: '1px solid #1a1a1a',
+              background: '#1a1a1a',
+              color: '#e8d5a3',
+              fontSize: 11,
+              letterSpacing: '0.16em',
+              textTransform: 'uppercase',
+              fontFamily: "'DM Sans', sans-serif",
+              cursor: 'pointer',
+            }}
+          >
+            Reload
+          </button>
+        }
+      />
+    )
+  }
+
+  const firstName = getFirstName(rewards?.clientName) || getFirstName(profile?.displayName)
 
   return (
     <div style={S.portal}>
@@ -346,12 +474,14 @@ export default function ClientPortal() {
         <div style={S.brand}>
           Duchess <span style={{ color: '#c9a84c' }}>&</span> Butler
         </div>
-        <button style={S.signOut} onClick={handleSignOut}>Sign out</button>
+        <button type="button" style={S.signOut} onClick={handleSignOut}>
+          Sign out
+        </button>
       </div>
 
       <div style={S.hero}>
-        <div style={S.heroGreeting}>Welcome back</div>
-        <div style={S.heroName}>{rewards?.clientName ?? firstName}</div>
+        <div style={S.heroGreeting}>Welcome back{firstName ? `, ${firstName}` : ''}</div>
+        <div style={S.heroName}>{rewards?.clientName ?? profile?.displayName ?? 'Private Client'}</div>
         <div style={S.tierBadge}>
           <div style={S.tierDot} />
           <div style={S.tierLabel}>{rewards?.tier ?? 'Pearl'} Member</div>
@@ -366,17 +496,19 @@ export default function ClientPortal() {
               {formatPoints(rewards?.available ?? 0)}
             </div>
             <div style={S.balanceSub}>
-              pts · {formatGBP((rewards?.available ?? 0) * 0.5)}
+              pts · {formatGBP(rewards?.rewardValuePence ?? 0)}
             </div>
           </div>
-          <div style={{ ...S.balanceStat, borderLeft: '0.5px solid rgba(255,255,255,0.1)', paddingLeft: 20 }}>
+
+          <div style={S.balanceStatWithBorder}>
             <div style={S.balanceLabel}>Pending</div>
             <div style={S.balanceValue}>
               {formatPoints(rewards?.pending ?? 0)}
             </div>
             <div style={S.balanceSub}>pts · awaiting release</div>
           </div>
-          <div style={{ ...S.balanceStat, borderLeft: '0.5px solid rgba(255,255,255,0.1)', paddingLeft: 20 }}>
+
+          <div style={S.balanceStatWithBorder}>
             <div style={S.balanceLabel}>Lifetime redeemed</div>
             <div style={S.balanceValue}>
               {formatGBP(rewards?.redeemedPence ?? 0)}
@@ -392,7 +524,7 @@ export default function ClientPortal() {
           <div style={S.sectionLine} />
         </div>
         <div style={S.infoCard}>
-          <div style={S.infoHeadline}>Your portal is being built.</div>
+          <div style={S.infoHeadline}>Your private portal is being prepared.</div>
           <div style={S.infoText}>
             Rewards, digital catalogue, table designer and event tools are being prepared for your account.
             Your event team will notify you when each feature becomes available.
@@ -405,19 +537,23 @@ export default function ClientPortal() {
           <span>Your account</span>
           <div style={S.sectionLine} />
         </div>
+
         <div style={S.accountGrid}>
           <div style={S.accountItem}>
             <div style={S.accountItemLabel}>Name</div>
-            <div style={S.accountItemValue}>{rewards?.clientName ?? '—'}</div>
+            <div style={S.accountItemValue}>{rewards?.clientName ?? profile?.displayName ?? '—'}</div>
           </div>
+
           <div style={S.accountItem}>
             <div style={S.accountItemLabel}>Email</div>
             <div style={S.accountItemValue}>{profile?.email ?? '—'}</div>
           </div>
+
           <div style={S.accountItem}>
             <div style={S.accountItemLabel}>Tier</div>
             <div style={S.accountItemValue}>{rewards?.tier ?? 'Pearl'}</div>
           </div>
+
           <div style={S.accountItem}>
             <div style={S.accountItemLabel}>Status</div>
             <div style={S.accountItemValue}>Active</div>
