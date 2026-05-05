@@ -16,8 +16,16 @@ import {
 } from '../lib/labelGenerator'
 import { classifyJobItemWorkflow } from '../lib/itemWorkflowClassification'
 
+const LABELS_PER_PAGE = 6
+
 const SELF_COLLECTION_DEFAULT_POSTCODE = 'HP2 6EZ'
 const UK_POSTCODE_REGEX = /\b([A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2})\b/i
+
+function chunkLabels(items, chunkSize) {
+  const chunks = []
+  for (let i = 0; i < items.length; i += chunkSize) chunks.push(items.slice(i, i + chunkSize))
+  return chunks
+}
 
 function extractUkPostcode(text) {
   if (!text) return null
@@ -387,95 +395,147 @@ export default function LabelGenerator() {
     `
   }
 
-  function renderOutputMarkup(labels) {
-    const cards = labels
-      .map(label => renderLabelCardHtml(label, selectedOrder, postcodeDiagnostic.value, orderColour.color))
+  function renderPrintLabelsHtml(labels) {
+    const pages = chunkLabels(labels, LABELS_PER_PAGE)
+    return pages
+      .map((pageLabels, pageIndex) => {
+        const isLastPage = pageIndex === pages.length - 1
+        const cardsHtml = pageLabels.map(label =>
+          renderLabelCardHtml(label, selectedOrder, postcodeDiagnostic.value, orderColour.color)
+        ).join('')
+        return `
+      <div class="label-print-page" data-last-page="${isLastPage ? 'true' : 'false'}">
+        <div class="label-print-grid">${cardsHtml}</div>
+      </div>
+    `
+      })
       .join('')
+  }
 
+  function renderPrintStyles() {
     return `
-      <style>
-        @page { size: A4; margin: 10mm; }
-        body {
-          margin: 0;
-          font-family: 'DM Sans', Arial, sans-serif;
-          background: #ffffff;
-          color: #1C1C1E;
-        }
-        .sheet {
-          width: 100%;
-          box-sizing: border-box;
-          padding: 8px;
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 10px;
-        }
-        .label-card {
-          border: 1px solid #D3CEC3;
-          border-radius: 10px;
-          padding: 16px 14px;
-          min-height: 250px;
-          display: flex;
-          flex-direction: column;
-          break-inside: avoid;
-          page-break-inside: avoid;
-        }
-        .brand {
-          text-align: center;
-          font-family: 'Times New Roman', serif;
-          font-size: 20px;
-          font-weight: 600;
-          line-height: 1.05;
-        }
-        .event-name {
-          text-align: center;
-          margin-top: 8px;
-          font-size: 11px;
-          font-weight: 700;
-          letter-spacing: 0.08em;
-        }
-        .client-name, .postcode {
-          text-align: center;
-          margin-top: 4px;
-          font-size: 11px;
-        }
-        .support-row {
-          display: flex;
-          justify-content: space-between;
-          margin-top: 14px;
-          font-size: 10px;
-          letter-spacing: 0.03em;
-        }
-        .item-box {
-          margin-top: 12px;
-          border: 1.5px solid #1C1C1E;
-          border-radius: 6px;
-          padding: 16px 10px;
-          text-align: center;
-          flex: 1;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-        .item-text {
-          font-size: 15px;
-          font-weight: 700;
-          line-height: 1.35;
-        }
-        .footer-row {
-          margin-top: 12px;
-          display: flex;
-          justify-content: space-between;
-          font-size: 10px;
-          text-transform: uppercase;
-          letter-spacing: 0.03em;
-        }
-      </style>
-      <div class="sheet">${cards}</div>
+      @page {
+        size: 201mm 295mm;
+        margin: 0;
+      }
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: 'DM Sans', Arial, sans-serif;
+        background: #ffffff;
+        color: #1C1C1E;
+      }
+      .label-print-root {
+        margin: 0;
+        padding: 0;
+      }
+      .label-print-page {
+        width: 201mm;
+        height: 295mm;
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+        overflow: hidden;
+        page-break-after: always;
+        break-after: page;
+        page-break-inside: avoid;
+        break-inside: avoid;
+        background: #fff;
+      }
+      .label-print-page[data-last-page="true"] {
+        page-break-after: auto;
+        break-after: auto;
+      }
+      .label-print-grid {
+        display: grid;
+        grid-template-columns: 100mm 100mm;
+        grid-template-rows: 95mm 95mm 95mm;
+        width: 200mm;
+        height: 285mm;
+        column-gap: 0;
+        row-gap: 0;
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      .label-card {
+        width: 100mm;
+        height: 95mm;
+        box-sizing: border-box;
+        overflow: hidden;
+        page-break-inside: avoid;
+        break-inside: avoid;
+        border: 1px solid #D3CEC3;
+        border-radius: 10px;
+        padding: 16px 14px;
+        display: flex;
+        flex-direction: column;
+      }
+      .brand {
+        text-align: center;
+        font-family: 'Times New Roman', serif;
+        font-size: 20px;
+        font-weight: 600;
+        line-height: 1.05;
+      }
+      .event-name {
+        text-align: center;
+        margin-top: 8px;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+      }
+      .client-name, .postcode {
+        text-align: center;
+        margin-top: 4px;
+        font-size: 11px;
+      }
+      .support-row {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 14px;
+        font-size: 10px;
+        letter-spacing: 0.03em;
+      }
+      .item-box {
+        margin-top: 12px;
+        border: 1.5px solid #1C1C1E;
+        border-radius: 6px;
+        padding: 16px 10px;
+        text-align: center;
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 0;
+      }
+      .item-text {
+        font-size: 15px;
+        font-weight: 700;
+        line-height: 1.35;
+      }
+      .footer-row {
+        margin-top: 12px;
+        display: flex;
+        justify-content: space-between;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+    `
+  }
+
+  function renderOutputMarkup(labels) {
+    const labelsHtml = renderPrintLabelsHtml(labels)
+    return `
+      <style>${renderPrintStyles()}</style>
+      <div class="label-print-root">${labelsHtml}</div>
     `
   }
 
   function renderOutputHtml(labels) {
-    const markup = renderOutputMarkup(labels)
+    const labelsHtml = renderPrintLabelsHtml(labels)
+    const styles = renderPrintStyles()
 
     return `
       <!doctype html>
@@ -483,9 +543,10 @@ export default function LabelGenerator() {
         <head>
           <meta charset="utf-8" />
           <title>Duchess Labels - ${selectedOrder?.crms_ref || 'Order'}</title>
+          <style>${styles}</style>
         </head>
         <body>
-          ${markup}
+          <div class="label-print-root">${labelsHtml}</div>
         </body>
       </html>
     `
@@ -551,43 +612,33 @@ export default function LabelGenerator() {
     setIsExportingPdf(true)
     setError(null)
 
+    const SHEET_W_MM = 201
+    const SHEET_H_MM = 295
+
     const container = document.createElement('div')
     container.style.position = 'absolute'
     container.style.left = '-9999px'
     container.style.top = '0'
-    container.style.width = '794px' // A4 width at ~96dpi
+    container.style.width = `${SHEET_W_MM}mm`
     container.style.background = '#fff'
     container.innerHTML = renderOutputMarkup(previewLabels)
     document.body.appendChild(container)
 
     try {
-      const canvas = await html2canvas(container, {
-        scale: 2,
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff',
-      })
-      const imgData = canvas.toDataURL('image/png')
-      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-      const pageWidth = pdf.internal.pageSize.getWidth()
-      const pageHeight = pdf.internal.pageSize.getHeight()
-      const margin = 10
-      const imgWidth = pageWidth - margin * 2
-      const imgHeight = (canvas.height * imgWidth) / canvas.width
+      const pageNodes = container.querySelectorAll('.label-print-page')
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: [SHEET_W_MM, SHEET_H_MM] })
 
-      if (imgHeight <= pageHeight - margin * 2) {
-        pdf.addImage(imgData, 'PNG', margin, margin, imgWidth, imgHeight)
-      } else {
-        let heightLeft = imgHeight
-        let position = margin
-        pdf.addImage(imgData, 'PNG', margin, position, imgWidth, imgHeight)
-        heightLeft -= (pageHeight - margin * 2)
-        while (heightLeft > 0) {
-          position = heightLeft - imgHeight + margin
-          pdf.addPage()
-          pdf.addImage(imgData, 'PNG', margin, position, imgWidth, imgHeight)
-          heightLeft -= (pageHeight - margin * 2)
-        }
+      for (let i = 0; i < pageNodes.length; i++) {
+        const pageEl = pageNodes[i]
+        const canvas = await html2canvas(pageEl, {
+          scale: 2,
+          useCORS: true,
+          logging: false,
+          backgroundColor: '#ffffff',
+        })
+        const imgData = canvas.toDataURL('image/png')
+        if (i > 0) pdf.addPage([SHEET_W_MM, SHEET_H_MM], 'portrait')
+        pdf.addImage(imgData, 'PNG', 0, 0, SHEET_W_MM, SHEET_H_MM)
       }
 
       const safeFilename = (selectedOrder?.event_name || selectedOrder?.crms_ref || 'labels')
@@ -710,7 +761,10 @@ export default function LabelGenerator() {
                 </div>
                 <div style={{ marginTop: '7px', fontSize: '12px', color: '#6B6860' }}>Ref {selectedOrder.crms_ref || '—'}</div>
               </div>
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end' }}>
+                <span style={{ flex: '1 1 200px', fontSize: '11px', color: '#6B6860', lineHeight: 1.45 }}>
+                  Print settings: Margins None, Scale 100%, Headers and footers Off.
+                </span>
                 <button onClick={resetAllToAutomatic} style={{ fontSize: '11px', padding: '7px 11px', borderRadius: '8px', border: '1px solid #DDD8CF', background: '#fff', color: '#6B6860', cursor: 'pointer' }}>
                   Reset all to automatic
                 </button>
@@ -900,7 +954,7 @@ export default function LabelGenerator() {
                 ))}
               </div>
             )}
-            <div style={{ marginTop: '14px', fontSize: '11px', color: '#9CA3AF' }}>Print and PDF export will be added in the next phase.</div>
+            <div style={{ marginTop: '14px', fontSize: '11px', color: '#9CA3AF' }}>Printed output uses fixed sheets with six labels per page (same layout as exported PDF).</div>
           </div>
 
           <div style={{ background: '#FFFDF9', border: '1px solid #EEE7DD', borderRadius: '10px', padding: '12px 13px', marginBottom: '10px' }}>
