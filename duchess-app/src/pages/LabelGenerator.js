@@ -399,6 +399,7 @@ export default function LabelGenerator() {
     const pages = chunkLabels(labels, LABELS_PER_PAGE)
     return pages
       .map((pageLabels, pageIndex) => {
+        if (!pageLabels || pageLabels.length === 0) return ''
         const isLastPage = pageIndex === pages.length - 1
         const cardsHtml = pageLabels.map(label =>
           renderLabelCardHtml(label, selectedOrder, postcodeDiagnostic.value, orderColour.color)
@@ -415,12 +416,18 @@ export default function LabelGenerator() {
   function renderPrintStyles() {
     return `
       @page {
-        size: 201mm 295mm;
+        size: A4 portrait;
         margin: 0;
+      }
+      html {
+        margin: 0;
+        padding: 0;
+        width: 210mm;
       }
       body {
         margin: 0;
         padding: 0;
+        width: 210mm;
         font-family: 'DM Sans', Arial, sans-serif;
         background: #ffffff;
         color: #1C1C1E;
@@ -430,12 +437,16 @@ export default function LabelGenerator() {
         padding: 0;
       }
       .label-print-page {
-        width: 201mm;
-        height: 295mm;
+        width: 210mm;
+        height: 297mm;
         margin: 0;
         padding: 0;
         box-sizing: border-box;
         overflow: hidden;
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         page-break-after: always;
         break-after: page;
         page-break-inside: avoid;
@@ -443,34 +454,45 @@ export default function LabelGenerator() {
         background: #fff;
       }
       .label-print-page[data-last-page="true"] {
-        page-break-after: auto;
-        break-after: auto;
+        page-break-after: auto !important;
+        break-after: auto !important;
       }
       .label-print-grid {
         display: grid;
-        grid-template-columns: 100mm 100mm;
-        grid-template-rows: 95mm 95mm 95mm;
-        width: 200mm;
-        height: 285mm;
-        column-gap: 0;
-        row-gap: 0;
+        grid-template-columns: 98.5mm 5mm 98.5mm;
+        grid-template-rows: 91.5mm 5mm 91.5mm 5mm 91.5mm;
+        width: 202mm;
+        height: 284.5mm;
+        gap: 0 !important;
+        column-gap: 0 !important;
+        row-gap: 0 !important;
         margin: 0;
         padding: 0;
         box-sizing: border-box;
       }
       .label-card {
-        width: 100mm;
-        height: 95mm;
+        width: 98.5mm;
+        height: 91.5mm;
+        margin: 0 !important;
         box-sizing: border-box;
+        justify-self: start;
+        align-self: start;
         overflow: hidden;
         page-break-inside: avoid;
         break-inside: avoid;
+        background: #ffffff !important;
         border: 1px solid #D3CEC3;
         border-radius: 10px;
         padding: 16px 14px;
         display: flex;
         flex-direction: column;
       }
+      .label-card:nth-child(1) { grid-column: 1; grid-row: 1; }
+      .label-card:nth-child(2) { grid-column: 3; grid-row: 1; }
+      .label-card:nth-child(3) { grid-column: 1; grid-row: 3; }
+      .label-card:nth-child(4) { grid-column: 3; grid-row: 3; }
+      .label-card:nth-child(5) { grid-column: 1; grid-row: 5; }
+      .label-card:nth-child(6) { grid-column: 3; grid-row: 5; }
       .brand {
         text-align: center;
         font-family: 'Times New Roman', serif;
@@ -612,8 +634,8 @@ export default function LabelGenerator() {
     setIsExportingPdf(true)
     setError(null)
 
-    const SHEET_W_MM = 201
-    const SHEET_H_MM = 295
+    const SHEET_W_MM = 210
+    const SHEET_H_MM = 297
 
     const container = document.createElement('div')
     container.style.position = 'absolute'
@@ -763,7 +785,7 @@ export default function LabelGenerator() {
               </div>
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end' }}>
                 <span style={{ flex: '1 1 200px', fontSize: '11px', color: '#6B6860', lineHeight: 1.45 }}>
-                  Print settings: Margins None, Scale 100%, Headers and footers Off.
+                  Print settings: Margins None, Scale 100%, Headers and footers Off, Background graphics On.
                 </span>
                 <button onClick={resetAllToAutomatic} style={{ fontSize: '11px', padding: '7px 11px', borderRadius: '8px', border: '1px solid #DDD8CF', background: '#fff', color: '#6B6860', cursor: 'pointer' }}>
                   Reset all to automatic
