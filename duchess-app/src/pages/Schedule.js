@@ -56,6 +56,31 @@ function getDriverPillStyle(name, color, fallbackColor) {
   return { background: color || fallbackColor, color: 'white' }
 }
 
+function normaliseScheduleText(value) {
+  return String(value || '').trim().toLowerCase()
+}
+
+function isManualTdsScheduleOrder(job) {
+  return (
+    job?.is_manual === true &&
+    normaliseScheduleText(job.event_name) === 'tds' &&
+    normaliseScheduleText(job.client_name) === 'tds' &&
+    normaliseScheduleText(job.venue) === 'tds'
+  )
+}
+
+function getRunDisplayTime(run) {
+  const start = run?.runTime
+  const end = run?.runType === 'DEL'
+    ? run?.deliveryEndTime
+    : run?.runType === 'COL'
+      ? run?.collectionEndTime
+      : null
+
+  if (!start) return '—'
+  return end ? `${start} - ${end}` : start
+}
+
 // ── Build runs from jobs (include driver fields) ───────────────────────────────
 function buildRuns(jobs) {
   const runs = []
@@ -97,15 +122,37 @@ function buildRuns(jobs) {
       assignedDriverId2:  job.assigned_driver_id_2 || null,
     }
 
+    let deliveryEndTime = job.manual_delivery_time
+      ? null
+      : job.delivery_end_time?.substring(0, 5) || null
+    if (
+      isManualTdsScheduleOrder(job) &&
+      deliveryTime &&
+      !deliveryEndTime &&
+      !job.manual_delivery_time
+    ) {
+      deliveryEndTime = '17:00'
+    }
+
+    let collectionEndTime = job.manual_collection_time
+      ? null
+      : job.collection_end_time?.substring(0, 5) || null
+    if (
+      isManualTdsScheduleOrder(job) &&
+      collectionTime &&
+      !collectionEndTime &&
+      !job.manual_collection_time
+    ) {
+      collectionEndTime = '17:00'
+    }
+
     if (deliveryDate) runs.push({
       ...base,
       id: `${job.id}-DEL`,
       runType: 'DEL',
       runDate: deliveryDate,
       runTime: deliveryTime?.substring(0, 5) || null,
-      deliveryEndTime: job.manual_delivery_time
-        ? null
-        : job.delivery_end_time?.substring(0, 5) || null,
+      deliveryEndTime,
       isTimed: !!(job.delivery_end_time &&
         !['17:00', '18:00', '00:00', null].includes(job.delivery_end_time?.substring(0, 5))),
       missingTime: !deliveryTime,
@@ -121,9 +168,7 @@ function buildRuns(jobs) {
       runType: 'COL',
       runDate: collectionDate,
       runTime: collectionTime?.substring(0, 5) || null,
-      collectionEndTime: job.manual_collection_time
-        ? null
-        : job.collection_end_time?.substring(0, 5) || null,
+      collectionEndTime,
       isTimed: !!(job.collection_end_time &&
         !['17:00', '18:00', '00:00', null].includes(job.collection_end_time?.substring(0, 5))),
       missingTime: !collectionTime,
@@ -834,7 +879,7 @@ export default function Schedule({ refreshKey = 0 }) {
                   </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: '12px', fontWeight: '500', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{run.event || run.client}</div>
-                    <div style={{ fontSize: '10px', color: '#6B6860' }}>{run.runTime || '—'} {run.driverName ? `· ${run.driverName}` : ''}</div>
+                    <div style={{ fontSize: '10px', color: '#6B6860' }}>{getRunDisplayTime(run)} {run.driverName ? `· ${run.driverName}` : ''}</div>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', flexShrink: 0 }}>
                     <button
@@ -1031,7 +1076,7 @@ function ListView({
                               )}
                             </td>
                             <td style={S.td} onClick={() => setSelectedRun(run)}>
-                              {run.runTime || '—'}
+                              {getRunDisplayTime(run)}
                             </td>
                             <td style={S.td} onClick={() => setSelectedRun(run)}>
                               <div style={{ fontWeight: 500, fontSize: '13px' }}>{run.event || run.client}</div>
@@ -1126,12 +1171,7 @@ function RunRow({ run, onSelect, jobNotes }) {
       <td style={{ ...S.td, fontWeight: '600', fontFamily: "'Cormorant Garamond', serif", fontSize: '16px', color: run.missingTime ? '#9CA3AF' : '#1C1C1E' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
           <span>
-            {run.runTime || '—'}
-            {run.runType === 'DEL' && run.deliveryEndTime
-              ? ` - ${run.deliveryEndTime}`
-              : run.runType === 'COL' && run.collectionEndTime
-                ? ` - ${run.collectionEndTime}`
-                : ''}
+            {getRunDisplayTime(run)}
           </span>
           {run.isTimed && (
             <span style={{
@@ -1255,12 +1295,7 @@ function GroupedByDriverView({ runs, drivers, onSelect }) {
                         <td style={{ ...S.td, fontFamily: "'Cormorant Garamond', serif", fontSize: '15px' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                             <span>
-                              {run.runTime || '—'}
-                              {run.runType === 'DEL' && run.deliveryEndTime
-                                ? ` - ${run.deliveryEndTime}`
-                                : run.runType === 'COL' && run.collectionEndTime
-                                  ? ` - ${run.collectionEndTime}`
-                                  : ''}
+                              {getRunDisplayTime(run)}
                             </span>
                             {run.isTimed && (
                               <span style={{
@@ -1393,7 +1428,7 @@ function DispatchCard({ run, drivers, onSelect, onAssign, isSaving }) {
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
         <span style={{ background: colors.badgeBg, color: colors.badgeText, fontSize: '10px', fontWeight: '700', padding: '2px 6px', borderRadius: '3px' }}>{colors.badgeLabel}</span>
-        {run.runTime && <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '16px', fontWeight: '600', color: colors.cardText }}>{run.runTime.substring(0, 5)}</span>}
+        {run.runTime && <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '16px', fontWeight: '600', color: colors.cardText }}>{getRunDisplayTime(run)}</span>}
         {run.isUrgent && <span style={{ background: '#EF4444', color: 'white', fontSize: '9px', fontWeight: '700', padding: '1px 5px', borderRadius: '2px' }}>URGENT</span>}
         {isSaving && <span style={{ fontSize: '10px', color: '#B8965A', marginLeft: 'auto' }}>Saving…</span>}
       </div>
@@ -1659,8 +1694,7 @@ function RunDetailPanel({
               ['Time',      (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                   <span>
-                    {run.runTime || '⚠ Not set'}
-                    {run.runType === 'DEL' && run.deliveryEndTime ? ` — ${run.deliveryEndTime}` : run.runType === 'COL' && run.collectionEndTime ? ` — ${run.collectionEndTime}` : ''}
+                    {run.runTime ? getRunDisplayTime(run) : '⚠ Not set'}
                   </span>
                   {run.isTimed && (
                     <span style={{
@@ -2282,12 +2316,7 @@ function MonthView({ allRuns, monthDate, setMonthDate, onSelect, dragRun, dragOv
                       <td style={{ ...S.td, fontFamily: "'Cormorant Garamond', serif", fontSize: '15px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                           <span>
-                            {run.runTime || '—'}
-                            {run.runType === 'DEL' && run.deliveryEndTime
-                              ? ` - ${run.deliveryEndTime}`
-                              : run.runType === 'COL' && run.collectionEndTime
-                                ? ` - ${run.collectionEndTime}`
-                                : ''}
+                            {getRunDisplayTime(run)}
                           </span>
                           {run.isTimed && (
                             <span style={{
@@ -2459,12 +2488,7 @@ function MiniRunCard({ run, onClick, compact = false, draggable = false, onDragS
       {(run.runTime || run.deliveryEndTime || run.collectionEndTime || run.isTimed) && (
         <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap', marginTop: '3px' }}>
           <span style={{ fontSize: '9px', color: '#6B6860' }}>
-            {run.runTime || '—'}
-            {run.runType === 'DEL' && run.deliveryEndTime
-              ? ` - ${run.deliveryEndTime}`
-              : run.runType === 'COL' && run.collectionEndTime
-                ? ` - ${run.collectionEndTime}`
-                : ''}
+            {getRunDisplayTime(run)}
           </span>
           {run.isTimed && (
             <span style={{
@@ -2511,7 +2535,7 @@ function MiniRunCard({ run, onClick, compact = false, draggable = false, onDragS
         <span style={{ background: colors.badgeBg, color: colors.badgeText, fontSize: '9px', fontWeight: '700', padding: '2px 5px', borderRadius: '2px' }}>{colors.badgeLabel}</span>
         <span style={{ fontSize: '11.5px', fontWeight: '600', color: colors.cardText, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{run.event || run.client}</span>
       </div>
-      {run.runTime && <div style={{ fontSize: '10px', color: '#6B6860' }}>🕐 {run.runTime.substring(0, 5)}</div>}
+      {run.runTime && <div style={{ fontSize: '10px', color: '#6B6860' }}>🕐 {getRunDisplayTime(run)}</div>}
       {(run.driverName || run.driverName2) && (
         <div style={{ marginTop: '4px', display: 'flex', gap: '4px' }}>
           {run.driverName && (
