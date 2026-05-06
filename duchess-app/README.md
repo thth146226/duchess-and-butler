@@ -2,6 +2,14 @@
 
 ## 🚀 Setup Instructions
 
+## 🔧 Environment variables
+
+- **`REACT_APP_LINEN_STUDIO_URL`**: required to enable the **“Open Linen Labels in DB Linen Studio”** button in the Label Generator.
+  - **Value**: the public base URL of DB Linen Studio (example: `https://db-linens-studio.vercel.app`)
+  - **Do not** include `/labels` at the end (the app adds the `/labels?...` path automatically).
+  - After changing `duchess-app/.env.local`, restart the local dev server.
+  - For production, set the same variable in Vercel Environment Variables and redeploy.
+
 ### STEP 1 — Supabase Database
 
 1. Go to **supabase.com** → open your project `duchess-and-butler`

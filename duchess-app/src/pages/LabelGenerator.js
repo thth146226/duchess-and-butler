@@ -335,6 +335,13 @@ export default function LabelGenerator() {
     [manualStateByItem, processing.eligibleMatchedItems]
   )
 
+  const hasLinenStudioItems = Boolean(processing.linenStudioItems.length > 0)
+
+  function confirmLinenLabelsBeforeOutput() {
+    if (!hasLinenStudioItems) return true
+    return window.confirm('This order also has linen items managed in DB Linen Studio. Have you printed the linen labels there as well?')
+  }
+
   useEffect(() => {
     if (!selectedOrder) return
     devLog('[labels-phase2] postcode diagnostic', {
@@ -580,6 +587,7 @@ export default function LabelGenerator() {
       setError(reason)
       return
     }
+    if (!confirmLinenLabelsBeforeOutput()) return
 
     devLog('[labels-print-fix] print requested', { count: previewLabels.length })
     setIsPrinting(true)
@@ -629,6 +637,7 @@ export default function LabelGenerator() {
       setError(reason)
       return
     }
+    if (!confirmLinenLabelsBeforeOutput()) return
 
     devLog('[labels-output] pdf requested', { count: previewLabels.length })
     setIsExportingPdf(true)
@@ -835,6 +844,50 @@ export default function LabelGenerator() {
               </div>
             </div>
           </div>
+
+          {hasLinenStudioItems && (
+            <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '14px', padding: '16px 18px', marginBottom: '18px' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+                <div style={{ minWidth: '260px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: '700', color: '#92400E', marginBottom: '6px' }}>
+                    Linen labels also need printing
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#6B6860', lineHeight: 1.5 }}>
+                    This order contains linen items managed in DB Linen Studio. Print those linen labels there before completing the full label workflow.
+                  </div>
+                  <div style={{ marginTop: '10px' }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', fontSize: '10px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '4px 10px', borderRadius: '999px', background: '#FEF3C7', border: '1px solid #FDE68A', color: '#92400E' }}>
+                      {processing.linenStudioItems.length} linen item type(s)
+                    </span>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
+                  <button
+                    onClick={openLinenLabelsForSelectedOrder}
+                    disabled={!canOpenLinenStudio}
+                    style={{
+                      fontSize: '12px',
+                      padding: '9px 12px',
+                      borderRadius: '10px',
+                      border: '1px solid #F59E0B',
+                      background: canOpenLinenStudio ? '#F59E0B' : '#FDE68A',
+                      color: canOpenLinenStudio ? '#111827' : '#92400E',
+                      cursor: canOpenLinenStudio ? 'pointer' : 'not-allowed',
+                      fontWeight: '700',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    Open Linen Labels in DB Linen Studio
+                  </button>
+                  {!canOpenLinenStudio && (
+                    <div style={{ fontSize: '11px', color: '#92400E', lineHeight: 1.35, maxWidth: '340px', textAlign: 'right' }}>
+                      Configure <span style={{ fontFamily: 'monospace' }}>REACT_APP_LINEN_STUDIO_URL</span> to enable opening DB Linen Studio.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
 
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '16px', marginBottom: '18px', alignItems: 'stretch' }}>
             <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '14px', padding: '18px' }}>
