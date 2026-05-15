@@ -337,7 +337,10 @@ export function generateLabelsForQuantity(totalQty, capacity) {
 export function generateLabelsForItem(jobItem, resolvedRule) {
   const totalQty = Number.parseInt(jobItem?.quantity, 10)
   const itemKey = jobItem?.itemKey || ''
-  const productName = resolvedRule?.canonicalNameUsed || resolvedRule?.rule?.name || jobItem?.item_name || 'Unnamed item'
+  const sourceItemName = jobItem?.item_name || ''
+  const matchedRuleName = resolvedRule?.rule?.name || ''
+  const canonicalNameUsed = resolvedRule?.canonicalNameUsed || ''
+  const productName = sourceItemName || canonicalNameUsed || matchedRuleName || 'Unnamed item'
   const ataCategory = resolvedRule?.rule?.category
   const jobCategory = jobItem?.category
   const category = toDisplayCategory(ataCategory || jobCategory || 'other')
@@ -346,6 +349,9 @@ export function generateLabelsForItem(jobItem, resolvedRule) {
     return {
       itemKey,
       productName,
+      sourceItemName,
+      matchedRuleName,
+      canonicalNameUsed: canonicalNameUsed || null,
       totalQty: Number.isFinite(totalQty) ? totalQty : 0,
       category,
       packagingType: '',
@@ -381,6 +387,9 @@ export function generateLabelsForItem(jobItem, resolvedRule) {
   return {
     itemKey,
     productName,
+    sourceItemName,
+    matchedRuleName,
+    canonicalNameUsed: canonicalNameUsed || null,
     totalQty: Number.isFinite(totalQty) ? totalQty : 0,
     category,
     packagingType: resolvedRule.rule.packaging || extractPackagingFromUnitName(resolvedRule.rule.unitName),
@@ -389,7 +398,6 @@ export function generateLabelsForItem(jobItem, resolvedRule) {
     confidence,
     flags,
     matchedBy: resolvedRule.matchedBy || 'exact',
-    canonicalNameUsed: resolvedRule.canonicalNameUsed || null,
   }
 }
 
