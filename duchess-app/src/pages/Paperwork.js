@@ -1,7 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../contexts/AuthContext'
+import RmsBulkRefreshPanel from '../components/RmsBulkRefreshPanel'
 import RmsJobRefreshPanel from '../components/RmsJobRefreshPanel'
-import { canRefreshFromRmsRole } from '../lib/refreshJobFromRms'
+import RmsRowStatusBadge from '../components/RmsRowStatusBadge'
+import {
+  buildVisibleJobsFingerprint,
+  canRefreshFromRmsRole,
+  classifyRmsRefreshScanResult,
+  countRmsFilterMatches,
+  getRmsRowTintStyle,
+  matchesRmsListFilter,
+  refreshJobFromRms,
+} from '../lib/refreshJobFromRms'
 import { supabase } from '../lib/supabase'
 
 const {
@@ -32,6 +42,10 @@ export default function Paperwork() {
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [pdfLoadingJobId, setPdfLoadingJobId] = useState(null)
+  const [rmsByJobId, setRmsByJobId] = useState({})
+  const [rmsScanPhase, setRmsScanPhase] = useState('idle')
+  const [rmsScanFingerprint, setRmsScanFingerprint] = useState(null)
+  const [rmsListFilter, setRmsListFilter] = useState('all')
 
   useEffect(() => {
     fetchJobs()
@@ -57,10 +71,73 @@ export default function Paperwork() {
 
     if (data) {
       setJobs((prev) => prev.map((j) => (j.id === jobId ? data : j)))
+      return data
     }
+    return null
   }
 
   const showRmsRefresh = canRefreshFromRmsRole(profile?.role)
+
+  const filtered = useMemo(
+    () => jobs.filter((job) =>
+      !search || [job.event_name, job.client_name, job.crms_ref, job.venue]
+        .some((field) => field?.toLowerCase().includes(search.toLowerCase())),
+    ),
+    [jobs, search],
+  )
+
+  const visibleFingerprint = useMemo(() => buildVisibleJobsFingerprint(filtered), [filtered])
+
+  const scanListStale = Boolean(
+    rmsScanFingerprint &&
+    rmsScanPhase !== 'idle' &&
+    visibleFingerprint !== rmsScanFingerprint,
+  )
+
+  const displayJobs = useMemo(() => {
+    if (rmsListFilter === 'all' || rmsScanPhase === 'idle') return filtered
+    return filtered.filter((job) => matchesRmsListFilter(rmsByJobId[job.id], rmsListFilter))
+  }, [filtered, rmsListFilter, rmsByJobId, rmsScanPhase])
+
+  const rmsFilterChips = useMemo(() => {
+    if (rmsScanPhase === 'idle' || rmsScanPhase === 'scanning') return []
+    return [
+      { id: 'all', label: 'All', count: filtered.length },
+      { id: 'needsRefresh', label: 'Needs refresh', count: countRmsFilterMatches(filtered, rmsByJobId, 'needsRefresh') },
+      { id: 'issues', label: 'Blocked / errors', count: countRmsFilterMatches(filtered, rmsByJobId, 'issues') },
+      { id: 'upToDate', label: 'Up to date', count: countRmsFilterMatches(filtered, rmsByJobId, 'upToDate') },
+    ]
+  }, [filtered, rmsByJobId, rmsScanPhase])
+
+  function handleRmsScanComplete({ byJobId, fingerprint }) {
+    setRmsByJobId(byJobId)
+    setRmsScanFingerprint(fingerprint)
+    setRmsListFilter('all')
+  }
+
+  function handleRmsReset() {
+    setRmsByJobId({})
+    setRmsScanFingerprint(null)
+    setRmsScanPhase('idle')
+    setRmsListFilter('all')
+  }
+
+  async function refreshSingleJobScan(job) {
+    if (rmsScanPhase === 'idle' || !job?.id) return
+    try {
+      const result = await refreshJobFromRms({ job_id: job.id, apply: false })
+      const row = classifyRmsRefreshScanResult({ result, job })
+      setRmsByJobId((prev) => ({ ...prev, [job.id]: row }))
+    } catch (err) {
+      const row = classifyRmsRefreshScanResult({ error: err, job })
+      setRmsByJobId((prev) => ({ ...prev, [job.id]: row }))
+    }
+  }
+
+  async function handleRowRefreshed(job) {
+    const updated = await reloadJob(job.id)
+    await refreshSingleJobScan(updated || job)
+  }
 
   async function getLogoBase64() {
     try {
@@ -244,12 +321,9 @@ export default function Paperwork() {
     win.document.close()
   }
 
-  const filtered = jobs.filter((job) =>
-    !search || [job.event_name, job.client_name, job.crms_ref, job.venue]
-      .some((field) => field?.toLowerCase().includes(search.toLowerCase()))
-  )
-
   const today = new Date().toISOString().split('T')[0]
+
+  const rmsGridColumns = showRmsRefresh ? '1fr 180px 160px 120px' : '1fr 160px 120px'
 
   if (loading) {
     return (
@@ -276,6 +350,16 @@ export default function Paperwork() {
         </button>
       </div>
 
+      {showRmsRefresh && (
+        <RmsBulkRefreshPanel
+          jobs={filtered}
+          onScanComplete={handleRmsScanComplete}
+          onReset={handleRmsReset}
+          onPhaseChange={setRmsScanPhase}
+          onApplyComplete={fetchJobs}
+        />
+      )}
+
       <div style={{ marginBottom: '16px' }}>
         <input
           value={search}
@@ -285,19 +369,64 @@ export default function Paperwork() {
         />
       </div>
 
+      {showRmsRefresh && scanListStale && (
+        <div style={{ fontSize: '12px', color: '#854F0B', background: '#FEF3C7', border: '1px solid #FDE68A', borderRadius: '6px', padding: '8px 12px', marginBottom: '12px' }}>
+          List changed — scan again for current visible orders.
+        </div>
+      )}
+
+      {showRmsRefresh && rmsFilterChips.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '14px' }}>
+          {rmsFilterChips.map((chip) => {
+            const active = rmsListFilter === chip.id
+            return (
+              <button
+                key={chip.id}
+                type="button"
+                onClick={() => setRmsListFilter(chip.id)}
+                style={{
+                  fontSize: '11px',
+                  fontWeight: '500',
+                  padding: '6px 12px',
+                  borderRadius: '999px',
+                  border: active ? 'none' : '1.5px solid #DDD8CF',
+                  background: active ? '#1C1C1E' : '#fff',
+                  color: active ? '#fff' : '#6B6860',
+                  cursor: 'pointer',
+                  fontFamily: "'DM Sans', sans-serif",
+                }}
+              >
+                {chip.label} ({chip.count})
+              </button>
+            )
+          })}
+        </div>
+      )}
+
       <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', overflow: 'hidden' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: showRmsRefresh ? '1fr 160px 140px 120px' : '1fr 160px 120px', gap: '0', background: '#F7F3EE', borderBottom: '1px solid #DDD8CF', padding: '10px 16px' }}>
-          {(showRmsRefresh ? ['Event / Client', 'PDF', 'RMS', 'Run Sheet'] : ['Event / Client', 'PDF', 'Run Sheet']).map((heading) => (
+        <div style={{ display: 'grid', gridTemplateColumns: rmsGridColumns, gap: '0', background: '#F7F3EE', borderBottom: '1px solid #DDD8CF', padding: '10px 16px' }}>
+          {(showRmsRefresh ? ['Event / Client', 'RMS Health', 'PDF', 'Run Sheet'] : ['Event / Client', 'PDF', 'Run Sheet']).map((heading) => (
             <div key={heading} style={{ fontSize: '11px', fontWeight: '500', letterSpacing: '0.06em', textTransform: 'uppercase', color: '#6B6860' }}>
               {heading}
             </div>
           ))}
         </div>
 
-        {filtered.length === 0 ? (
+        {displayJobs.length === 0 ? (
           <div style={{ padding: '40px', textAlign: 'center', color: '#9CA3AF', fontSize: '13px' }}>No jobs found</div>
-        ) : filtered.map((job) => (
-          <div key={job.id} style={{ display: 'grid', gridTemplateColumns: showRmsRefresh ? '1fr 160px 140px 120px' : '1fr 160px 120px', gap: '0', padding: '12px 16px', borderBottom: '0.5px solid #EDE8E0', alignItems: 'center' }}>
+        ) : displayJobs.map((job) => (
+          <div
+            key={job.id}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: rmsGridColumns,
+              gap: '0',
+              padding: '12px 16px',
+              borderBottom: '0.5px solid #EDE8E0',
+              alignItems: 'center',
+              ...getRmsRowTintStyle(rmsByJobId[job.id]),
+            }}
+          >
             <div>
               <div style={{ fontSize: '13px', fontWeight: '500', marginBottom: '2px' }}>{job.event_name}</div>
               <div style={{ fontSize: '11px', color: '#6B6860' }}>
@@ -309,6 +438,17 @@ export default function Paperwork() {
                 </div>
               )}
             </div>
+
+            {showRmsRefresh && (
+              <div style={{ display: 'grid', gap: '8px', minWidth: 0 }}>
+                <RmsRowStatusBadge scanResult={rmsByJobId[job.id]} />
+                <RmsJobRefreshPanel
+                  job={job}
+                  disabled={!job.crms_id}
+                  onRefreshed={() => handleRowRefreshed(job)}
+                />
+              </div>
+            )}
 
             <div>
               {job.delivery_date ? (
@@ -332,16 +472,6 @@ export default function Paperwork() {
                 </button>
               ) : <span style={{ fontSize: '11px', color: '#DDD8CF' }}>-</span>}
             </div>
-
-            {showRmsRefresh && (
-              <div>
-                <RmsJobRefreshPanel
-                  job={job}
-                  disabled={!job.crms_id}
-                  onRefreshed={() => reloadJob(job.id)}
-                />
-              </div>
-            )}
 
             <div>
               <button
