@@ -33,7 +33,7 @@ function fmt(d) {
 
 export default function DriverPortal({ token }) {
   const [driver, setDriver]       = useState(null)
-  const [jobs, setJobs]           = useState([])
+  const [portalRuns, setPortalRuns] = useState([])
   const [selectedJob, setSelected]= useState(null)
   const [tab, setTab]             = useState('details')
   const [notes, setNotes]         = useState([])
@@ -63,44 +63,33 @@ export default function DriverPortal({ token }) {
 
   const today = new Date().toISOString().split('T')[0]
 
-  useEffect(() => { if (token) fetchDriver() }, [token])
+  useEffect(() => { if (token) loadPortal() }, [token])
 
-  async function fetchDriver() {
+  async function loadPortal() {
+    setLoading(true)
+    setError(null)
     try {
-      console.log('Fetching driver with token:', token)
+      const res = await fetch(
+        `/api/driver-portal-runs?token=${encodeURIComponent(token)}`,
+      )
+      const body = await res.json().catch(() => ({}))
 
-      const { data, error, status, statusText } = await supabase
-        .from('drivers')
-        .select('id, name, colour, active, token_created_at')
-        .eq('access_token', token)
-        .maybeSingle()
-
-      console.log('Response:', { data, error, status, statusText })
-
-      if (error || !data) {
-        setError('Invalid or expired link.')
+      if (!res.ok) {
+        setError(body.error || 'Failed to load your runs. Please try again or ask your manager for a new link.')
         setLoading(false)
         return
       }
 
-      // Check if token is older than 7 days
-      if (data.token_created_at) {
-        const created = new Date(data.token_created_at)
-        const daysSince = (Date.now() - created.getTime()) / (1000 * 60 * 60 * 24)
-        if (daysSince > 7) {
-          setError('This link has expired. Please ask your manager for a new link.')
-          setLoading(false)
-          return
-        }
-      }
+      setDriver(body.driver || null)
+      setPortalRuns(body.runs || [])
 
-      setDriver(data)
-      fetchJobs(data.name)
-    } catch(e) {
-      console.error('Exception:', e)
-      setError('Exception: ' + e.message)
-      setLoading(false)
+      const jobIds = [...new Set((body.runs || []).map((r) => r.job?.id).filter(Boolean))]
+      if (jobIds.length) fetchHiddenItems(jobIds)
+    } catch (e) {
+      console.error('loadPortal:', e)
+      setError('Failed to load your runs. Please check your connection and try again.')
     }
+    setLoading(false)
   }
 
   async function fetchHiddenItems(jobIds) {
@@ -116,69 +105,6 @@ export default function DriverPortal({ token }) {
       })
       setDeletedItems(hidden)
     }
-  }
-
-  async function fetchJobs(driverName) {
-    const { data, error } = await supabase
-      .from('crms_jobs')
-      .select('*')
-      .not('status', 'eq', 'cancelled')
-      .order('delivery_date', { ascending: true, nullsLast: true })
-
-    console.log('fetchJobs called for:', driverName)
-    console.log('Total jobs fetched:', data?.length, 'Error:', error)
-
-    if (data) {
-      const myJobs = data.filter(j => {
-        const isMyJob =
-          j.assigned_driver_name === driverName ||
-          j.assigned_driver_name_2 === driverName ||
-          j.col_driver_name === driverName ||
-          j.col_driver_name_2 === driverName
-        if (!isMyJob) return false
-
-        // Show job if DEL or COL is not yet done
-        const delAssigned = j.assigned_driver_name === driverName || j.assigned_driver_name_2 === driverName
-        const colAssigned = j.col_driver_name === driverName || j.col_driver_name_2 === driverName
-
-        const delPending = delAssigned && !j.delivery_done
-        const colPending = colAssigned && !j.collection_done
-
-        return delPending || colPending
-      })
-
-      console.log('My jobs after filter:', myJobs.length)
-
-      // Fetch items for these jobs
-      if (myJobs.length > 0) {
-        const jobIds = myJobs.map(j => j.id)
-        const { data: itemsData } = await supabase
-          .from('crms_job_items')
-          .select('*')
-          .in('job_id', jobIds)
-
-        const itemsByJob = {}
-        if (itemsData) {
-          itemsData.forEach(item => {
-            if (!itemsByJob[item.job_id]) itemsByJob[item.job_id] = []
-            itemsByJob[item.job_id].push(item)
-          })
-        }
-        console.log('Items fetched:', itemsData?.length)
-        console.log('Job IDs:', jobIds)
-        console.log('Items by job:', JSON.stringify(itemsByJob))
-
-        setJobs(myJobs.map(j => ({
-          ...j,
-          items: itemsByJob[j.id] || [],
-        })))
-        fetchHiddenItems(myJobs.map(j => j.id))
-      } else {
-        setJobs([])
-        fetchHiddenItems(myJobs.map(j => j.id))
-      }
-    }
-    setLoading(false)
   }
 
   async function openJob(job) {
@@ -394,17 +320,6 @@ export default function DriverPortal({ token }) {
     general:   { bg: '#F7F3EE', border: '#B8965A', badgeBg: '#DDD8CF', badgeColor: '#5F5E5A' },
   }
 
-  // Build runs from jobs
-  const runs = []
-  for (const j of jobs) {
-    if (j.delivery_date) runs.push({ job: j, type: 'DEL', date: j.delivery_date, time: j.delivery_time })
-    if (j.collection_date) runs.push({ job: j, type: 'COL', date: j.collection_date, time: j.collection_time })
-  }
-  runs.sort((a, b) => {
-    const d = a.date.localeCompare(b.date)
-    return d !== 0 ? d : (a.time || '99:99').localeCompare(b.time || '99:99')
-  })
-
   if (loading) return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#F7F3EE', fontFamily: "'DM Sans', sans-serif", fontSize: '16px', color: '#6B6860' }}>
       Loading…
@@ -539,7 +454,7 @@ export default function DriverPortal({ token }) {
       </div>
 
       <div style={{ padding: '16px', maxWidth: '600px', margin: '0 auto' }}>
-        {jobs.length === 0 ? (
+        {portalRuns.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '48px 24px', color: '#6B6860' }}>
             <div style={{ fontSize: '32px', marginBottom: '12px' }}>📋</div>
             <div style={{ fontSize: '15px', fontWeight: '500', marginBottom: '6px' }}>No upcoming runs</div>
@@ -549,62 +464,8 @@ export default function DriverPortal({ token }) {
           const today = new Date().toLocaleDateString('en-CA')
           const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('en-CA')
 
-          // Build runs from jobs
-          const runs = []
-          jobs.forEach(job => {
-            const delDate = job.manual_delivery_date || job.delivery_date
-            const delTime = job.manual_delivery_time || job.delivery_time
-            const colDate = job.manual_collection_date || job.collection_date
-            const colTime = job.manual_collection_time || job.collection_time
-
-            const delEndTime = job.delivery_end_time?.substring(0,5)
-            const colEndTime = job.collection_end_time?.substring(0,5)
-
-            const isDelTimed = !!(delEndTime && !['17:00','18:00','00:00'].includes(delEndTime))
-            const isColTimed = !!(colEndTime && !['17:00','18:00','00:00'].includes(colEndTime))
-
-            if (delDate && !job.delivery_done && (
-              job.assigned_driver_name === driver?.name ||
-              job.assigned_driver_name_2 === driver?.name
-            )) {
-              runs.push({ 
-                job, type: 'DEL', 
-                date: delDate, 
-                time: delTime?.substring(0,5) || null,
-                endTime: delEndTime || null,
-                isTimed: isDelTimed,
-                sortOrder: job.manual_sort_order || 0,
-              })
-            }
-            if (colDate && !job.collection_done && (
-              job.assigned_driver_name === driver?.name ||
-              job.assigned_driver_name_2 === driver?.name ||
-              job.col_driver_name === driver?.name ||
-              job.col_driver_name_2 === driver?.name
-            )) {
-              runs.push({ 
-                job, type: 'COL', 
-                date: colDate, 
-                time: colTime?.substring(0,5) || null,
-                endTime: colEndTime || null,
-                isTimed: isColTimed,
-                sortOrder: job.manual_sort_order || 0,
-              })
-            }
-          })
-
-          runs.sort((a, b) => {
-            const d = a.date.localeCompare(b.date)
-            if (d !== 0) return d
-            const aHasOrder = (a.sortOrder || 0) > 0
-            const bHasOrder = (b.sortOrder || 0) > 0
-            if (aHasOrder || bHasOrder) return (a.sortOrder || 0) - (b.sortOrder || 0)
-            return (a.time || '99:99').localeCompare(b.time || '99:99')
-          })
-
-          // Group by date label
           const groups = {}
-          runs.forEach(run => {
+          portalRuns.forEach(run => {
             const label = run.date === today ? 'Today'
               : run.date === tomorrow ? 'Tomorrow'
                 : new Date(run.date + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })
@@ -617,13 +478,13 @@ export default function DriverPortal({ token }) {
               <div style={{ fontSize: '11px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B8965A', marginBottom: '8px', padding: '0 2px' }}>
                 {label} · {groupRuns.length} run{groupRuns.length !== 1 ? 's' : ''}
               </div>
-              {groupRuns.map((run, i) => (
+              {groupRuns.map((run) => (
                 <RunCard
-                  key={i}
+                  key={run.id}
                   run={run}
                   onOpen={() => openJob(run.job)}
                   onReport={openReport}
-                  onDone={fetchJobs.bind(null, driver?.name)}
+                  onDone={loadPortal}
                 />
               ))}
             </div>
