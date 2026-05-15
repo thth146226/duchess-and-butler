@@ -1,4 +1,7 @@
 import { useEffect, useState } from 'react'
+import { useAuth } from '../contexts/AuthContext'
+import RmsJobRefreshPanel from '../components/RmsJobRefreshPanel'
+import { canRefreshFromRmsRole } from '../lib/refreshJobFromRms'
 import { supabase } from '../lib/supabase'
 
 const {
@@ -24,6 +27,7 @@ function getFilenameFromDisposition(headerValue) {
 }
 
 export default function Paperwork() {
+  const { profile } = useAuth()
   const [jobs, setJobs] = useState([])
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
@@ -43,6 +47,20 @@ export default function Paperwork() {
     if (data) setJobs(data)
     setLoading(false)
   }
+
+  async function reloadJob(jobId) {
+    const { data } = await supabase
+      .from('crms_jobs')
+      .select('*, crms_job_items(*)')
+      .eq('id', jobId)
+      .single()
+
+    if (data) {
+      setJobs((prev) => prev.map((j) => (j.id === jobId ? data : j)))
+    }
+  }
+
+  const showRmsRefresh = canRefreshFromRmsRole(profile?.role)
 
   async function getLogoBase64() {
     try {
@@ -268,8 +286,8 @@ export default function Paperwork() {
       </div>
 
       <div style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '8px', overflow: 'hidden' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px 120px', gap: '0', background: '#F7F3EE', borderBottom: '1px solid #DDD8CF', padding: '10px 16px' }}>
-          {['Event / Client', 'PDF', 'Run Sheet'].map((heading) => (
+        <div style={{ display: 'grid', gridTemplateColumns: showRmsRefresh ? '1fr 160px 140px 120px' : '1fr 160px 120px', gap: '0', background: '#F7F3EE', borderBottom: '1px solid #DDD8CF', padding: '10px 16px' }}>
+          {(showRmsRefresh ? ['Event / Client', 'PDF', 'RMS', 'Run Sheet'] : ['Event / Client', 'PDF', 'Run Sheet']).map((heading) => (
             <div key={heading} style={{ fontSize: '11px', fontWeight: '500', letterSpacing: '0.06em', textTransform: 'uppercase', color: '#6B6860' }}>
               {heading}
             </div>
@@ -279,7 +297,7 @@ export default function Paperwork() {
         {filtered.length === 0 ? (
           <div style={{ padding: '40px', textAlign: 'center', color: '#9CA3AF', fontSize: '13px' }}>No jobs found</div>
         ) : filtered.map((job) => (
-          <div key={job.id} style={{ display: 'grid', gridTemplateColumns: '1fr 160px 120px', gap: '0', padding: '12px 16px', borderBottom: '0.5px solid #EDE8E0', alignItems: 'center' }}>
+          <div key={job.id} style={{ display: 'grid', gridTemplateColumns: showRmsRefresh ? '1fr 160px 140px 120px' : '1fr 160px 120px', gap: '0', padding: '12px 16px', borderBottom: '0.5px solid #EDE8E0', alignItems: 'center' }}>
             <div>
               <div style={{ fontSize: '13px', fontWeight: '500', marginBottom: '2px' }}>{job.event_name}</div>
               <div style={{ fontSize: '11px', color: '#6B6860' }}>
@@ -314,6 +332,16 @@ export default function Paperwork() {
                 </button>
               ) : <span style={{ fontSize: '11px', color: '#DDD8CF' }}>-</span>}
             </div>
+
+            {showRmsRefresh && (
+              <div>
+                <RmsJobRefreshPanel
+                  job={job}
+                  disabled={!job.crms_id}
+                  onRefreshed={() => reloadJob(job.id)}
+                />
+              </div>
+            )}
 
             <div>
               <button

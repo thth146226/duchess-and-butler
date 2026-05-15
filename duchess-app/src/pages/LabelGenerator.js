@@ -15,6 +15,7 @@ import {
   sumManualLabels,
 } from '../lib/labelGenerator'
 import { classifyJobItemWorkflow } from '../lib/itemWorkflowClassification'
+import RmsJobRefreshPanel from '../components/RmsJobRefreshPanel'
 
 const LABELS_PER_PAGE = 6
 
@@ -799,6 +800,11 @@ export default function LabelGenerator() {
                 <button onClick={resetAllToAutomatic} style={{ fontSize: '11px', padding: '7px 11px', borderRadius: '8px', border: '1px solid #DDD8CF', background: '#fff', color: '#6B6860', cursor: 'pointer' }}>
                   Reset all to automatic
                 </button>
+                <RmsJobRefreshPanel
+                  job={selectedOrder}
+                  disabled={!selectedOrder.crms_id}
+                  onRefreshed={() => loadOrderData(selectedOrder.id)}
+                />
                 <button
                   onClick={handlePrint}
                   disabled={isPrinting || isExportingPdf}
