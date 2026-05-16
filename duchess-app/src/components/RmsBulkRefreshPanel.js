@@ -4,6 +4,7 @@ import {
   buildScanResultsByJobId,
   buildVisibleJobsFingerprint,
   classifyRmsRefreshScanResult,
+  dryRunScanJobFromRms,
   hasRmsJobId,
   isSafeToApply,
   refreshJobFromRms,
@@ -268,8 +269,8 @@ export default function RmsBulkRefreshPanel({
 
       let row
       try {
-        const result = await refreshJobFromRms({ job_id: job.id, apply: false })
-        row = classifyRmsRefreshScanResult({ result, job })
+        const scanned = await dryRunScanJobFromRms(job)
+        row = scanned.row
       } catch (err) {
         row = classifyRmsRefreshScanResult({ error: err, job })
       }

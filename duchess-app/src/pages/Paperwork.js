@@ -8,9 +8,9 @@ import {
   canRefreshFromRmsRole,
   classifyRmsRefreshScanResult,
   countRmsFilterMatches,
+  dryRunScanJobFromRms,
   getRmsRowTintStyle,
   matchesRmsListFilter,
-  refreshJobFromRms,
 } from '../lib/refreshJobFromRms'
 import { supabase } from '../lib/supabase'
 
@@ -122,15 +122,22 @@ export default function Paperwork() {
     setRmsListFilter('all')
   }
 
+  function upsertRmsJobRow(row) {
+    const jobId = row?.job?.id
+    if (!jobId) return
+    setRmsByJobId((prev) => ({ ...prev, [jobId]: row }))
+  }
+
   async function refreshSingleJobScan(job) {
-    if (rmsScanPhase === 'idle' || !job?.id) return
+    if (!job?.id) return null
     try {
-      const result = await refreshJobFromRms({ job_id: job.id, apply: false })
-      const row = classifyRmsRefreshScanResult({ result, job })
-      setRmsByJobId((prev) => ({ ...prev, [job.id]: row }))
+      const { row } = await dryRunScanJobFromRms(job)
+      upsertRmsJobRow(row)
+      return row
     } catch (err) {
       const row = classifyRmsRefreshScanResult({ error: err, job })
-      setRmsByJobId((prev) => ({ ...prev, [job.id]: row }))
+      upsertRmsJobRow(row)
+      return row
     }
   }
 
@@ -445,6 +452,7 @@ export default function Paperwork() {
                 <RmsJobRefreshPanel
                   job={job}
                   disabled={!job.crms_id}
+                  onRowStatusUpdate={upsertRmsJobRow}
                   onRefreshed={() => handleRowRefreshed(job)}
                 />
               </div>

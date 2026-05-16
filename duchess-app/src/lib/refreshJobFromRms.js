@@ -54,13 +54,18 @@ export function countRmsRefreshChanges(stats) {
   return (stats.addedFound || 0) + (stats.changedFound || 0) + (stats.staleFound || 0)
 }
 
+export function isZeroRmsItemsBlocked(stats, warnings = []) {
+  if ((stats?.fetchedFromRms || 0) === 0) return true
+  const list = Array.isArray(warnings) ? warnings : []
+  return list.some((warning) => /zero opportunity_items/i.test(String(warning)))
+}
+
 export function isApplyBlockedByWarnings(stats, warnings = []) {
   if (!stats) return true
-  if ((stats.fetchedFromRms || 0) === 0) return true
+  if (isZeroRmsItemsBlocked(stats, warnings)) return true
 
   const list = Array.isArray(warnings) ? warnings : []
   const blockedPatterns = [
-    /zero opportunity_items/i,
     /stale ratio/i,
     /exceeds.*threshold/i,
     /apply aborted/i,
@@ -69,6 +74,19 @@ export function isApplyBlockedByWarnings(stats, warnings = []) {
   return list.some((warning) =>
     blockedPatterns.some((pattern) => pattern.test(String(warning))),
   )
+}
+
+/** Dry-run scan with one retry when RMS returns zero items (check phase only). */
+export async function dryRunScanJobFromRms(job) {
+  let result = await refreshJobFromRms({ job_id: job.id, apply: false })
+  let row = classifyRmsRefreshScanResult({ result, job })
+
+  if (row.status === 'blocked' && isZeroRmsItemsBlocked(result?.stats, result?.warnings)) {
+    result = await refreshJobFromRms({ job_id: job.id, apply: false })
+    row = classifyRmsRefreshScanResult({ result, job })
+  }
+
+  return { result, row }
 }
 
 export function classifyRmsRefreshScanResult({ result, error, job } = {}) {
@@ -257,12 +275,15 @@ export function formatRmsRowStatusDetail(scanResult) {
   }
 
   if (status === 'blocked') {
+    if (isZeroRmsItemsBlocked(stats, warnings)) {
+      return 'Blocked · RMS returned zero items during this check. Recheck before applying.'
+    }
     const warning = warnings?.[0]
     if (warning) {
       const text = String(warning)
-      return `Blocked · ${text.length > 72 ? `${text.slice(0, 72)}…` : text}`
+      return `Blocked · Safety stop — ${text.length > 56 ? `${text.slice(0, 56)}…` : text}`
     }
-    return 'Blocked · manual review required'
+    return 'Blocked · Safety stop — manual review required before applying.'
   }
 
   if (status === 'error') {

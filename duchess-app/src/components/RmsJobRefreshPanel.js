@@ -1,7 +1,10 @@
 import { useState } from 'react'
 import {
+  classifyRmsRefreshScanResult,
   countRmsRefreshChanges,
+  dryRunScanJobFromRms,
   isApplyBlockedByWarnings,
+  isZeroRmsItemsBlocked,
   refreshJobFromRms,
 } from '../lib/refreshJobFromRms'
 
@@ -26,7 +29,13 @@ function formatChangedRow(row) {
   return `${name} (${fromQty} → ${toQty})`
 }
 
-export default function RmsJobRefreshPanel({ job, onRefreshed, disabled = false, buttonLabel = 'Refresh from RMS' }) {
+export default function RmsJobRefreshPanel({
+  job,
+  onRefreshed,
+  onRowStatusUpdate,
+  disabled = false,
+  buttonLabel = 'Refresh from RMS',
+}) {
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [applying, setApplying] = useState(false)
@@ -49,10 +58,16 @@ export default function RmsJobRefreshPanel({ job, onRefreshed, disabled = false,
     setResult(null)
 
     try {
-      const data = await refreshJobFromRms({ job_id: job.id, apply: false })
-      setResult(data)
+      const { result, row } = await dryRunScanJobFromRms(job)
+      setResult(result)
+      if (typeof onRowStatusUpdate === 'function') {
+        onRowStatusUpdate(row)
+      }
     } catch (err) {
       setError(err.message || 'RMS refresh failed.')
+      if (typeof onRowStatusUpdate === 'function') {
+        onRowStatusUpdate(classifyRmsRefreshScanResult({ error: err, job }))
+      }
     }
 
     setLoading(false)
@@ -215,7 +230,9 @@ export default function RmsJobRefreshPanel({ job, onRefreshed, disabled = false,
 
                 {applyBlocked && changeCount > 0 && (
                   <div style={{ fontSize: '12px', color: '#A32D2D', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: '6px', padding: '10px 12px', marginTop: '12px' }}>
-                    Apply is blocked for safety. Resolve warnings or contact an administrator.
+                    {isZeroRmsItemsBlocked(stats, warnings)
+                      ? 'Apply is blocked: RMS returned zero items during this check. Recheck before applying — this is a safety stop, not proof the order has no items.'
+                      : 'Apply is blocked for safety. Resolve warnings or contact an administrator.'}
                   </div>
                 )}
 
