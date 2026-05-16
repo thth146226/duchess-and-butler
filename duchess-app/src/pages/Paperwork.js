@@ -12,6 +12,7 @@ import {
   getRmsRowTintStyle,
   matchesRmsListFilter,
 } from '../lib/refreshJobFromRms'
+import { isPaperworkEligibleJob } from '../lib/paperworkJobEligibility'
 import { supabase } from '../lib/supabase'
 
 const {
@@ -46,10 +47,20 @@ export default function Paperwork() {
   const [rmsScanPhase, setRmsScanPhase] = useState('idle')
   const [rmsScanFingerprint, setRmsScanFingerprint] = useState(null)
   const [rmsListFilter, setRmsListFilter] = useState('all')
+  const [fleetVans, setFleetVans] = useState([])
 
   useEffect(() => {
     fetchJobs()
+    fetchFleetVans()
   }, [])
+
+  async function fetchFleetVans() {
+    const { data } = await supabase
+      .from('fleet_vans')
+      .select('registration, nickname')
+
+    if (data) setFleetVans(data)
+  }
 
   async function fetchJobs() {
     const { data } = await supabase
@@ -78,12 +89,17 @@ export default function Paperwork() {
 
   const showRmsRefresh = canRefreshFromRmsRole(profile?.role)
 
+  const paperworkJobs = useMemo(
+    () => jobs.filter((job) => isPaperworkEligibleJob(job, fleetVans)),
+    [jobs, fleetVans],
+  )
+
   const filtered = useMemo(
-    () => jobs.filter((job) =>
+    () => paperworkJobs.filter((job) =>
       !search || [job.event_name, job.client_name, job.crms_ref, job.venue]
         .some((field) => field?.toLowerCase().includes(search.toLowerCase())),
     ),
-    [jobs, search],
+    [paperworkJobs, search],
   )
 
   const visibleFingerprint = useMemo(() => buildVisibleJobsFingerprint(filtered), [filtered])
@@ -228,7 +244,7 @@ export default function Paperwork() {
           <div style="font-size:10px;letter-spacing:0.2em;color:#B8965A;font-weight:400;margin-top:4px">LUXURY TABLESCAPES & EVENT DECOR</div>
         </div>`
 
-    const dayJobs = jobs.filter((job) => job.delivery_date === date || job.collection_date === date)
+    const dayJobs = paperworkJobs.filter((job) => job.delivery_date === date || job.collection_date === date)
     const runs = []
 
     for (const job of dayJobs) {
@@ -346,7 +362,7 @@ export default function Paperwork() {
         <div>
           <div style={{ fontSize: '13px', fontWeight: '500' }}>Today's run sheet</div>
           <div style={{ fontSize: '12px', color: '#6B6860' }}>
-            {jobs.filter((job) => job.delivery_date === today || job.collection_date === today).length} runs scheduled today
+            {paperworkJobs.filter((job) => job.delivery_date === today || job.collection_date === today).length} runs scheduled today
           </div>
         </div>
         <button
