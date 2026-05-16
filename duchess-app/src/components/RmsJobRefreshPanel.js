@@ -95,8 +95,9 @@ export default function RmsJobRefreshPanel({
   const diff = result?.diff
   const warnings = result?.warnings || []
   const changeCount = countRmsRefreshChanges(stats)
-  const upToDate = result && changeCount === 0
+  const zeroItemsBlocked = Boolean(result && isZeroRmsItemsBlocked(stats, warnings))
   const applyBlocked = isApplyBlockedByWarnings(stats, warnings)
+  const upToDate = result && changeCount === 0 && !applyBlocked
   const canApply = result && changeCount > 0 && !applyBlocked && !loading && !applying
 
   return (
@@ -179,7 +180,11 @@ export default function RmsJobRefreshPanel({
 
             {result && !loading && (
               <>
-                {upToDate ? (
+                {zeroItemsBlocked ? (
+                  <div style={{ fontSize: '13px', color: '#A32D2D', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: '6px', padding: '10px 12px', marginBottom: '12px', lineHeight: 1.45 }}>
+                    RMS returned zero items during this check. Recheck before applying — this is a safety stop, not proof the order has no items.
+                  </div>
+                ) : upToDate ? (
                   <div style={{ fontSize: '13px', color: '#3B6D11', background: '#EAF3DE', borderRadius: '6px', padding: '10px 12px', marginBottom: '12px' }}>
                     Order is already up to date.
                   </div>

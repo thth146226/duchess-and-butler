@@ -111,7 +111,7 @@ export default function LabelGenerator() {
     const [{ data: orderData, error: orderError }, { data: itemsData, error: itemsError }, { data: ataData, error: ataError }] = await Promise.all([
       supabase
         .from('crms_jobs')
-        .select('id, crms_ref, event_name, client_name, venue, venue_address, delivery_date, collection_date, assigned_driver_name, status')
+        .select('id, crms_id, crms_ref, event_name, client_name, venue, venue_address, delivery_date, collection_date, assigned_driver_name, status')
         .eq('id', orderId)
         .single(),
       supabase
