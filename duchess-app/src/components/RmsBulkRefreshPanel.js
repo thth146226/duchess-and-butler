@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import {
   RMS_STATUS_META,
   buildScanResultsByJobId,
+  buildScanResultsFromVisibleJobs,
   buildVisibleJobsFingerprint,
   classifyRmsRefreshScanResult,
   dryRunScanJobFromRms,
@@ -185,6 +186,7 @@ function DetailRow({ row }) {
 
 export default function RmsBulkRefreshPanel({
   jobs = [],
+  scanResultsByJobId = {},
   onScanComplete,
   onReset,
   onPhaseChange,
@@ -201,14 +203,27 @@ export default function RmsBulkRefreshPanel({
   const rmsJobs = useMemo(() => jobs.filter((job) => hasRmsJobId(job)), [jobs])
   const skippedCount = jobs.length - rmsJobs.length
 
-  const summary = useMemo(() => summariseScanResults(scanResults), [scanResults])
+  const useParentScanResults =
+    phase !== 'idle' &&
+    phase !== 'scanning' &&
+    scanResultsByJobId &&
+    Object.keys(scanResultsByJobId).length > 0
+
+  const effectiveScanResults = useMemo(() => {
+    if (useParentScanResults) {
+      return buildScanResultsFromVisibleJobs(jobs, scanResultsByJobId)
+    }
+    return scanResults
+  }, [useParentScanResults, jobs, scanResultsByJobId, scanResults])
+
+  const summary = useMemo(() => summariseScanResults(effectiveScanResults), [effectiveScanResults])
 
   const detailRows = useMemo(
-    () => scanResults.filter((row) => ['needsRefresh', 'blocked', 'error'].includes(row.status)),
-    [scanResults],
+    () => effectiveScanResults.filter((row) => ['needsRefresh', 'blocked', 'error'].includes(row.status)),
+    [effectiveScanResults],
   )
 
-  const safeToApply = useMemo(() => scanResults.filter(isSafeToApply), [scanResults])
+  const safeToApply = useMemo(() => effectiveScanResults.filter(isSafeToApply), [effectiveScanResults])
 
   function setPhaseAndNotify(next) {
     setPhase(next)
@@ -288,7 +303,7 @@ export default function RmsBulkRefreshPanel({
   }
 
   async function runApplyAll() {
-    const targets = scanResults.filter(isSafeToApply)
+    const targets = effectiveScanResults.filter(isSafeToApply)
     if (!targets.length) return
 
     setPhaseAndNotify('applying')
@@ -426,7 +441,7 @@ export default function RmsBulkRefreshPanel({
         </div>
       )}
 
-      {hasResults && scanResults.length > 0 && (
+      {hasResults && effectiveScanResults.length > 0 && (
         <>
           <div
             style={{

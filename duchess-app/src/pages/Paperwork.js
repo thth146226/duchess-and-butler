@@ -360,6 +360,7 @@ export default function Paperwork() {
       {showRmsRefresh && (
         <RmsBulkRefreshPanel
           jobs={filtered}
+          scanResultsByJobId={rmsByJobId}
           onScanComplete={handleRmsScanComplete}
           onReset={handleRmsReset}
           onPhaseChange={setRmsScanPhase}

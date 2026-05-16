@@ -229,6 +229,10 @@ export function buildScanResultsByJobId(scanResultsArray = []) {
   return byJobId
 }
 
+export function buildScanResultsFromVisibleJobs(jobs = [], byJobId = {}) {
+  return jobs.map((job) => byJobId[job.id]).filter(Boolean)
+}
+
 export function summariseScanResults(scanResults = []) {
   const summary = {
     totalChecked: 0,
