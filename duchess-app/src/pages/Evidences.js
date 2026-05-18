@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import JSZip from 'jszip'
 
 /** Delivery Photos page — after-delivery (DEL) photos only. */
 const RUN_TYPES = {
@@ -74,7 +75,6 @@ export default function DeliveryPhotos() {
     setDownloading(true)
 
     try {
-      const JSZip = (await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js')).default
       const zip = new JSZip()
 
       for (const photo of selectedPhotos) {
