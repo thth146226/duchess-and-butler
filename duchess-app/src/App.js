@@ -85,6 +85,16 @@ function AppInner() {
     }
   })
 
+  useEffect(() => {
+    const onPopState = () => {
+      const route = readAppRouteFromUrl()
+      setPage(route.page || 'dashboard')
+      setLabelDeepLink(route.labelDeepLink)
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+
   // Public driver portal — no auth required
   const params = new URLSearchParams(window.location.search)
   if (params.get('token')) return <DriverAccess />
@@ -175,16 +185,6 @@ function AppInner() {
     setPage(target)
     setSidebarOpen(false)
   }
-
-  useEffect(() => {
-    const onPopState = () => {
-      const route = readAppRouteFromUrl()
-      setPage(route.page || 'dashboard')
-      setLabelDeepLink(route.labelDeepLink)
-    }
-    window.addEventListener('popstate', onPopState)
-    return () => window.removeEventListener('popstate', onPopState)
-  }, [])
 
   const pageProps = {
     onNavigate: navigateTo,
