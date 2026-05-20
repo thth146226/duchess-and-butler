@@ -40,7 +40,7 @@ function confidenceStyle(level) {
   return { bg: '#FCEBEB', color: '#A32D2D' }
 }
 
-export default function LabelGenerator() {
+export default function LabelGenerator({ labelDeepLink, onLabelDeepLinkConsumed }) {
   const { profile } = useAuth()
   const [orders, setOrders] = useState([])
   const [ordersLoading, setOrdersLoading] = useState(true)
@@ -155,6 +155,57 @@ export default function LabelGenerator() {
   useEffect(() => {
     fetchOrders(showPastOrders)
   }, [showPastOrders])
+
+  const deepLinkKey = labelDeepLink?.crmsJobId || labelDeepLink?.jobRef
+    ? `${labelDeepLink?.crmsJobId || ''}:${labelDeepLink?.jobRef || ''}`
+    : null
+
+  useEffect(() => {
+    if (!deepLinkKey) return
+    let cancelled = false
+
+    async function openFromSchedule() {
+      const jobRef = (labelDeepLink?.jobRef || '').trim()
+      const crmsJobId = (labelDeepLink?.crmsJobId || '').trim()
+
+      if (crmsJobId) {
+        await loadOrderData(crmsJobId)
+        if (!cancelled) {
+          devLog('[labels-deeplink] opened by crmsJobId', { crmsJobId, jobRef })
+          onLabelDeepLinkConsumed?.()
+        }
+        return
+      }
+
+      if (!jobRef) {
+        onLabelDeepLinkConsumed?.()
+        return
+      }
+
+      const { data, error: refError } = await supabase
+        .from('crms_jobs')
+        .select('id')
+        .eq('crms_ref', jobRef)
+        .maybeSingle()
+
+      if (cancelled) return
+      if (refError) {
+        setError('Error resolving order ref: ' + refError.message)
+        onLabelDeepLinkConsumed?.()
+        return
+      }
+      if (data?.id) {
+        await loadOrderData(data.id)
+        devLog('[labels-deeplink] opened by jobRef', { jobRef, id: data.id })
+      } else {
+        setError(`No RMS order found for ref ${jobRef}`)
+      }
+      onLabelDeepLinkConsumed?.()
+    }
+
+    openFromSchedule()
+    return () => { cancelled = true }
+  }, [deepLinkKey])
 
   const filteredOrders = useMemo(() => {
     const q = search.trim().toLowerCase()
