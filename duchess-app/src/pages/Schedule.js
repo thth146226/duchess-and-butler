@@ -69,6 +69,38 @@ function isManualTdsScheduleOrder(job) {
   )
 }
 
+const LABEL_GENERATOR_PAGE = 'labelGenerator'
+
+function buildLabelGeneratorUrl(run) {
+  const job = run?.job || run
+
+  const isManual =
+    run?.is_manual === true ||
+    job?.is_manual === true ||
+    run?.source === 'manual' ||
+    job?.source === 'manual'
+
+  if (isManual) return null
+
+  const jobRef =
+    job?.crms_ref ||
+    job?.ref ||
+    run?.crms_ref ||
+    run?.ref
+
+  if (!jobRef) return null
+
+  const params = new URLSearchParams({ page: LABEL_GENERATOR_PAGE })
+  params.set('jobRef', jobRef)
+
+  const crmsJobId = job?.id || run?.job_id || run?.jobId
+  if (crmsJobId && !String(crmsJobId).startsWith('manual')) {
+    params.set('crmsJobId', String(crmsJobId))
+  }
+
+  return `?${params.toString()}`
+}
+
 function getRunDisplayTime(run) {
   const start = run?.runTime
   const end = run?.runType === 'DEL'
@@ -209,7 +241,7 @@ function applyFilter(runs, filter, weekOffset = 0, driverFilter = 'all') {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function Schedule({ refreshKey = 0 }) {
+export default function Schedule({ refreshKey = 0, onNavigate }) {
   const { profile } = useAuth()
   const [jobs, setJobs]             = useState([])
   const [drivers, setDrivers]       = useState([])
@@ -1607,6 +1639,7 @@ function RunDetailPanel({
   profile,
   drivers,
   onClose,
+  onNavigate,
   showToast,
   fetchJobs,
   assigningId,
@@ -1629,6 +1662,7 @@ function RunDetailPanel({
   const [tab, setTab] = useState('details')
   useEffect(() => { setTab('details') }, [run.id])
   const colors = getRunTone(run.runType, isSelfCollectionRun(run))
+  const labelGeneratorUrl = buildLabelGeneratorUrl(run)
 
   return (
     <div style={S.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
@@ -1643,6 +1677,25 @@ function RunDetailPanel({
             <div style={{ fontSize: '12px', color: '#6B6860' }}>{run.ref} · {run.client}</div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {labelGeneratorUrl && profile?.role === 'admin' && onNavigate && (
+              <button
+                type="button"
+                onClick={() => onNavigate(labelGeneratorUrl)}
+                style={{
+                  fontSize: '11px',
+                  fontWeight: '600',
+                  padding: '5px 12px',
+                  borderRadius: '6px',
+                  border: '1px solid #B8965A',
+                  background: '#FFFBF5',
+                  color: '#8A6D3B',
+                  cursor: 'pointer',
+                  fontFamily: "'DM Sans', sans-serif",
+                }}
+              >
+                Labels
+              </button>
+            )}
             <button
               onClick={async () => {
                 if (!window.confirm('Delete this job from the system? This cannot be undone.')) return

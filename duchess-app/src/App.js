@@ -1,5 +1,5 @@
 // v2.1 fleet
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { supabase } from './lib/supabase'
 import Login from './pages/Login'
@@ -27,6 +27,24 @@ import RewardsPortal from './pages/RewardsPortal'
 import PortalInvite from './pages/PortalInvite'
 import ClientPortal from './pages/ClientPortal'
 
+const APP_PAGES = new Set([
+  'dashboard', 'notifications', 'notes', 'evidences', 'livejobs', 'orders', 'schedule',
+  'inventory', 'paperwork', 'fleet', 'atacarnet', 'labelGenerator', 'reports', 'loyalty',
+  'driverlinks', 'team',
+])
+
+function readAppRouteFromUrl() {
+  const params = new URLSearchParams(window.location.search)
+  const pageParam = params.get('page')
+  const page = pageParam && APP_PAGES.has(pageParam) ? pageParam : null
+  return {
+    page,
+    labelDeepLink: page === 'labelGenerator'
+      ? { jobRef: params.get('jobRef'), crmsJobId: params.get('crmsJobId') }
+      : { jobRef: null, crmsJobId: null },
+  }
+}
+
 const pageTitles = {
   dashboard: 'Dashboard',
   notifications: 'Notifications',
@@ -48,7 +66,9 @@ const pageTitles = {
 
 function AppInner() {
   const { user, profile, loading } = useAuth()
-  const [page, setPage] = useState('dashboard')
+  const initialRoute = readAppRouteFromUrl()
+  const [page, setPage] = useState(initialRoute.page || 'dashboard')
+  const [labelDeepLink, setLabelDeepLink] = useState(initialRoute.labelDeepLink)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [scheduleRefreshKey, setScheduleRefreshKey] = useState(0)
   const [totpVerified, setTotpVerified] = useState(() => {
@@ -131,6 +151,53 @@ function AppInner() {
   const pages = { dashboard: Dashboard, notifications: Notifications, notes: Notes, evidences: DeliveryPhotos, livejobs: LiveJobs, orders: Orders, schedule: Schedule, inventory: Inventory, paperwork: Paperwork, fleet: Fleet, atacarnet: ATACarnet, labelGenerator: LabelGenerator, reports: Reports, loyalty: Loyalty, driverlinks: DriverLinks, team: Team }
   const PageComponent = pages[page] || Dashboard
 
+  function navigateTo(target) {
+    if (typeof target === 'string' && target.startsWith('?')) {
+      const params = new URLSearchParams(target.slice(1))
+      const nextPage = params.get('page')
+      if (nextPage && APP_PAGES.has(nextPage)) {
+        window.history.replaceState(null, '', `${window.location.pathname}${target}`)
+        setPage(nextPage)
+        if (nextPage === 'labelGenerator') {
+          setLabelDeepLink({
+            jobRef: params.get('jobRef'),
+            crmsJobId: params.get('crmsJobId'),
+          })
+        } else {
+          setLabelDeepLink({ jobRef: null, crmsJobId: null })
+        }
+        setSidebarOpen(false)
+        return
+      }
+    }
+    window.history.replaceState(null, '', window.location.pathname)
+    setLabelDeepLink({ jobRef: null, crmsJobId: null })
+    setPage(target)
+    setSidebarOpen(false)
+  }
+
+  useEffect(() => {
+    const onPopState = () => {
+      const route = readAppRouteFromUrl()
+      setPage(route.page || 'dashboard')
+      setLabelDeepLink(route.labelDeepLink)
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+
+  const pageProps = {
+    onNavigate: navigateTo,
+    refreshKey: page === 'schedule' ? scheduleRefreshKey : undefined,
+    onForceScheduleRefresh: () => setScheduleRefreshKey(k => k + 1),
+    ...(page === 'labelGenerator'
+      ? {
+          labelDeepLink,
+          onLabelDeepLinkConsumed: () => setLabelDeepLink({ jobRef: null, crmsJobId: null }),
+        }
+      : {}),
+  }
+
   return (
     <>
       <style>{`
@@ -146,7 +213,7 @@ function AppInner() {
         <div className={`sidebar-desktop ${sidebarOpen ? 'open' : ''}`}>
           <Sidebar
             active={page}
-            onNavigate={setPage}
+            onNavigate={navigateTo}
             isOpen={sidebarOpen}
             onClose={() => setSidebarOpen(false)}
           />
@@ -171,17 +238,13 @@ function AppInner() {
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               {page === 'dashboard' && (
-                <button style={styles.btnGold} onClick={() => setPage('orders')}>＋ New Order</button>
+                <button style={styles.btnGold} onClick={() => navigateTo('orders')}>＋ New Order</button>
               )}
             </div>
           </header>
 
           <div style={{ padding: '24px 28px', flex: 1 }}>
-            <PageComponent
-              onNavigate={setPage}
-              refreshKey={page === 'schedule' ? scheduleRefreshKey : undefined}
-              onForceScheduleRefresh={() => setScheduleRefreshKey(k => k + 1)}
-            />
+            <PageComponent {...pageProps} />
           </div>
         </main>
       </div>
