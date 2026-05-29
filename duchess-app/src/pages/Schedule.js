@@ -35,8 +35,11 @@ function isSelfCollectionRun(run) {
 
 function getRunTone(runType, isSelfCollection = false) {
   if (isSelfCollection) {
+    // Same purple styling, but distinguish direction:
+    // outbound (DEL) = client collecting the order -> CC
+    // return  (COL) = client returning the order -> CR
     return {
-      badgeLabel: 'SC',
+      badgeLabel: runType === 'COL' ? 'CR' : 'CC',
       badgeBg: '#EEE5F9',
       badgeText: '#6B2FB8',
       cardBg: '#F5EFFB',
