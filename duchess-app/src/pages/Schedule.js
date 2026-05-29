@@ -2516,8 +2516,9 @@ function MiniRunCard({ run, onClick, compact = false, draggable = false, onDragS
             padding: '1px 6px',
             borderRadius: '8px'
           }}>
-            {run.driverName ? run.driverName[0] : ''}
-            {run.driverName2 ? `+${run.driverName2[0]}` : ''}
+            {isSelfCollectionRun(run)
+              ? colors.badgeLabel
+              : `${run.driverName ? run.driverName[0] : ''}${run.driverName2 ? `+${run.driverName2[0]}` : ''}`}
           </span>
         </div>
       )}
