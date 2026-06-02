@@ -177,8 +177,14 @@ function buildRuns(jobs) {
       missingTime: !collectionTime,
       isManualOverride: !!job.has_manual_override,
       manualSortOrder: (job.manual_sort_order || 0) + 0.5,
+      // When a separate collection driver is stored (split assignment), the
+      // collection run uses ONLY the collection slots — it must NOT fall back
+      // to the delivery second driver (that caused T+M / M+M on collection).
+      // With no separate collection driver, collection inherits the delivery crew.
       driverName: job.col_driver_name || job.assigned_driver_name || null,
-      driverName2: job.col_driver_name_2 || job.assigned_driver_name_2 || null,
+      driverName2: job.col_driver_name
+        ? (job.col_driver_name_2 || null)
+        : (job.assigned_driver_name_2 || null),
     })
   }
   return runs.sort((a, b) => {
@@ -434,10 +440,13 @@ export default function Schedule({ refreshKey = 0 }) {
         setColDriver1(d1?.id || null)
         setColDriver2(d2?.id || null)
       }
-      // If separate col driver stored
+      // If separate col driver stored (split assignment), restore BOTH
+      // collection slots so re-saving never silently drops the 2nd driver.
       if (j.col_driver_name) {
         const cd1 = drivers.find(d => d.name === j.col_driver_name)
+        const cd2 = drivers.find(d => d.name === j.col_driver_name_2)
         setColDriver1(cd1?.id || null)
+        setColDriver2(cd2?.id || null)
       }
 
       // Manual override form pre-fill (so saving without editing doesn't wipe fields)
@@ -559,8 +568,17 @@ export default function Schedule({ refreshKey = 0 }) {
       const colD1 = drivers.find(d => d.id === colDriver1) || null
       const colD2 = drivers.find(d => d.id === colDriver2) || null
 
-      // Are DEL and COL drivers different?
-      const splitDrivers = colD1 && delD1 && colD1.id !== delD1?.id
+      // Normalize a driver slot to a comparable id (null = "None").
+      const slotId = (d) => (d && d.id) || null
+
+      // Delivery and collection are the SAME assignment only when BOTH slots
+      // match (driver1 AND driver2). A split is only meaningful once a
+      // collection driver is actually chosen — otherwise collection inherits
+      // the delivery crew (existing behaviour).
+      const samePair =
+        slotId(delD1) === slotId(colD1) &&
+        slotId(delD2) === slotId(colD2)
+      const splitDrivers = !!colD1 && !samePair
 
       let updatePayload = {}
 
