@@ -459,7 +459,7 @@ export default function Schedule({ refreshKey = 0 }) {
   async function fetchJobs() {
     // Fetch both CRMS jobs and manual orders
     const [crmsRes, ordersRes] = await Promise.all([
-      supabase.from('crms_jobs').select('*').order('delivery_date', { ascending: true, nullsLast: true }),
+      supabase.from('crms_jobs').select('*').eq('hidden_from_schedule', false).order('delivery_date', { ascending: true, nullsLast: true }),
       supabase.from('orders').select('*').eq('deleted', false).order('delivery_date', { ascending: true, nullsLast: true }),
     ])
     // Normalise manual orders to same shape as crms_jobs
@@ -1648,17 +1648,20 @@ function RunDetailPanel({
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <button
               onClick={async () => {
-                if (!window.confirm('Delete this job from the system? This cannot be undone.')) return
+                if (!window.confirm('Hide this job from the Schedule?\n\nIt will be removed from the Schedule view only. Its history, notes, evidence and reports are preserved — nothing is deleted.')) return
                 const jobId = run.job?.id || run.id
-                console.log('Deleting job:', jobId, run)
-                const { error } = await supabase.from('crms_jobs').delete().eq('id', jobId)
+                const { error } = await supabase.from('crms_jobs').update({
+                  hidden_from_schedule: true,
+                  rms_visibility_status: 'manually_hidden',
+                  rms_missing_since: new Date().toISOString(),
+                }).eq('id', jobId)
                 if (error) { showToast('Error: ' + error.message, 'error'); return }
                 onClose()
                 fetchJobs()
-                showToast('Job deleted')
+                showToast('Job hidden from Schedule')
               }}
               style={{ fontSize: '11px', fontWeight: '500', padding: '5px 12px', borderRadius: '6px', border: '1px solid #FECACA', background: '#FEF2F2', color: '#DC2626', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
-            >Delete job</button>
+            >Hide from Schedule</button>
             <button style={S.closeBtn} onClick={onClose}>✕</button>
           </div>
         </div>

@@ -102,6 +102,16 @@ function shouldImport(o) {
   return false
 }
 
+// For jobs returned by RMS but not importable, decide whether the reason is a
+// cancellation/loss (vs. simply being a non-confirmed quote/draft). Used only
+// to label rms_visibility_status — it never deletes or alters business data.
+function rmsCancelledOrLost(o) {
+  const stateName = (o.state_name || '').toLowerCase()
+  const status = (o.opportunity_status_name || o.status_name || '').toLowerCase()
+  const haystack = `${stateName} ${status}`
+  return haystack.includes('cancel') || haystack.includes('lost') || haystack.includes('dead')
+}
+
 function mapStatus(crmsStatus) {
   const s = (crmsStatus || '').toLowerCase()
   if (s.includes('cancel'))                                           return 'cancelled'
@@ -215,6 +225,13 @@ function mapOpportunity(o) {
     special_instructions: o.special_instructions || '',
     total_value:          parseFloat(o.grand_total || o.total || 0),
 
+    // Schedule visibility — an imported, confirmed Order is always visible.
+    // (Hiding is only ever applied to jobs that are NOT importable; see handler.)
+    hidden_from_schedule:  false,
+    rms_visibility_status: 'active',
+    last_rms_seen_at:      new Date().toISOString(),
+    rms_missing_since:     null,
+
     // Audit
     crms_raw:         o,
     last_synced_at:   new Date().toISOString(),
@@ -319,9 +336,11 @@ export default async function handler(req, res) {
     fetched: 0, skipped_quotes: 0,
     created: 0, updated: 0, unchanged: 0,
     changes_logged: 0, items_synced: 0,
+    hidden_missing_from_rms: 0, hidden_not_importable: 0,
     item_errors: [],
     errors: [],
   }
+  const nowIso = new Date().toISOString()
   const changedJobIds = []
   const changedJobsToSync = []
 
@@ -338,16 +357,14 @@ export default async function handler(req, res) {
       'q[s]': 'starts_at asc',
     })
 
-    // Remove any existing Supabase records that are NOT in the current API results
-    const validCrmsIds = allOpportunities.map(o => String(o.id))
-    if (validCrmsIds.length > 0) {
-      await supabase
-        .from('crms_jobs')
-        .delete()
-        .not('crms_id', 'in', `(${validCrmsIds.join(',')})`)
-    }
+    // NOTE: Records that disappear from Current RMS are NO LONGER hard-deleted.
+    // We track which CRMS ids were returned and which are importable, then
+    // soft-hide stale jobs further below (preserving all history/notes/evidence).
+    const allReturnedCrmsIds = new Set(allOpportunities.map(o => String(o.id)))
+    const oppById = new Map(allOpportunities.map(o => [String(o.id), o]))
 
     const opportunities = allOpportunities.filter(o => shouldImport(o))
+    const importableCrmsIds = new Set(opportunities.map(o => String(o.id)))
     stats.fetched = allOpportunities.length
     stats.skipped_quotes = allOpportunities.length - opportunities.length
 
@@ -373,7 +390,7 @@ export default async function handler(req, res) {
     // ── 2. Load existing Supabase records ────────────────────────────────────
     const { data: existingRecords } = await supabase
       .from('crms_jobs')
-      .select('id, crms_id, delivery_date, delivery_time, delivery_end_time, collection_date, collection_time, collection_end_time, status, event_name, client_name, venue, venue_address, notes, special_instructions, total_value, event_date, sync_change_count')
+      .select('id, crms_id, delivery_date, delivery_time, delivery_end_time, collection_date, collection_time, collection_end_time, status, event_name, client_name, venue, venue_address, notes, special_instructions, total_value, event_date, sync_change_count, hidden_from_schedule, rms_visibility_status, rms_missing_since')
 
     const existingMap = {}
     for (const r of (existingRecords || [])) existingMap[r.crms_id] = r
@@ -445,8 +462,12 @@ export default async function handler(req, res) {
             existing.notes !== mapped.notes ||
             existing.special_instructions !== mapped.special_instructions
 
-          if (hasChanged) {
-          const changes = detectChanges(existing, mapped)
+          const changes = hasChanged ? detectChanges(existing, mapped) : []
+          // A previously-hidden job that is importable again must be restored,
+          // even when no business fields changed this sync.
+          const needsUnhide =
+            existing.hidden_from_schedule === true ||
+            (existing.rms_visibility_status && existing.rms_visibility_status !== 'active')
 
           if (changes.length > 0) {
             // Preserve manual overrides — never overwrite them with RMS data
@@ -476,9 +497,19 @@ export default async function handler(req, res) {
             changedJobIds.push(existing.id)
             changedJobsToSync.push({ oppId: opp.id, jobId: existing.id })
             stats.updated++
-          } else {
-            stats.unchanged++
-          }
+          } else if (needsUnhide) {
+            // Importable Order that reappeared — restore Schedule visibility only,
+            // without touching business data or bumping sync_change_count.
+            await supabase
+              .from('crms_jobs')
+              .update({
+                hidden_from_schedule: false,
+                rms_visibility_status: 'active',
+                last_rms_seen_at: nowIso,
+                rms_missing_since: null,
+              })
+              .eq('crms_id', mapped.crms_id)
+            stats.updated++
           } else {
             stats.unchanged++
           }
@@ -497,6 +528,58 @@ export default async function handler(req, res) {
         stats.items_synced += itemResult.count
         if (itemResult.error) stats.item_errors.push({ crms_id: changed.oppId, error: itemResult.error })
       }
+    }
+
+    // ── 3b. Soft-hide jobs that are no longer importable from RMS ─────────────
+    // SOFT ONLY — rows are flagged, never deleted, so notes/evidence/reports/
+    // paperwork/labels/driver assignments and history are fully preserved.
+    // Scoped to the operational sync window (event date within the RMS query
+    // range) so historical rows outside that range are never touched.
+    const windowStartDate = '2026-01-01'
+    const windowEndDate = until.toISOString().split('T')[0]
+
+    for (const rec of (existingRecords || [])) {
+      const cid = String(rec.crms_id)
+      // Importable jobs were handled (and kept visible) in the loop above.
+      if (importableCrmsIds.has(cid)) continue
+
+      const recDate = rec.event_date || rec.delivery_date || rec.collection_date || null
+      if (!recDate || recDate < windowStartDate || recDate > windowEndDate) continue
+
+      let nextStatus
+      if (allReturnedCrmsIds.has(cid)) {
+        // Returned by RMS but shouldImport() === false.
+        const o = oppById.get(cid)
+        nextStatus = (o && rmsCancelledOrLost(o)) ? 'cancelled_in_rms' : 'not_importable_from_rms'
+      } else {
+        // Not returned by RMS at all within the window.
+        nextStatus = 'missing_from_rms'
+      }
+
+      const isMissing = nextStatus === 'missing_from_rms'
+      const alreadyInState = rec.hidden_from_schedule === true && rec.rms_visibility_status === nextStatus
+
+      if (!alreadyInState) {
+        const hidePayload = {
+          hidden_from_schedule: true,
+          rms_visibility_status: nextStatus,
+        }
+        // Stamp the first time it went missing; never overwrite an earlier stamp.
+        if (!rec.rms_missing_since) hidePayload.rms_missing_since = nowIso
+
+        const { error: hideErr } = await supabase
+          .from('crms_jobs')
+          .update(hidePayload)
+          .eq('crms_id', cid)
+
+        if (hideErr) {
+          stats.errors.push({ crms_id: cid, error: hideErr.message })
+          continue
+        }
+      }
+
+      if (isMissing) stats.hidden_missing_from_rms++
+      else stats.hidden_not_importable++
     }
 
     // ── 4. Record sync run ───────────────────────────────────────────────────
