@@ -73,8 +73,9 @@ function isManualTdsScheduleOrder(job) {
 }
 
 const STANDARD_TIME_WINDOWS = [
-  ['09:00', '17:00'],
+  ['08:00', '17:00'],
   ['08:00', '18:00'],
+  ['09:00', '17:00'],
   ['09:00', '18:00'],
 ]
 
@@ -97,7 +98,7 @@ function isStandardWindow(start, end) {
   return STANDARD_TIME_WINDOWS.some(([ws, we]) => ws === s && we === e)
 }
 
-// True when a valid start/end pair exists and is outside the three standard windows.
+// True when a valid start/end pair exists and is outside the standard windows.
 function isTimedWindow(start, end) {
   const s = normalizeTime(start)
   const e = normalizeTime(end)
