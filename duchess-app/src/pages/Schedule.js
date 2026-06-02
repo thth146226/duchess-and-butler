@@ -72,6 +72,39 @@ function isManualTdsScheduleOrder(job) {
   )
 }
 
+const STANDARD_TIME_WINDOWS = [
+  ['09:00', '17:00'],
+  ['08:00', '18:00'],
+  ['09:00', '18:00'],
+]
+
+function normalizeTime(value) {
+  if (value == null || value === '') return null
+  const s = String(value).trim()
+  if (!s) return null
+  const parts = s.split(':')
+  if (parts.length < 2) return null
+  const h = parseInt(parts[0], 10)
+  const m = parseInt(parts[1], 10)
+  if (Number.isNaN(h) || Number.isNaN(m)) return null
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
+function isStandardWindow(start, end) {
+  const s = normalizeTime(start)
+  const e = normalizeTime(end)
+  if (!s || !e) return false
+  return STANDARD_TIME_WINDOWS.some(([ws, we]) => ws === s && we === e)
+}
+
+// True when a valid start/end pair exists and is outside the three standard windows.
+function isTimedWindow(start, end) {
+  const s = normalizeTime(start)
+  const e = normalizeTime(end)
+  if (!s || !e) return false
+  return !isStandardWindow(s, e)
+}
+
 function getRunDisplayTime(run) {
   const start = run?.runTime
   const end = run?.runType === 'DEL'
@@ -154,10 +187,9 @@ function buildRuns(jobs) {
       id: `${job.id}-DEL`,
       runType: 'DEL',
       runDate: deliveryDate,
-      runTime: deliveryTime?.substring(0, 5) || null,
+      runTime: normalizeTime(deliveryTime),
       deliveryEndTime,
-      isTimed: !!(job.delivery_end_time &&
-        !['17:00', '18:00', '00:00', null].includes(job.delivery_end_time?.substring(0, 5))),
+      isTimed: isTimedWindow(deliveryTime, deliveryEndTime),
       missingTime: !deliveryTime,
       isManualOverride: !!job.has_manual_override,
       manualSortOrder: job.manual_sort_order || 0,
@@ -170,10 +202,9 @@ function buildRuns(jobs) {
       id: `${job.id}-COL`,
       runType: 'COL',
       runDate: collectionDate,
-      runTime: collectionTime?.substring(0, 5) || null,
+      runTime: normalizeTime(collectionTime),
       collectionEndTime,
-      isTimed: !!(job.collection_end_time &&
-        !['17:00', '18:00', '00:00', null].includes(job.collection_end_time?.substring(0, 5))),
+      isTimed: isTimedWindow(collectionTime, collectionEndTime),
       missingTime: !collectionTime,
       isManualOverride: !!job.has_manual_override,
       manualSortOrder: (job.manual_sort_order || 0) + 0.5,
