@@ -2,6 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { buildAtaCapacityMap, normalizeItemName, resolveJobItemRule } from '../lib/labelGenerator'
 import { classifyJobItemWorkflow } from '../lib/itemWorkflowClassification'
+import {
+  countInventoryRefreshChanges,
+  hasInventoryApplyBlockers,
+  refreshInventoryFromRms,
+} from '../lib/refreshInventoryFromRms'
 import { useAuth } from '../contexts/AuthContext'
 
 const ITEM_FETCH_LIMIT = 5000
@@ -69,6 +74,12 @@ export default function Inventory() {
   const [classifyNotes, setClassifyNotes] = useState('')
   const [actionError, setActionError] = useState(null)
   const [actionSaving, setActionSaving] = useState(false)
+
+  const [rmsRefreshOpen, setRmsRefreshOpen] = useState(false)
+  const [rmsLoading, setRmsLoading] = useState(false)
+  const [rmsApplying, setRmsApplying] = useState(false)
+  const [rmsResult, setRmsResult] = useState(null)
+  const [rmsError, setRmsError] = useState(null)
 
   const canManageActions = Boolean(profile && profile.active !== false && (profile.role === 'admin' || profile.role === 'operations'))
 
@@ -283,6 +294,49 @@ export default function Inventory() {
     setRefreshToken(prev => prev + 1)
   }
 
+  function closeRmsRefreshPanel() {
+    setRmsRefreshOpen(false)
+    setRmsResult(null)
+    setRmsError(null)
+  }
+
+  async function runInventoryRmsDryRun() {
+    setRmsRefreshOpen(true)
+    setRmsLoading(true)
+    setRmsError(null)
+    setRmsResult(null)
+
+    try {
+      const data = await refreshInventoryFromRms({ dryRun: true })
+      setRmsResult(data)
+    } catch (err) {
+      setRmsError(err.message || 'Inventory RMS scan failed.')
+    }
+
+    setRmsLoading(false)
+  }
+
+  async function runInventoryRmsApply() {
+    setRmsApplying(true)
+    setRmsError(null)
+
+    try {
+      const data = await refreshInventoryFromRms({ apply: true })
+      setRmsResult(data)
+      triggerRefresh('Inventory line items refreshed from RMS.')
+      closeRmsRefreshPanel()
+    } catch (err) {
+      setRmsError(err.message || 'Failed to apply inventory RMS refresh.')
+    }
+
+    setRmsApplying(false)
+  }
+
+  const rmsChangeCount = countInventoryRefreshChanges(rmsResult)
+  const rmsApplyBlocked = hasInventoryApplyBlockers(rmsResult)
+  const rmsUpToDate = Boolean(rmsResult && rmsChangeCount === 0 && !rmsApplyBlocked)
+  const rmsCanApply = Boolean(rmsResult && rmsChangeCount > 0 && !rmsApplyBlocked && !rmsLoading && !rmsApplying)
+
   async function saveOverrideForRow(row, payload) {
     const existing = overrideByKey[row.key]
     if (existing?.id) {
@@ -399,6 +453,227 @@ export default function Inventory() {
       {actionMessage && (
         <div style={{ marginBottom: '14px', fontSize: '12px', color: '#2F6A18', background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '8px', padding: '10px 12px' }}>
           {actionMessage}
+        </div>
+      )}
+
+      {canManageActions && (
+        <div style={{ marginBottom: '14px' }}>
+          <button
+            type="button"
+            onClick={runInventoryRmsDryRun}
+            disabled={rmsLoading}
+            style={{
+              width: '100%',
+              maxWidth: '320px',
+              fontSize: '13px',
+              fontWeight: '500',
+              padding: '10px 14px',
+              borderRadius: '8px',
+              cursor: rmsLoading ? 'not-allowed' : 'pointer',
+              fontFamily: "'DM Sans', sans-serif",
+              border: '1.5px solid #DDD8CF',
+              background: '#fff',
+              color: '#1C1C1E',
+              opacity: rmsLoading ? 0.7 : 1,
+            }}
+          >
+            {rmsLoading && !rmsRefreshOpen ? 'Scanning RMS…' : 'Refresh from RMS'}
+          </button>
+          <div style={{ marginTop: '6px', fontSize: '11px', color: '#6B6860', lineHeight: 1.45, maxWidth: '520px' }}>
+            Refreshes RMS order line items used by Inventory. This is not live stock control.
+          </div>
+        </div>
+      )}
+
+      {rmsRefreshOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.45)',
+            zIndex: 500,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '16px',
+          }}
+          onClick={closeRmsRefreshPanel}
+        >
+          <div
+            style={{
+              background: '#fff',
+              borderRadius: '10px',
+              border: '1px solid #DDD8CF',
+              maxWidth: '520px',
+              width: '100%',
+              maxHeight: '85vh',
+              overflowY: 'auto',
+              padding: '18px 20px',
+              fontFamily: "'DM Sans', sans-serif",
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '12px' }}>
+              <div>
+                <div style={{ fontSize: '15px', fontWeight: '600', color: '#1C1C1E' }}>Refresh from RMS</div>
+                <div style={{ fontSize: '12px', color: '#6B6860', marginTop: '4px', lineHeight: 1.45 }}>
+                  Batch scan of imported RMS jobs (order line items only). Not live stock or product catalogue sync.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={closeRmsRefreshPanel}
+                style={{ background: '#F7F3EE', border: 'none', borderRadius: '50%', width: '28px', height: '28px', cursor: 'pointer', fontSize: '13px', flexShrink: 0 }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {rmsLoading && (
+              <div style={{ fontSize: '13px', color: '#6B6860', padding: '12px 0' }}>Scanning Current RMS for order line items…</div>
+            )}
+
+            {rmsError && (
+              <div style={{ fontSize: '12px', color: '#A32D2D', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: '6px', padding: '10px 12px', marginBottom: '12px' }}>
+                {rmsError}
+              </div>
+            )}
+
+            {rmsResult && !rmsLoading && (
+              <>
+                {rmsUpToDate ? (
+                  <div style={{ fontSize: '13px', color: '#3B6D11', background: '#EAF3DE', borderRadius: '6px', padding: '10px 12px', marginBottom: '12px' }}>
+                    No line-item changes detected across scanned jobs.
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '13px', color: '#1C1C1E', marginBottom: '12px' }}>
+                    RMS line-item changes detected — review stats before applying.
+                  </div>
+                )}
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '8px', fontSize: '12px', marginBottom: '12px' }}>
+                  {[
+                    ['Jobs scanned', rmsResult.jobsScanned],
+                    ['Jobs OK', rmsResult.jobsSucceeded],
+                    ['Jobs failed', rmsResult.jobsFailed],
+                    ['Items fetched', rmsResult.itemsFetched],
+                    ['Added', rmsResult.itemsAdded],
+                    ['Changed', rmsResult.itemsChanged],
+                    ['Stale', rmsResult.itemsStale],
+                  ].map(([label, value]) => (
+                    <div key={label} style={{ background: '#F7F3EE', borderRadius: '6px', padding: '8px 10px' }}>
+                      <div style={{ fontSize: '10px', color: '#6B6860', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
+                      <div style={{ fontWeight: '600', marginTop: '2px' }}>{value ?? 0}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {rmsResult.truncated && (
+                  <div style={{ fontSize: '12px', color: '#86653A', background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '6px', padding: '10px 12px', marginBottom: '12px' }}>
+                    Job list was limited ({rmsResult.jobsScanned} of {rmsResult.totalMatching} matching). Run again or raise maxJobs if needed.
+                  </div>
+                )}
+
+                {(rmsResult.warnings?.length > 0) && (
+                  <div style={{ marginBottom: '12px' }}>
+                    <div style={{ fontSize: '11px', fontWeight: '600', color: '#854F0B', marginBottom: '6px' }}>Warnings</div>
+                    <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', color: '#854F0B', lineHeight: 1.5, maxHeight: '120px', overflowY: 'auto' }}>
+                      {rmsResult.warnings.slice(0, 20).map((warning, i) => (
+                        <li key={i}>{warning}</li>
+                      ))}
+                      {rmsResult.warnings.length > 20 && <li>…and {rmsResult.warnings.length - 20} more</li>}
+                    </ul>
+                  </div>
+                )}
+
+                {(rmsResult.errors?.length > 0) && (
+                  <div style={{ marginBottom: '12px' }}>
+                    <div style={{ fontSize: '11px', fontWeight: '600', color: '#A32D2D', marginBottom: '6px' }}>Per-job errors</div>
+                    <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', color: '#A32D2D', lineHeight: 1.5, maxHeight: '100px', overflowY: 'auto' }}>
+                      {rmsResult.errors.slice(0, 10).map((row, i) => (
+                        <li key={i}>{row.crms_ref || row.job_id}: {row.message}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {rmsApplyBlocked && rmsChangeCount > 0 && (
+                  <div style={{ fontSize: '12px', color: '#A32D2D', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: '6px', padding: '10px 12px', marginBottom: '12px' }}>
+                    Apply is blocked for safety on one or more jobs (zero items or high stale ratio). Resolve warnings before applying.
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap' }}>
+                  {rmsCanApply && (
+                    <button
+                      type="button"
+                      onClick={runInventoryRmsApply}
+                      disabled={rmsApplying}
+                      style={{
+                        fontSize: '12px',
+                        fontWeight: '500',
+                        padding: '8px 14px',
+                        borderRadius: '6px',
+                        cursor: rmsApplying ? 'not-allowed' : 'pointer',
+                        fontFamily: "'DM Sans', sans-serif",
+                        background: '#1C1C1E',
+                        color: '#fff',
+                        border: 'none',
+                        opacity: rmsApplying ? 0.7 : 1,
+                        flex: '1 1 auto',
+                        minWidth: '140px',
+                      }}
+                    >
+                      {rmsApplying ? 'Applying…' : 'Apply refresh'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={runInventoryRmsDryRun}
+                    disabled={rmsLoading || rmsApplying}
+                    style={{
+                      fontSize: '12px',
+                      fontWeight: '500',
+                      padding: '8px 14px',
+                      borderRadius: '6px',
+                      cursor: rmsLoading || rmsApplying ? 'not-allowed' : 'pointer',
+                      fontFamily: "'DM Sans', sans-serif",
+                      border: '1.5px solid #DDD8CF',
+                      background: '#fff',
+                      color: '#1C1C1E',
+                    }}
+                  >
+                    Re-scan
+                  </button>
+                  <button
+                    type="button"
+                    onClick={closeRmsRefreshPanel}
+                    style={{
+                      fontSize: '12px',
+                      fontWeight: '500',
+                      padding: '8px 14px',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      fontFamily: "'DM Sans', sans-serif",
+                      border: '1.5px solid #DDD8CF',
+                      background: '#fff',
+                      color: '#1C1C1E',
+                    }}
+                  >
+                    Close
+                  </button>
+                </div>
+
+                {rmsResult.durationMs != null && (
+                  <div style={{ marginTop: '10px', fontSize: '11px', color: '#9B978F' }}>
+                    Scan completed in {(rmsResult.durationMs / 1000).toFixed(1)}s{rmsResult.dryRun ? ' (dry-run, no DB writes)' : ''}.
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </div>
       )}
 
