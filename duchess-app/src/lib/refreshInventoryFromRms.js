@@ -31,7 +31,7 @@ export async function refreshInventoryFromRms({
     throw new Error('Session expired. Please reload and sign in again.')
   }
 
-  const body = {}
+  const body = { mode: 'inventory' }
   if (apply) {
     body.apply = true
     body.dryRun = false
@@ -41,7 +41,7 @@ export async function refreshInventoryFromRms({
   if (windowStart) body.windowStart = windowStart
   if (maxJobs != null) body.maxJobs = maxJobs
 
-  const res = await fetch('/api/admin-sync-inventory', {
+  const res = await fetch('/api/admin-sync-job', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
