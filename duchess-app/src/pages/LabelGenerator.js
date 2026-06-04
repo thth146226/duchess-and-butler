@@ -40,6 +40,26 @@ function confidenceStyle(level) {
   return { bg: '#FCEBEB', color: '#A32D2D' }
 }
 
+const LINEN_NO_ATA_REASON = 'Needs ATA rule — not printable in Duchess without ATA capacity. Use DB Linen Studio or add a rule in ATA Carnet.'
+
+function tryAddEligibleAtaLabel(candidate, ataCapacityMap, eligibleMatchedItems, devLog) {
+  const resolvedRule = resolveJobItemRule(candidate, ataCapacityMap)
+  if (!resolvedRule.matched) {
+    return { matched: false, resolvedRule }
+  }
+  if (resolvedRule.matchedBy && resolvedRule.matchedBy !== 'exact') {
+    devLog('[labels-phase3b] alias match used', {
+      item_name: candidate.item_name,
+      matchedBy: resolvedRule.matchedBy,
+      ata_name: resolvedRule.rule?.name,
+    })
+  }
+  const generated = generateLabelsForItem(candidate, resolvedRule)
+  devLog('[labels-phase3b] category resolved', { item_name: generated.productName, category: generated.category })
+  eligibleMatchedItems.push(generated)
+  return { matched: true, resolvedRule, generated }
+}
+
 export default function LabelGenerator() {
   const { profile } = useAuth()
   const [orders, setOrders] = useState([])
@@ -197,13 +217,24 @@ export default function LabelGenerator() {
       }
 
       if (classification.workflowType === 'linen') {
-        devLog('[labels-linen] excluded for DB Linen Studio', {
+        const linenAta = tryAddEligibleAtaLabel(candidate, ataCapacityMap, eligibleMatchedItems, devLog)
+        if (linenAta.matched) {
+          devLog('[labels-linen] ATA rule matched; included in Duchess labels', {
+            item_name: candidate.item_name,
+            quantity: candidate.quantity,
+            ata_name: linenAta.resolvedRule?.rule?.name,
+            matchedBy: linenAta.resolvedRule?.matchedBy,
+          })
+          continue
+        }
+        devLog('[labels-linen] no ATA rule; DB Linen Studio fallback', {
           item_name: candidate.item_name,
           quantity: candidate.quantity,
         })
         linenStudioItems.push({
           ...candidate,
-          exclusionReason: 'db-linen-studio',
+          exclusionReason: 'needs-ata-rule-linen-studio',
+          reason: LINEN_NO_ATA_REASON,
         })
         continue
       }
@@ -247,19 +278,11 @@ export default function LabelGenerator() {
         continue
       }
 
-      const resolvedRule = resolveJobItemRule(candidate, ataCapacityMap)
-
-      if (!resolvedRule.matched) {
+      const operationalAta = tryAddEligibleAtaLabel(candidate, ataCapacityMap, eligibleMatchedItems, devLog)
+      if (!operationalAta.matched) {
         devLog('[labels-phase3b] unmatched item remained', { item_name: candidate.item_name, quantity: candidate.quantity })
-        outOfScopeItems.push({ ...candidate, reason: resolvedRule.reason || 'No ATA rule found' })
-        continue
+        outOfScopeItems.push({ ...candidate, reason: operationalAta.resolvedRule?.reason || 'No ATA rule found' })
       }
-      if (resolvedRule.matchedBy && resolvedRule.matchedBy !== 'exact') {
-        devLog('[labels-phase3b] alias match used', { item_name: candidate.item_name, matchedBy: resolvedRule.matchedBy, ata_name: resolvedRule.rule?.name })
-      }
-      const generated = generateLabelsForItem(candidate, resolvedRule)
-      devLog('[labels-phase3b] category resolved', { item_name: generated.productName, category: generated.category })
-      eligibleMatchedItems.push(generated)
     }
     return { ignoredItems, linenStudioItems, furnitureExcludedItems, serviceExcludedItems, displayPropExcludedItems, eligibleMatchedItems, outOfScopeItems }
   }, [ataItems, jobItems, selectedOrder])
@@ -1094,7 +1117,9 @@ export default function LabelGenerator() {
                     <div key={item.itemKey} style={{ border: '1px solid #ECE5D9', background: '#FFFEFA', borderRadius: '8px', padding: '9px 10px' }}>
                       <div style={{ fontSize: '12px', color: '#1C1C1E', fontWeight: '600' }}>{item.item_name || '—'}</div>
                       <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '2px', lineHeight: 1.4 }}>qty: {item.quantity ?? 0}</div>
-                      <div style={{ fontSize: '11px', color: '#6B6860', marginTop: '3px', lineHeight: 1.4 }}>Handled in DB Linen Studio.</div>
+                      <div style={{ fontSize: '11px', color: '#86653A', marginTop: '3px', lineHeight: 1.4 }}>
+                        {item.reason || 'Needs ATA rule — use DB Linen Studio or add rule in ATA Carnet.'}
+                      </div>
                     </div>
                   ))}
                 </div>
