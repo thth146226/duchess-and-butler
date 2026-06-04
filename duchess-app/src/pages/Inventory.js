@@ -601,7 +601,7 @@ export default function Inventory() {
 
                 {rmsApplyBlocked && rmsChangeCount > 0 && (
                   <div style={{ fontSize: '12px', color: '#A32D2D', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: '6px', padding: '10px 12px', marginBottom: '12px' }}>
-                    Apply is blocked for safety on one or more jobs (zero items or high stale ratio). Resolve warnings before applying.
+                    Apply is blocked for safety on one or more jobs (zero RMS items with local lines still present, or high stale ratio). Resolve warnings before applying.
                   </div>
                 )}
 

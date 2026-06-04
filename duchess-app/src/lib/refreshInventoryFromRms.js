@@ -10,7 +10,11 @@ export function countInventoryRefreshChanges(data) {
 export function hasInventoryApplyBlockers(data) {
   const warnings = data?.warnings || []
   if (!warnings.length) return false
-  const blockedPatterns = [/zero opportunity_items/i, /stale ratio/i, /apply aborted/i]
+  const blockedPatterns = [
+    /zero opportunity_items while local items exist/i,
+    /stale ratio/i,
+    /apply aborted/i,
+  ]
   return warnings.some(w =>
     blockedPatterns.some(pattern => pattern.test(String(w))),
   )

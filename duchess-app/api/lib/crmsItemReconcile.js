@@ -186,7 +186,11 @@ export async function reconcileJobItemsFromRms({ supabase, oppId, jobUuid, dryRu
   const fetchedFromRms = rmsRows.length
 
   if (fetchedFromRms === 0) {
-    warnings.push('RMS returned zero opportunity_items; delete aborted.')
+    if (existingLocal > 0) {
+      warnings.push('RMS returned zero opportunity_items while local items exist; delete aborted.')
+    } else {
+      warnings.push('RMS returned zero opportunity_items; no local items exist, skipped safely.')
+    }
   }
 
   const staleRatio = existingLocal > 0 ? staleFound / existingLocal : 0
