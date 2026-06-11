@@ -6,6 +6,13 @@ export const LABEL_ORDER_COLOURS = {
   orange: { key: 'orange', label: 'Orange', color: '#C2410C' },
   purple: { key: 'purple', label: 'Purple', color: '#6B21A8' },
   pink: { key: 'pink', label: 'Pink', color: '#BE185D' },
+  strong_yellow: { key: 'strong_yellow', label: 'Strong Yellow', color: '#A16207' },
+  baby_blue: { key: 'baby_blue', label: 'Baby Blue', color: '#0369A1' },
+  dark_blue: { key: 'dark_blue', label: 'Dark Blue', color: '#123A6F' },
+  brown: { key: 'brown', label: 'Brown', color: '#7A4A24' },
+  dark_pink: { key: 'dark_pink', label: 'Dark Pink', color: '#9D174D' },
+  baby_pink: { key: 'baby_pink', label: 'Baby Pink', color: '#BE185D' },
+  dark_orange: { key: 'dark_orange', label: 'Dark Orange', color: '#C2410C' },
 }
 
 const NON_LABEL_EXACT_BLOCKLIST = new Set([
