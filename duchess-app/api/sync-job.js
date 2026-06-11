@@ -2,7 +2,7 @@
 // Phase 1A: does not modify global /api/sync behavior.
 
 import { createClient } from '@supabase/supabase-js'
-import { findJobByIdentifier, reconcileJobItemsFromRms } from './lib/crmsItemReconcile.js'
+import { findJobByIdentifier, reconcileJobItemsFromRms } from '../server-lib/crmsItemReconcile.js'
 
 const SUPABASE_URL = process.env.SUPABASE_URL
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY

@@ -1,7 +1,7 @@
 // GET /api/driver-portal-runs?token=...
 // Driver Portal listing — service role, token auth (no RLS loosening).
 
-const { HttpError, getDriverPortalRuns } = require('./lib/driverPortalRuns')
+const { HttpError, getDriverPortalRuns } = require('../server-lib/driverPortalRuns')
 
 module.exports = async function handler(req, res) {
   if (req.method !== 'GET') {

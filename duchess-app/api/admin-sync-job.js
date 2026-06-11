@@ -2,8 +2,8 @@
 // Per-job refresh (default) or batch inventory refresh when body.mode === 'inventory'.
 // Auth: Supabase user JWT (not CRON_SECRET). Dry-run by default.
 
-import { findJobByIdentifier, reconcileJobItemsFromRms } from './lib/crmsItemReconcile.js'
-import { HttpError, requireAdminOrOperations } from './lib/adminAuth.js'
+import { findJobByIdentifier, reconcileJobItemsFromRms } from '../server-lib/crmsItemReconcile.js'
+import { HttpError, requireAdminOrOperations } from '../server-lib/adminAuth.js'
 
 const INVENTORY_DEFAULT_WINDOW_START = '2026-01-01'
 const INVENTORY_DEFAULT_MAX_JOBS = 100
