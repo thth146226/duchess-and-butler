@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import OperationalChangeCentre from '../components/OperationalChangeCentre'
 import { supabase } from '../lib/supabase'
 
 function timeAgo(ts) {
@@ -101,12 +102,28 @@ export default function Notifications() {
     other:      { label: 'UPDATED',            bg: '#F1EFE8', color: '#5F5E5A' },
   }
 
-  if (loading) return (
-    <div style={{ padding: '48px', textAlign: 'center', color: '#6B6860' }}>Loading notifications…</div>
-  )
+  if (loading) {
+    return (
+      <div style={{ fontFamily: "'DM Sans', sans-serif" }}>
+        <OperationalChangeCentre />
+        <div style={S.legacyDivider}>
+          <div style={S.legacyTitle}>Legacy notification feed</div>
+          <div style={S.legacySub}>Field-level changes from change_log and new job confirmations from sync_log.</div>
+        </div>
+        <div style={{ padding: '48px', textAlign: 'center', color: '#6B6860' }}>Loading legacy notifications…</div>
+      </div>
+    )
+  }
 
   return (
     <div style={{ fontFamily: "'DM Sans', sans-serif" }}>
+
+      <OperationalChangeCentre />
+
+      <div style={S.legacyDivider}>
+        <div style={S.legacyTitle}>Legacy notification feed</div>
+        <div style={S.legacySub}>Field-level changes from change_log and new job confirmations from sync_log.</div>
+      </div>
 
       {/* Header bar */}
       <div style={S.topBar}>
@@ -181,6 +198,9 @@ export default function Notifications() {
 }
 
 const S = {
+  legacyDivider: { marginBottom: '20px', paddingBottom: '16px', borderBottom: '1px solid #DDD8CF' },
+  legacyTitle: { fontSize: '14px', fontWeight: '600', color: '#1C1C1E', marginBottom: '4px' },
+  legacySub: { fontSize: '12px', color: '#6B6860' },
   topBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' },
   filterBar: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px' },
   chip: { fontSize: '12px', padding: '6px 14px', borderRadius: '20px', border: '1px solid #DDD8CF', background: 'transparent', color: '#6B6860', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" },
