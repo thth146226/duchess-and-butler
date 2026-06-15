@@ -1,7 +1,7 @@
 // Per-job Current RMS opportunity_items reconciliation (upsert + scoped prune).
 // Copied mapItem/crmsGet patterns from api/sync.js — global sync unchanged in Phase 1A.
 
-import { createOperationalItemChangeEvents } from './operationalChangeEvents.js'
+import { createOperationalItemChangeEvents, isOperationalChangeEventsEnabled } from './operationalChangeEvents.js'
 
 const CRMS_SUBDOMAIN = process.env.CRMS_SUBDOMAIN
 const CRMS_API_KEY = process.env.CRMS_API_KEY
@@ -235,7 +235,7 @@ export async function reconcileJobItemsFromRms({
     !staleRatioAbort
 
   if (!canApply) {
-    return { ok: true, stats, diff, warnings }
+    return { ok: true, stats, diff, warnings, operationalEvents: null }
   }
 
   const { error: upsertError } = await supabase
@@ -275,7 +275,7 @@ export async function reconcileJobItemsFromRms({
       })
     } else {
       operationalEvents = {
-        enabled: false,
+        enabled: isOperationalChangeEventsEnabled() || operationalEventSource === 'manual_rms_refresh',
         attempted: 0,
         insertedOrUpserted: 0,
         skipped: 0,
