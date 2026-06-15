@@ -6,7 +6,8 @@ import {
   filterOperationalGroups,
   formatChangeTypeLabel,
   formatEventSummary,
-  formatQuantityDelta,
+  getQuantityDeltaPresentation,
+  quantityDeltaBadgeStyle,
   formatSourceLabel,
   groupOperationalEvents,
   groupsMissingJobDateMetadata,
@@ -265,16 +266,22 @@ export default function OperationalChangeCentre() {
                       {event.acknowledged_at ? ' · Acknowledged' : ''}
                       {event.whatsapp_posted_at ? ' · WhatsApp posted' : ''}
                     </div>
-                    {event.change_type === 'item_quantity_changed' && (
-                      <div style={{ fontSize: '12px', color: '#1C1C1E', marginTop: '4px' }}>
-                        {event.item_name}: {event.old_quantity ?? '—'} → {event.new_quantity ?? '—'}
-                        {event.quantity_delta != null && (
-                          <span style={{ color: '#854F0B', fontWeight: '600', marginLeft: '8px' }}>
-                            {formatQuantityDelta(event.quantity_delta)}
+                    {event.change_type === 'item_quantity_changed' && (() => {
+                      const delta = getQuantityDeltaPresentation(event.quantity_delta)
+                      return (
+                        <div style={S.quantityRow}>
+                          <span style={S.quantityItemName}>{event.item_name}</span>
+                          <span style={S.quantityValues}>
+                            {event.old_quantity ?? '—'} → {event.new_quantity ?? '—'}
                           </span>
-                        )}
-                      </div>
-                    )}
+                          {delta.visible && (
+                            <span style={{ ...S.quantityDeltaBadge, ...quantityDeltaBadgeStyle(delta.tone) }}>
+                              {delta.label}
+                            </span>
+                          )}
+                        </div>
+                      )
+                    })()}
                   </div>
                 </div>
               )
@@ -449,5 +456,30 @@ const S = {
     borderBottom: '0.5px solid #EDE8E0',
     display: 'flex',
     gap: '10px',
+  },
+  quantityRow: {
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: '10px',
+    marginTop: '6px',
+    fontSize: '12px',
+    color: '#1C1C1E',
+  },
+  quantityItemName: {
+    fontWeight: '500',
+    color: '#1C1C1E',
+  },
+  quantityValues: {
+    fontVariantNumeric: 'tabular-nums',
+    letterSpacing: '0.01em',
+  },
+  quantityDeltaBadge: {
+    fontSize: '11px',
+    fontWeight: '600',
+    padding: '2px 8px',
+    borderRadius: '10px',
+    lineHeight: 1.35,
+    fontVariantNumeric: 'tabular-nums',
   },
 }

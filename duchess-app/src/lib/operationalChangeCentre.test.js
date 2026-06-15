@@ -3,6 +3,8 @@ import {
   filterOperationalGroups,
   formatEventSummary,
   formatQuantityDelta,
+  getQuantityDeltaPresentation,
+  quantityDeltaBadgeStyle,
   getOrderGroupKey,
   groupOperationalEvents,
   hasJobDateMetadata,
@@ -48,11 +50,47 @@ describe('operationalChangeCentre', () => {
     expect(byName[0].groupKey).toBe('event:Only Name')
   })
 
-  test('formats item_quantity_changed summary', () => {
+  test('formats item_quantity_changed summary without inline delta', () => {
     expect(formatEventSummary(QDB07915_EVENT)).toBe(
-      'Quantity changed: Bronte Gold Rimmed Charger Plate — 50 → 60 (+10)',
+      'Quantity changed: Bronte Gold Rimmed Charger Plate',
     )
     expect(formatQuantityDelta(10)).toBe('+10')
+  })
+
+  test('formats positive quantity delta presentation', () => {
+    expect(getQuantityDeltaPresentation(10)).toEqual({
+      label: '+10',
+      visible: true,
+      tone: 'positive',
+    })
+    expect(quantityDeltaBadgeStyle('positive').color).toBe('#2F5F0C')
+  })
+
+  test('formats negative quantity delta presentation', () => {
+    expect(getQuantityDeltaPresentation(-10)).toEqual({
+      label: '-10',
+      visible: true,
+      tone: 'negative',
+    })
+    expect(quantityDeltaBadgeStyle('negative').color).toBe('#A32D2D')
+  })
+
+  test('hides zero and invalid quantity delta presentation', () => {
+    expect(getQuantityDeltaPresentation(0)).toEqual({
+      label: '0',
+      visible: false,
+      tone: 'neutral',
+    })
+    expect(getQuantityDeltaPresentation(null)).toEqual({
+      label: '',
+      visible: false,
+      tone: 'neutral',
+    })
+    expect(getQuantityDeltaPresentation('not-a-number')).toEqual({
+      label: '',
+      visible: false,
+      tone: 'neutral',
+    })
   })
 
   test('builds WhatsApp copy for QDB07915-style event', () => {

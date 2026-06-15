@@ -38,6 +38,43 @@ export function formatQuantityDelta(delta) {
   return String(n)
 }
 
+export const QUANTITY_DELTA_TONE_STYLES = {
+  positive: {
+    background: '#EAF3DE',
+    color: '#2F5F0C',
+    border: '1px solid #C8DEB0',
+  },
+  negative: {
+    background: '#FCEBEB',
+    color: '#A32D2D',
+    border: '1px solid #F5C2C2',
+  },
+  neutral: {
+    background: '#F1EFE8',
+    color: '#6B6860',
+    border: '1px solid #DDD8CF',
+  },
+}
+
+export function getQuantityDeltaPresentation(delta) {
+  if (delta == null || Number.isNaN(Number(delta))) {
+    return { label: '', visible: false, tone: 'neutral' }
+  }
+
+  const n = Number(delta)
+  if (n === 0) {
+    return { label: '0', visible: false, tone: 'neutral' }
+  }
+
+  const label = formatQuantityDelta(n)
+  const tone = n > 0 ? 'positive' : 'negative'
+  return { label, visible: true, tone }
+}
+
+export function quantityDeltaBadgeStyle(tone) {
+  return QUANTITY_DELTA_TONE_STYLES[tone] || QUANTITY_DELTA_TONE_STYLES.neutral
+}
+
 export function formatChangeTypeLabel(changeType) {
   switch (changeType) {
     case 'item_quantity_changed':
@@ -58,11 +95,7 @@ export function formatEventSummary(event) {
   const typeLabel = formatChangeTypeLabel(event?.change_type)
 
   if (event?.change_type === 'item_quantity_changed') {
-    const oldQty = event?.old_quantity ?? '—'
-    const newQty = event?.new_quantity ?? '—'
-    const delta = formatQuantityDelta(event?.quantity_delta)
-    const deltaPart = delta ? ` (${delta})` : ''
-    return `${typeLabel}: ${itemName} — ${oldQty} → ${newQty}${deltaPart}`
+    return `${typeLabel}: ${itemName}`
   }
 
   if (event?.change_type === 'item_added') {
