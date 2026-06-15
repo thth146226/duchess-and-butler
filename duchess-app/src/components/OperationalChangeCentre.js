@@ -1,4 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useAuth } from '../contexts/AuthContext'
+import {
+  acknowledgeOperationalChanges,
+  canAcknowledgeOperationalChanges,
+} from '../lib/acknowledgeOperationalChanges'
 import { supabase } from '../lib/supabase'
 import {
   OPERATIONAL_FILTERS,
@@ -37,12 +42,16 @@ function severityStyle(severity) {
 }
 
 export default function OperationalChangeCentre() {
+  const { profile } = useAuth()
+  const canAcknowledge = canAcknowledgeOperationalChanges(profile?.role)
   const [events, setEvents] = useState([])
   const [jobsById, setJobsById] = useState({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [filter, setFilter] = useState('all')
   const [copyState, setCopyState] = useState({})
+  const [ackState, setAckState] = useState({})
+  const [ackErrors, setAckErrors] = useState({})
   const [clipboardFallback, setClipboardFallback] = useState(null)
 
   const todayIso = useMemo(() => new Date().toISOString().split('T')[0], [])
@@ -125,6 +134,42 @@ export default function OperationalChangeCentre() {
       setCopyState((prev) => ({ ...prev, [group.groupKey]: 'error' }))
       setClipboardFallback({ groupKey: group.groupKey, text })
     }
+  }
+
+  async function handleAcknowledge(group) {
+    if (!canAcknowledge || !group.hasUnacknowledged) return
+
+    const eventIds = group.events
+      .filter((event) => !event.acknowledged_at)
+      .map((event) => event.id)
+      .filter(Boolean)
+
+    if (eventIds.length === 0) return
+
+    setAckState((prev) => ({ ...prev, [group.groupKey]: 'loading' }))
+    setAckErrors((prev) => ({ ...prev, [group.groupKey]: null }))
+
+    try {
+      await acknowledgeOperationalChanges({ eventIds })
+      setAckState((prev) => ({ ...prev, [group.groupKey]: 'done' }))
+      setTimeout(() => {
+        setAckState((prev) => ({ ...prev, [group.groupKey]: 'idle' }))
+      }, 2000)
+      await fetchEvents()
+    } catch (err) {
+      setAckState((prev) => ({ ...prev, [group.groupKey]: 'error' }))
+      setAckErrors((prev) => ({
+        ...prev,
+        [group.groupKey]: err?.message || 'Failed to acknowledge operational change events.',
+      }))
+    }
+  }
+
+  function acknowledgeButtonLabel(groupKey) {
+    const state = ackState[groupKey] || 'idle'
+    if (state === 'loading') return 'Acknowledging…'
+    if (state === 'done') return 'Acknowledged'
+    return 'Mark acknowledged'
   }
 
   return (
@@ -212,14 +257,35 @@ export default function OperationalChangeCentre() {
                 {group.eventCount} change{group.eventCount === 1 ? '' : 's'} · Latest {timeAgo(group.latestDetectedAt)} · {group.sourceLabel}
               </div>
             </div>
-            <button
-              type="button"
-              style={S.copyBtn}
-              onClick={() => handleCopyWhatsApp(group)}
-            >
-              {copyState[group.groupKey] === 'copied' ? 'Copied' : 'Copy WhatsApp update'}
-            </button>
+            <div style={S.groupActions}>
+              {canAcknowledge && group.hasUnacknowledged && (
+                <button
+                  type="button"
+                  style={{
+                    ...S.copyBtn,
+                    ...(ackState[group.groupKey] === 'loading' ? S.actionBtnDisabled : {}),
+                  }}
+                  onClick={() => handleAcknowledge(group)}
+                  disabled={ackState[group.groupKey] === 'loading'}
+                >
+                  {acknowledgeButtonLabel(group.groupKey)}
+                </button>
+              )}
+              <button
+                type="button"
+                style={S.copyBtn}
+                onClick={() => handleCopyWhatsApp(group)}
+              >
+                {copyState[group.groupKey] === 'copied' ? 'Copied' : 'Copy WhatsApp update'}
+              </button>
+            </div>
           </div>
+
+          {ackErrors[group.groupKey] && (
+            <div style={S.ackErrorBox}>
+              {ackErrors[group.groupKey]}
+            </div>
+          )}
 
           {clipboardFallback?.groupKey === group.groupKey && (
             <div style={S.fallbackBox}>
@@ -422,6 +488,13 @@ const S = {
     color: '#6B6860',
     marginTop: '4px',
   },
+  groupActions: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-end',
+    gap: '6px',
+    flexShrink: 0,
+  },
   copyBtn: {
     fontSize: '11px',
     padding: '6px 12px',
@@ -432,6 +505,17 @@ const S = {
     cursor: 'pointer',
     fontFamily: "'DM Sans', sans-serif",
     flexShrink: 0,
+  },
+  actionBtnDisabled: {
+    opacity: 0.7,
+    cursor: 'not-allowed',
+  },
+  ackErrorBox: {
+    padding: '10px 16px',
+    borderBottom: '1px solid #EDE8E0',
+    background: '#FEF2F2',
+    color: '#A32D2D',
+    fontSize: '12px',
   },
   fallbackBox: {
     padding: '12px 16px',
