@@ -121,6 +121,7 @@ async function handleInventoryBatch(res, { supabase, body }) {
         oppId: job.crms_id,
         jobUuid: job.id,
         dryRun,
+        operationalEventSource: apply ? 'manual_rms_refresh' : null,
       })
       return { ok: true, job, result }
     } catch (jobErr) {
@@ -216,6 +217,7 @@ export default async function handler(req, res) {
       oppId: job.crms_id,
       jobUuid: job.id,
       dryRun,
+      operationalEventSource: apply ? 'manual_rms_refresh' : null,
     })
 
     return res.status(200).json({
@@ -231,6 +233,7 @@ export default async function handler(req, res) {
       stats: result.stats,
       diff: result.diff,
       warnings: result.warnings,
+      operationalEvents: result.operationalEvents ?? null,
     })
   } catch (err) {
     if (err instanceof HttpError) {

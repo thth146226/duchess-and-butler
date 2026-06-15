@@ -1,6 +1,8 @@
 // Per-job Current RMS opportunity_items reconciliation (upsert + scoped prune).
 // Copied mapItem/crmsGet patterns from api/sync.js — global sync unchanged in Phase 1A.
 
+import { createOperationalItemChangeEvents } from './operationalChangeEvents.js'
+
 const CRMS_SUBDOMAIN = process.env.CRMS_SUBDOMAIN
 const CRMS_API_KEY = process.env.CRMS_API_KEY
 const CRMS_BASE = 'https://api.current-rms.com/api/v1'
@@ -115,7 +117,13 @@ export async function findJobByIdentifier({ supabase, crms_ref, job_id, crms_id 
   return null
 }
 
-export async function reconcileJobItemsFromRms({ supabase, oppId, jobUuid, dryRun = true }) {
+export async function reconcileJobItemsFromRms({
+  supabase,
+  oppId,
+  jobUuid,
+  dryRun = true,
+  operationalEventSource = null,
+}) {
   if (!CRMS_API_KEY || !CRMS_SUBDOMAIN) {
     throw new Error('Current RMS credentials are not configured.')
   }
@@ -250,5 +258,31 @@ export async function reconcileJobItemsFromRms({ supabase, oppId, jobUuid, dryRu
     stats.staleRemoved = staleIds.length
   }
 
-  return { ok: true, stats, diff, warnings }
+  let operationalEvents = null
+  if (operationalEventSource === 'manual_rms_refresh') {
+    const { data: jobRow } = await supabase
+      .from('crms_jobs')
+      .select('id, crms_id, crms_ref, event_name')
+      .eq('id', jobUuidStr)
+      .maybeSingle()
+
+    if (jobRow) {
+      operationalEvents = await createOperationalItemChangeEvents({
+        supabase,
+        job: jobRow,
+        diff,
+        source: operationalEventSource,
+      })
+    } else {
+      operationalEvents = {
+        enabled: false,
+        attempted: 0,
+        insertedOrUpserted: 0,
+        skipped: 0,
+        errors: ['Job metadata not found for operational change events.'],
+      }
+    }
+  }
+
+  return { ok: true, stats, diff, warnings, operationalEvents }
 }
