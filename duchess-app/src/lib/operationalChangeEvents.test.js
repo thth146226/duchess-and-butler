@@ -48,6 +48,7 @@ describe('operationalChangeEvents', () => {
       insertedOrUpserted: 0,
       skipped: 0,
       errors: [],
+      insertedRows: [],
     })
     expect(supabase.from).not.toHaveBeenCalled()
   })
@@ -201,7 +202,22 @@ describe('operationalChangeEvents', () => {
 
     expect(rows[0].idempotency_key).toBe(keyOne)
 
-    const select = jest.fn().mockResolvedValue({ data: [{ id: 'existing-id' }], error: null })
+    const insertedRow = {
+      id: 'existing-id',
+      job_id: JOB.id,
+      crms_id: '9999',
+      job_ref: 'QDB7622',
+      event_name: 'Test Event',
+      change_type: 'item_added',
+      severity: 'high',
+      source: 'manual_rms_refresh',
+      item_key: '55',
+      item_name: 'Plate',
+      payload: { crms_item_id: '55' },
+      idempotency_key: keyOne,
+    }
+
+    const select = jest.fn().mockResolvedValue({ data: [insertedRow], error: null })
     const upsert = jest.fn(() => ({ select }))
     const from = jest.fn(() => ({ upsert }))
     const supabase = { from }
@@ -219,6 +235,7 @@ describe('operationalChangeEvents', () => {
       insertedOrUpserted: 1,
       skipped: 0,
       errors: [],
+      insertedRows: [insertedRow],
     })
 
     select.mockResolvedValueOnce({ data: [], error: null })
@@ -236,6 +253,7 @@ describe('operationalChangeEvents', () => {
       insertedOrUpserted: 0,
       skipped: 1,
       errors: [],
+      insertedRows: [],
     })
 
     expect(upsert).toHaveBeenCalledWith(

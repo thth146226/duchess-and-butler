@@ -252,8 +252,31 @@ function emptyResult(enabled) {
     insertedOrUpserted: 0,
     skipped: 0,
     errors: [],
+    insertedRows: [],
   }
 }
+
+const INSERTED_ROW_SELECT = [
+  'id',
+  'job_id',
+  'crms_id',
+  'job_ref',
+  'event_name',
+  'change_type',
+  'severity',
+  'source',
+  'item_key',
+  'item_name',
+  'item_category',
+  'old_value',
+  'new_value',
+  'old_quantity',
+  'new_quantity',
+  'quantity_delta',
+  'payload',
+  'detected_at',
+  'idempotency_key',
+].join(', ')
 
 export async function createOperationalItemChangeEvents({
   supabase,
@@ -289,7 +312,7 @@ export async function createOperationalItemChangeEvents({
     const { data, error } = await supabase
       .from('operational_change_events')
       .upsert(rows, { onConflict: 'idempotency_key', ignoreDuplicates: true })
-      .select('id')
+      .select(INSERTED_ROW_SELECT)
 
     if (error) {
       return {
@@ -298,10 +321,12 @@ export async function createOperationalItemChangeEvents({
         insertedOrUpserted: 0,
         skipped: 0,
         errors: [error.message],
+        insertedRows: [],
       }
     }
 
-    const insertedOrUpserted = Array.isArray(data) ? data.length : 0
+    const insertedRows = Array.isArray(data) ? data : []
+    const insertedOrUpserted = insertedRows.length
     const skipped = Math.max(0, rows.length - insertedOrUpserted)
 
     return {
@@ -310,6 +335,7 @@ export async function createOperationalItemChangeEvents({
       insertedOrUpserted,
       skipped,
       errors: [],
+      insertedRows,
     }
   } catch (err) {
     return {
@@ -318,6 +344,7 @@ export async function createOperationalItemChangeEvents({
       insertedOrUpserted: 0,
       skipped: 0,
       errors: [err?.message || 'Failed to persist operational change events.'],
+      insertedRows: [],
     }
   }
 }

@@ -2,6 +2,7 @@
 // Copied mapItem/crmsGet patterns from api/sync.js — global sync unchanged in Phase 1A.
 
 import { createOperationalItemChangeEvents, isOperationalChangeEventsEnabled } from './operationalChangeEvents.js'
+import { sendOperationalTelegramAlerts } from './telegramAlerts.js'
 
 const CRMS_SUBDOMAIN = process.env.CRMS_SUBDOMAIN
 const CRMS_API_KEY = process.env.CRMS_API_KEY
@@ -259,6 +260,7 @@ export async function reconcileJobItemsFromRms({
   }
 
   let operationalEvents = null
+  let telegramAlerts = null
   if (operationalEventSource === 'manual_rms_refresh') {
     const { data: jobRow } = await supabase
       .from('crms_jobs')
@@ -273,6 +275,14 @@ export async function reconcileJobItemsFromRms({
         diff,
         source: operationalEventSource,
       })
+
+      if (operationalEvents?.insertedRows?.length > 0) {
+        telegramAlerts = await sendOperationalTelegramAlerts({
+          supabase,
+          job: jobRow,
+          events: operationalEvents.insertedRows,
+        })
+      }
     } else {
       operationalEvents = {
         enabled: isOperationalChangeEventsEnabled() || operationalEventSource === 'manual_rms_refresh',
@@ -280,9 +290,10 @@ export async function reconcileJobItemsFromRms({
         insertedOrUpserted: 0,
         skipped: 0,
         errors: ['Job metadata not found for operational change events.'],
+        insertedRows: [],
       }
     }
   }
 
-  return { ok: true, stats, diff, warnings, operationalEvents }
+  return { ok: true, stats, diff, warnings, operationalEvents, telegramAlerts }
 }
