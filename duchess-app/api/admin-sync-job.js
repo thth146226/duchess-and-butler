@@ -1,9 +1,10 @@
 // POST /api/admin-sync-job — admin/operations RMS reconciliation.
-// Per-job refresh (default) or batch inventory refresh when body.mode === 'inventory'.
-// Auth: Supabase user JWT (not CRON_SECRET). Dry-run by default.
+// Per-job refresh (default), batch inventory refresh, or cron auto_poll_rms report-only.
+// Auth: Supabase user JWT for admin modes; CRON_SECRET for auto_poll_rms.
 
 import { findJobByIdentifier, reconcileJobItemsFromRms } from '../server-lib/crmsItemReconcile.js'
-import { HttpError, requireAdminOrOperations } from '../server-lib/adminAuth.js'
+import { HttpError, getSupabaseAdminClient, requireAdminOrOperations } from '../server-lib/adminAuth.js'
+import { isAutoPollMode, isCronAuthorized, runAutoPollRms } from '../server-lib/autoPollRms.js'
 
 const INVENTORY_DEFAULT_WINDOW_START = '2026-01-01'
 const INVENTORY_DEFAULT_MAX_JOBS = 100
@@ -191,8 +192,23 @@ export default async function handler(req, res) {
   const started = Date.now()
 
   try {
-    const { supabase } = await requireAdminOrOperations(req)
     const body = parseRequestBody(req)
+
+    if (isAutoPollMode(body)) {
+      if (!process.env.CRON_SECRET) {
+        return res.status(500).json({ error: 'Server cron auth is not configured.' })
+      }
+
+      if (!isCronAuthorized(req)) {
+        return res.status(401).json({ error: 'Unauthorized auto_poll_rms trigger' })
+      }
+
+      const supabase = getSupabaseAdminClient()
+      const result = await runAutoPollRms({ supabase, body })
+      return res.status(200).json(result)
+    }
+
+    const { supabase } = await requireAdminOrOperations(req)
 
     if (isInventoryMode(body)) {
       return handleInventoryBatch(res, { supabase, body })

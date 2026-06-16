@@ -1,7 +1,7 @@
 // Per-job Current RMS opportunity_items reconciliation (upsert + scoped prune).
 // Copied mapItem/crmsGet patterns from api/sync.js — global sync unchanged in Phase 1A.
 
-import { createOperationalItemChangeEvents, isOperationalChangeEventsEnabled } from './operationalChangeEvents.js'
+import { createOperationalItemChangeEvents, isOperationalChangeEventsEnabled, isAllowedOperationalEventSource } from './operationalChangeEvents.js'
 import { sendOperationalTelegramAlerts } from './telegramAlerts.js'
 
 const CRMS_SUBDOMAIN = process.env.CRMS_SUBDOMAIN
@@ -261,7 +261,7 @@ export async function reconcileJobItemsFromRms({
 
   let operationalEvents = null
   let telegramAlerts = null
-  if (operationalEventSource === 'manual_rms_refresh') {
+  if (operationalEventSource && isAllowedOperationalEventSource(operationalEventSource)) {
     const { data: jobRow } = await supabase
       .from('crms_jobs')
       .select('id, crms_id, crms_ref, event_name')
@@ -285,7 +285,7 @@ export async function reconcileJobItemsFromRms({
       }
     } else {
       operationalEvents = {
-        enabled: isOperationalChangeEventsEnabled() || operationalEventSource === 'manual_rms_refresh',
+        enabled: isOperationalChangeEventsEnabled() || isAllowedOperationalEventSource(operationalEventSource),
         attempted: 0,
         insertedOrUpserted: 0,
         skipped: 0,

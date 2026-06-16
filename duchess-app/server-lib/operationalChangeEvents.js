@@ -28,6 +28,10 @@ export function isOperationalChangeEventsEnabled() {
   return process.env.OPERATIONAL_CHANGE_EVENTS_ENABLED === 'true'
 }
 
+export function isAllowedOperationalEventSource(source) {
+  return ALLOWED_SOURCES.has(source)
+}
+
 export function buildIdempotencyKey({
   source,
   jobId,
