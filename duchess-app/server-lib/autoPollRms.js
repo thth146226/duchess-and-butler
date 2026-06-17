@@ -134,6 +134,32 @@ export function estimateOperationalNotifications({ job, diff, source = AUTO_POLL
   return { eventsWouldCreate, telegramWouldSend }
 }
 
+export function buildChangedJobSummary({ job, diff, source = AUTO_POLL_OPERATIONAL_SOURCE }) {
+  const rows = buildOperationalItemChangeEventRows({ job, diff, source })
+
+  if (!rows.length) return null
+
+  return {
+    jobId: job?.id || null,
+    crmsId: job?.crms_id ? String(job.crms_id) : null,
+    jobRef: job?.crms_ref || null,
+    jobName: job?.event_name || null,
+    changesCount: rows.length,
+    changes: rows.map((row) => ({
+      type: row.change_type,
+      severity: row.severity,
+      itemKey: row.item_key || null,
+      itemName: row.item_name || null,
+      itemCategory: row.item_category || null,
+      oldValue: row.old_value ?? null,
+      newValue: row.new_value ?? null,
+      oldQuantity: row.old_quantity ?? null,
+      newQuantity: row.new_quantity ?? null,
+      quantityDelta: row.quantity_delta ?? null,
+    })),
+  }
+}
+
 async function runWithConcurrency(items, limit, worker) {
   if (!items.length) return []
   const results = new Array(items.length)
@@ -190,11 +216,20 @@ export async function runAutoPollRms({ supabase, body = {} }) {
         source: AUTO_POLL_OPERATIONAL_SOURCE,
       })
 
+      const changedJob = itemChangesDetected > 0
+        ? buildChangedJobSummary({
+          job,
+          diff: result.diff,
+          source: AUTO_POLL_OPERATIONAL_SOURCE,
+        })
+        : null
+
       return {
         ok: true,
         job,
         result,
         itemChangesDetected,
+        changedJob,
         ...estimates,
       }
     } catch (jobErr) {
@@ -220,6 +255,7 @@ export async function runAutoPollRms({ supabase, body = {} }) {
     jobsSucceeded: 0,
     jobsFailed: 0,
     jobsChanged: 0,
+    changedJobs: [],
     itemChangesDetected: 0,
     eventsWouldCreate: 0,
     telegramWouldSend: 0,
@@ -249,6 +285,9 @@ export async function runAutoPollRms({ supabase, body = {} }) {
 
     if (row.itemChangesDetected > 0) {
       aggregate.jobsChanged += 1
+      if (row.changedJob) {
+        aggregate.changedJobs.push(row.changedJob)
+      }
     }
 
     if (row.result?.warnings?.length) {
