@@ -1,6 +1,7 @@
 import {
   AUTO_POLL_MAX_CONCURRENCY,
   AUTO_POLL_MAX_JOBS_CAP,
+  buildChangedJobSummary,
   countItemChangesFromDiff,
   estimateOperationalNotifications,
   fetchAutoPollScopedJobs,
@@ -148,6 +149,43 @@ describe('autoPollRms', () => {
     expect(estimates.telegramWouldSend).toBe(1)
   })
 
+  test('buildChangedJobSummary returns sanitized change details', () => {
+    const summary = buildChangedJobSummary({
+      job: JOB_IN_WINDOW,
+      diff: {
+        added: [],
+        changed: [{
+          crms_item_id: '55',
+          local: { crms_item_id: '55', item_name: 'Plate', quantity: 60, category: 'crockery' },
+          rms: { crms_item_id: '55', item_name: 'Plate', quantity: 55, category: 'crockery' },
+        }],
+        stale: [],
+      },
+      source: 'global_sync',
+    })
+
+    expect(summary).toMatchObject({
+      jobId: 'job-1',
+      crmsId: '999',
+      jobRef: 'QDB07915',
+      jobName: 'Test Event',
+      changesCount: 1,
+      changes: [{
+        type: 'item_quantity_changed',
+        severity: 'high',
+        itemKey: '55',
+        itemName: 'Plate',
+        itemCategory: 'crockery',
+        oldQuantity: 60,
+        newQuantity: 55,
+        quantityDelta: -5,
+      }],
+    })
+
+    expect(summary.changes[0]).not.toHaveProperty('payload')
+    expect(summary.changes[0]).not.toHaveProperty('idempotency_key')
+  })
+
   test('isAllowedOperationalEventSource accepts global_sync for future apply mode', () => {
     expect(isAllowedOperationalEventSource('global_sync')).toBe(true)
     expect(isAllowedOperationalEventSource('manual_rms_refresh')).toBe(true)
@@ -211,6 +249,21 @@ describe('autoPollRms', () => {
       telegramWouldSend: 1,
       eventsCreated: 0,
       telegramSent: 0,
+      changedJobs: [{
+        jobId: 'job-1',
+        crmsId: '999',
+        jobRef: 'QDB07915',
+        jobName: 'Test Event',
+        changesCount: 1,
+        changes: [{
+          type: 'item_quantity_changed',
+          severity: 'high',
+          itemName: 'Plate',
+          oldQuantity: 60,
+          newQuantity: 55,
+          quantityDelta: -5,
+        }],
+      }],
     })
   })
 
