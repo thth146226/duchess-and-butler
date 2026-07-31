@@ -37,9 +37,28 @@ function crmsHeaders() {
   }
 }
 
+/** Append query params; arrays become repeated keys (e.g. include[]=a&include[]=b). */
+function appendCrmsSearchParams(url, params = {}) {
+  Object.entries(params).forEach(([k, v]) => {
+    if (v === undefined || v === null) return
+    if (Array.isArray(v)) {
+      v.forEach((item) => {
+        if (item === undefined || item === null) return
+        url.searchParams.append(k, String(item))
+      })
+      return
+    }
+    url.searchParams.set(k, String(v))
+  })
+  return url
+}
+
+function buildCrmsUrl(path, params = {}) {
+  return appendCrmsSearchParams(new URL(`${CRMS_BASE}${path}`), params)
+}
+
 async function crmsGet(path, params = {}) {
-  const url = new URL(`${CRMS_BASE}${path}`)
-  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v))
+  const url = buildCrmsUrl(path, params)
   const res = await fetch(url.toString(), { headers: crmsHeaders() })
   if (!res.ok) throw new Error(`Current RMS ${path} → ${res.status} ${res.statusText}`)
   return res.json()
@@ -142,31 +161,117 @@ function isConfirmedOrder(o) {
 }
 
 
+// Venue / destination hydration (list associations: include[]=member,venue,destination)
 //
-// Current RMS nests venue/destination as an object on the opportunity.
-// Fields available: name, address1, address2, town_city, county, postcode, country_name
+// extractVenueName precedence (first non-empty wins):
+//   1. venue.name          — confirmed include[]=venue association
+//   2. destination.address.name
+//   3. destination.name
+//   4. venue_name          — flat field (legacy)
+//   5. location            — flat field (legacy)
+// Never use billing_address / billing_address_id / event_name / subject.
+
+function firstNonEmpty(...candidates) {
+  for (const value of candidates) {
+    if (value == null) continue
+    const text = String(value).trim()
+    if (text) return text
+  }
+  return ''
+}
 
 function extractVenueName(o) {
-  return (
-    o.destination?.address?.name ||
-    o.destination?.name ||
-    o.venue_name ||
-    o.location ||
-    ''
+  return firstNonEmpty(
+    o.venue?.name,
+    o.destination?.address?.name,
+    o.destination?.name,
+    o.venue_name,
+    o.location,
   )
 }
 
-function extractVenueAddress(o) {
-  const addr = o.destination?.address
-  if (!addr) return null
+function cleanAddressPart(value) {
+  if (value == null) return null
+  if (typeof value === 'object') {
+    // Clean nested candidates independently so whitespace-only name
+    // cannot suppress a valid country_name (never String(object)).
+    return firstCleanAddressPart(value.name, value.country_name)
+  }
+  const text = String(value).replace(/\r\n/g, ', ').replace(/,\s*,/g, ',').trim()
+  return text || null
+}
+
+/** First independently cleaned non-empty address candidate (skips whitespace-only). */
+function firstCleanAddressPart(...values) {
+  for (const value of values) {
+    const cleaned = cleanAddressPart(value)
+    if (cleaned) return cleaned
+  }
+  return null
+}
+
+function formatAddressFromParts(source) {
+  if (!source || typeof source !== 'object') return null
   const parts = [
-    addr.street?.replace(/\r\n/g, ', ').replace(/,\s*,/g, ',').trim(),
-    addr.city,
-    addr.county,
-    addr.postcode,
-  ].filter(v => v && v.trim())
-  if (parts.length === 0) return null
-  return parts.join(', ')
+    firstCleanAddressPart(source.street, source.address1),
+    firstCleanAddressPart(source.address2),
+    firstCleanAddressPart(source.city, source.town, source.town_city),
+    firstCleanAddressPart(source.county),
+    firstCleanAddressPart(source.postcode),
+    firstCleanAddressPart(source.country_name, source.country),
+  ].filter(Boolean)
+
+  // De-dupe exact parts case-insensitively across the full address; preserve order/casing
+  const deduped = []
+  const seen = new Set()
+  for (const part of parts) {
+    const key = part.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    deduped.push(part)
+  }
+  if (deduped.length === 0) return null
+  return deduped.join(', ')
+}
+
+function extractVenueAddress(o) {
+  // Preferred: nested destination.address (include[]=destination)
+  const fromNested = formatAddressFromParts(o.destination?.address)
+  if (fromNested) return fromNested
+
+  // Historical: address fields directly on destination
+  const fromDestinationRoot = formatAddressFromParts(o.destination)
+  if (fromDestinationRoot) return fromDestinationRoot
+
+  // Safe optional fallback when list payload already embeds primary_address
+  const fromVenuePrimary = formatAddressFromParts(o.venue?.primary_address)
+  if (fromVenuePrimary) return fromVenuePrimary
+
+  if (typeof o.delivery_address === 'string' && o.delivery_address.trim()) {
+    return o.delivery_address.trim()
+  }
+  return null
+}
+
+function isBlankRelationValue(value) {
+  return value == null || String(value).trim() === ''
+}
+
+/**
+ * Non-destructive merge for client_name / venue / venue_address on existing rows.
+ * Blank/null/missing incoming values must not erase existing non-empty data.
+ * Resolved non-empty incoming values may replace existing values.
+ */
+function mergeProtectedRelationFields(existing, mapped) {
+  const merged = { ...mapped }
+  for (const field of ['client_name', 'venue', 'venue_address']) {
+    const incoming = mapped[field]
+    const previous = existing?.[field]
+    if (isBlankRelationValue(incoming) && !isBlankRelationValue(previous)) {
+      merged[field] = previous
+    }
+  }
+  return merged
 }
 
 // ── field mapper ──────────────────────────────────────────────────────────────
@@ -184,10 +289,16 @@ function mapOpportunity(o) {
     crms_id:          String(o.id),
     crms_ref:         o.number || o.reference || String(o.id),
     event_name:       o.name   || o.subject   || '',
-    client_name:      o.member?.name || o.member?.full_name || o.company_name || o.member_name || '',
+    client_name:      firstNonEmpty(
+      o.member?.name,
+      o.member?.full_name,
+      o.member?.company_name,
+      o.company_name,
+      o.member_name,
+    ),
     client_id:        o.member_id ? String(o.member_id) : null,
 
-    // Venue — name + full address separately
+    // Venue — name + full address separately (never from billing_address_id)
     venue:            extractVenueName(o),
     venue_address:    extractVenueAddress(o),
 
@@ -351,10 +462,13 @@ export default async function handler(req, res) {
     const until = new Date()
     until.setFullYear(until.getFullYear() + 2)
 
+    // Associations confirmed by Production probe — hydrates member/venue/destination
+    // on the list response (avoids N+1 detail or /members requests).
     const allOpportunities = await fetchAllPages('/opportunities', 'opportunities', {
       'q[starts_at_gteq]': '2026-01-01',
       'q[starts_at_lteq]': until.toISOString().split('T')[0],
       'q[s]': 'starts_at asc',
+      'include[]': ['member', 'venue', 'destination'],
     })
 
     // NOTE: Records that disappear from Current RMS are NO LONGER hard-deleted.
@@ -429,40 +543,44 @@ export default async function handler(req, res) {
 
         } else {
           // ── EXISTING job ───────────────────────────────────────────────────
+          // Protect client_name / venue / venue_address from blank partial payloads.
+          // hasChanged + detectChanges + updatePayload all use the same merged object.
+          const merged = mergeProtectedRelationFields(existing, mapped)
+
           // Log date comparison outcome to diagnose detection vs update path.
           const dateChanged =
-            existing.delivery_date !== mapped.delivery_date ||
-            existing.collection_date !== mapped.collection_date
+            existing.delivery_date !== merged.delivery_date ||
+            existing.collection_date !== merged.collection_date
 
           if (dateChanged) {
             console.log('[sync-diag] DATE CHANGE DETECTED', {
-              crms_ref: mapped.crms_ref,
+              crms_ref: merged.crms_ref,
               existing_delivery: existing.delivery_date,
-              new_delivery: mapped.delivery_date,
+              new_delivery: merged.delivery_date,
               existing_collection: existing.collection_date,
-              new_collection: mapped.collection_date,
+              new_collection: merged.collection_date,
               existingRaw: typeof existing.delivery_date,
-              newRaw: typeof mapped.delivery_date,
+              newRaw: typeof merged.delivery_date,
             })
           }
 
           // Only update if data actually changed
           const hasChanged = !existing ||
-            existing.status !== mapped.status ||
-            existing.delivery_date !== mapped.delivery_date ||
-            existing.collection_date !== mapped.collection_date ||
-            existing.delivery_time !== mapped.delivery_time ||
-            existing.collection_time !== mapped.collection_time ||
-            existing.delivery_end_time !== mapped.delivery_end_time ||
-            existing.collection_end_time !== mapped.collection_end_time ||
-            existing.event_name !== mapped.event_name ||
-            existing.client_name !== mapped.client_name ||
-            existing.venue !== mapped.venue ||
-            existing.venue_address !== mapped.venue_address ||
-            existing.notes !== mapped.notes ||
-            existing.special_instructions !== mapped.special_instructions
+            existing.status !== merged.status ||
+            existing.delivery_date !== merged.delivery_date ||
+            existing.collection_date !== merged.collection_date ||
+            existing.delivery_time !== merged.delivery_time ||
+            existing.collection_time !== merged.collection_time ||
+            existing.delivery_end_time !== merged.delivery_end_time ||
+            existing.collection_end_time !== merged.collection_end_time ||
+            existing.event_name !== merged.event_name ||
+            existing.client_name !== merged.client_name ||
+            existing.venue !== merged.venue ||
+            existing.venue_address !== merged.venue_address ||
+            existing.notes !== merged.notes ||
+            existing.special_instructions !== merged.special_instructions
 
-          const changes = hasChanged ? detectChanges(existing, mapped) : []
+          const changes = hasChanged ? detectChanges(existing, merged) : []
           // A previously-hidden job that is importable again must be restored,
           // even when no business fields changed this sync.
           const needsUnhide =
@@ -480,13 +598,13 @@ export default async function handler(req, res) {
               if (existing.manual_venue) overrideFields.venue = existing.manual_venue
             }
             const updatePayload = {
-              ...mapped,
+              ...merged,
               ...overrideFields,
               // Explicitly pin classification fields to avoid accidental omissions
-              crms_state: mapped.crms_state,
-              crms_state_name: mapped.crms_state_name,
-              is_order: mapped.is_order,
-              ordered_at: mapped.ordered_at,
+              crms_state: merged.crms_state,
+              crms_state_name: merged.crms_state_name,
+              is_order: merged.is_order,
+              ordered_at: merged.ordered_at,
               sync_change_count: (existing.sync_change_count || 0) + 1,
             }
             await supabase
@@ -621,4 +739,14 @@ export default async function handler(req, res) {
 
     return res.status(500).json({ error: err.message, stats })
   }
+}
+
+export {
+  appendCrmsSearchParams,
+  buildCrmsUrl,
+  extractVenueName,
+  extractVenueAddress,
+  mapOpportunity,
+  mergeProtectedRelationFields,
+  isBlankRelationValue,
 }
