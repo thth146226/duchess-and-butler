@@ -26,6 +26,31 @@ const RUN_TYPES = [
   { value: 'after_col', label: 'After COL', bg: '#EAF3DE', color: '#3B6D11', border: '#86EFAC' },
 ]
 
+/** Calendar date in Europe/London as YYYY-MM-DD (matches server-side portal filtering). */
+function getLondonDateString(now = new Date()) {
+  const date = now instanceof Date ? now : new Date(now)
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/London',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+
+  const year = parts.find((part) => part.type === 'year')?.value
+  const month = parts.find((part) => part.type === 'month')?.value
+  const day = parts.find((part) => part.type === 'day')?.value
+  return `${year}-${month}-${day}`
+}
+
+function addDaysToYmd(ymd, days) {
+  const [y, m, d] = String(ymd).split('-').map(Number)
+  const dt = new Date(Date.UTC(y, m - 1, d + days, 12, 0, 0))
+  const yy = dt.getUTCFullYear()
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, '0')
+  const dd = String(dt.getUTCDate()).padStart(2, '0')
+  return `${yy}-${mm}-${dd}`
+}
+
 function fmt(d) {
   if (!d) return '—'
   return new Date(d + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })
@@ -60,8 +85,6 @@ export default function DriverPortal({ token }) {
   const [deletedItems, setDeletedItems] = useState({})
   const [sigCanvas, setSigCanvas]       = useState(null)
   const [isDrawing, setIsDrawing]       = useState(false)
-
-  const today = new Date().toISOString().split('T')[0]
 
   useEffect(() => { if (token) loadPortal() }, [token])
 
@@ -447,7 +470,7 @@ export default function DriverPortal({ token }) {
             </div>
             <div>
               <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.8)', fontWeight: '500' }}>{driver?.name}</div>
-              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)' }}>Driver · Read only</div>
+              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)' }}>Driver portal</div>
             </div>
           </div>
         </div>
@@ -458,11 +481,11 @@ export default function DriverPortal({ token }) {
           <div style={{ textAlign: 'center', padding: '48px 24px', color: '#6B6860' }}>
             <div style={{ fontSize: '32px', marginBottom: '12px' }}>📋</div>
             <div style={{ fontSize: '15px', fontWeight: '500', marginBottom: '6px' }}>No upcoming runs</div>
-            <div style={{ fontSize: '13px', color: '#9CA3AF' }}>No jobs assigned to you in the next 60 days</div>
+            <div style={{ fontSize: '13px', color: '#9CA3AF' }}>No current or upcoming jobs assigned to you</div>
           </div>
         ) : (() => {
-          const today = new Date().toLocaleDateString('en-CA')
-          const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('en-CA')
+          const today = getLondonDateString()
+          const tomorrow = addDaysToYmd(today, 1)
 
           const groups = {}
           portalRuns.forEach(run => {
@@ -482,6 +505,7 @@ export default function DriverPortal({ token }) {
                 <RunCard
                   key={run.id}
                   run={run}
+                  token={token}
                   onOpen={() => openJob(run.job)}
                   onReport={openReport}
                   onDone={loadPortal}
@@ -751,11 +775,49 @@ export default function DriverPortal({ token }) {
   )
 }
 
-function RunCard({ run, onOpen, onReport, onDone }) {
-  const isToday = run.date === new Date().toISOString().split('T')[0]
-  const isDel = run.type === 'DEL'
-  const today = new Date().toLocaleDateString('en-CA')
+function RunCard({ run, token, onOpen, onReport, onDone }) {
+  const [markingDone, setMarkingDone] = useState(false)
+  const today = getLondonDateString()
+  const isToday = run.date === today
   const isFuture = run.date > today
+  const isDel = run.type === 'DEL'
+  const isDone = isDel ? run.job.delivery_done : run.job.collection_done
+  const doneDisabled = isFuture || markingDone || isDone
+
+  async function handleMarkDone(e) {
+    e.stopPropagation()
+    if (doneDisabled) return
+
+    const confirmed = window.confirm(
+      `Mark ${run.type} as done for ${run.job.event_name}? This will remove it from your portal.`,
+    )
+    if (!confirmed) return
+
+    setMarkingDone(true)
+    try {
+      const res = await fetch('/api/driver-portal-runs', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          jobId: run.job.id,
+          type: run.type,
+        }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        window.alert(body.error || 'Failed to mark run as done. Please try again.')
+        return
+      }
+      if (onDone) await onDone()
+    } catch (err) {
+      console.error('markDone:', err)
+      window.alert('Failed to mark run as done. Please check your connection and try again.')
+    } finally {
+      setMarkingDone(false)
+    }
+  }
+
   return (
     <div style={{ background: '#fff', border: `1px solid ${isDel ? '#FCA5A5' : '#86EFAC'}`, borderRadius: '8px', marginBottom: '10px', overflow: 'hidden' }}>
       <div onClick={onOpen} style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '0.5px solid #EDE8E0', cursor: 'pointer' }}>
@@ -790,20 +852,9 @@ function RunCard({ run, onOpen, onReport, onDone }) {
         >+ {run.type} Report</button>
 
         <button
-          onClick={async (e) => {
-            e.stopPropagation()
-            if (isFuture) return
-            const field = run.type === 'DEL' ? 'delivery_done' : 'collection_done'
-            const isDone = run.type === 'DEL' ? run.job.delivery_done : run.job.collection_done
-            if (!isDone) {
-              const confirmed = window.confirm(`Mark ${run.type} as done for ${run.job.event_name}? This will remove it from your portal.`)
-              if (!confirmed) return
-            }
-            await supabase.from('crms_jobs').update({ [field]: !isDone }).eq('id', run.job.id)
-            onDone && onDone()
-          }}
-          disabled={isFuture}
-          title={isFuture ? 'Cannot mark future runs as done' : ''}
+          onClick={handleMarkDone}
+          disabled={doneDisabled}
+          title={isFuture ? 'Cannot mark future runs as done' : markingDone ? 'Updating…' : ''}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -812,11 +863,11 @@ function RunCard({ run, onOpen, onReport, onDone }) {
             fontWeight: '500',
             padding: '6px 12px',
             borderRadius: '6px',
-            border: `1.5px solid ${(run.type === 'DEL' ? run.job.delivery_done : run.job.collection_done) ? '#86EFAC' : '#DDD8CF'}`,
-            background: (run.type === 'DEL' ? run.job.delivery_done : run.job.collection_done) ? '#EAF3DE' : '#fff',
-            color: (run.type === 'DEL' ? run.job.delivery_done : run.job.collection_done) ? '#3B6D11' : '#9CA3AF',
-            opacity: isFuture ? 0.3 : 1,
-            cursor: isFuture ? 'not-allowed' : 'pointer',
+            border: `1.5px solid ${isDone ? '#86EFAC' : '#DDD8CF'}`,
+            background: isDone ? '#EAF3DE' : '#fff',
+            color: isDone ? '#3B6D11' : '#9CA3AF',
+            opacity: doneDisabled ? 0.3 : 1,
+            cursor: doneDisabled ? 'not-allowed' : 'pointer',
             fontFamily: "'DM Sans', sans-serif",
             transition: 'all 0.15s',
           }}
@@ -825,20 +876,20 @@ function RunCard({ run, onOpen, onReport, onDone }) {
             width: '16px',
             height: '16px',
             borderRadius: '4px',
-            border: `1.5px solid ${(run.type === 'DEL' ? run.job.delivery_done : run.job.collection_done) ? '#3B6D11' : '#DDD8CF'}`,
-            background: (run.type === 'DEL' ? run.job.delivery_done : run.job.collection_done) ? '#3B6D11' : '#fff',
+            border: `1.5px solid ${isDone ? '#3B6D11' : '#DDD8CF'}`,
+            background: isDone ? '#3B6D11' : '#fff',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             flexShrink: 0,
           }}>
-            {(run.type === 'DEL' ? run.job.delivery_done : run.job.collection_done) && (
+            {isDone && (
               <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
                 <path d="M2 5l2.5 2.5L8 3" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
             )}
           </div>
-          {(run.type === 'DEL' ? run.job.delivery_done : run.job.collection_done) ? 'Done' : 'Mark done'}
+          {markingDone ? 'Saving…' : isDone ? 'Done' : 'Mark done'}
         </button>
       </div>
     </div>

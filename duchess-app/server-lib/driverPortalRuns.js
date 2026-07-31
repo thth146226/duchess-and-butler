@@ -1,6 +1,9 @@
 const { createClient } = require('@supabase/supabase-js')
 
 const TOKEN_MAX_AGE_DAYS = 7
+const LONDON_TZ = 'Europe/London'
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 class HttpError extends Error {
   constructor(message, statusCode) {
@@ -20,6 +23,98 @@ function isManualTdsScheduleOrder(job) {
     normaliseScheduleText(job.client_name) === 'tds' &&
     normaliseScheduleText(job.venue) === 'tds'
   )
+}
+
+function isUuid(value) {
+  return UUID_RE.test(String(value || '').trim())
+}
+
+/** Current calendar date in Europe/London as YYYY-MM-DD. Optional Date for tests. */
+function getLondonDateString(now = new Date()) {
+  const date = now instanceof Date ? now : new Date(now)
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: LONDON_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+
+  const year = parts.find((part) => part.type === 'year')?.value
+  const month = parts.find((part) => part.type === 'month')?.value
+  const day = parts.find((part) => part.type === 'day')?.value
+  if (!year || !month || !day) {
+    throw new Error('Failed to resolve Europe/London calendar date.')
+  }
+  return `${year}-${month}-${day}`
+}
+
+/**
+ * Accept YYYY-MM-DD, or YYYY-MM-DD plus a strict ISO-style time suffix.
+ * Separator must be literal T or a single normal space (not tab/newline).
+ * Optional :ss, fractional seconds, Z, or numeric offset in exact +/-HH:MM form.
+ * Rejects malformed / impossible calendar dates and arbitrary trailing text.
+ */
+function normaliseRunDate(value) {
+  if (value == null || value === '') return null
+  const text = String(value).trim()
+
+  const dateOnly = text.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  const dateTime = text.match(
+    /^(\d{4})-(\d{2})-(\d{2})([T ])(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(?:Z|([+-])(\d{2}):(\d{2}))?$/,
+  )
+  const match = dateOnly || dateTime
+  if (!match) return null
+
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const probe = new Date(Date.UTC(year, month - 1, day))
+  if (
+    probe.getUTCFullYear() !== year ||
+    probe.getUTCMonth() !== month - 1 ||
+    probe.getUTCDate() !== day
+  ) {
+    return null
+  }
+
+  if (dateTime) {
+    const hour = Number(match[5])
+    const minute = Number(match[6])
+    const second = match[7] == null ? 0 : Number(match[7])
+    if (
+      hour > 23 ||
+      minute > 59 ||
+      second > 59 ||
+      !Number.isFinite(hour) ||
+      !Number.isFinite(minute) ||
+      !Number.isFinite(second)
+    ) {
+      return null
+    }
+
+    // Groups: 9 = sign, 10 = offset hour, 11 = offset minute (exact +/-HH:MM only).
+    if (match[9] != null) {
+      const offsetHour = Number(match[10])
+      const offsetMinute = Number(match[11])
+      if (
+        !Number.isFinite(offsetHour) ||
+        !Number.isFinite(offsetMinute) ||
+        offsetHour > 14 ||
+        offsetMinute > 59 ||
+        (offsetHour === 14 && offsetMinute !== 0)
+      ) {
+        return null
+      }
+    }
+  }
+
+  return `${match[1]}-${match[2]}-${match[3]}`
+}
+
+function isRunDateCurrentOrFuture(dateValue, today = getLondonDateString()) {
+  const date = normaliseRunDate(dateValue)
+  if (!date) return false
+  return date >= today
 }
 
 function getSupabaseAdminClient() {
@@ -147,15 +242,40 @@ function isColRunForDriver(job, driver) {
   )
 }
 
-function buildPortalRuns(jobs, driver) {
+function getEffectiveDelDate(job) {
+  return normaliseRunDate(job.manual_delivery_date || job.delivery_date)
+}
+
+function getEffectiveColDate(job) {
+  return normaliseRunDate(job.manual_collection_date || job.collection_date)
+}
+
+/** True when the driver has at least one incomplete DEL/COL run dated today or later (London). */
+function jobHasVisiblePortalRunForDriver(job, driver, today = getLondonDateString()) {
+  if (shouldSkipJobForRunBuild(job)) return false
+
+  const delVisible =
+    isRunDateCurrentOrFuture(job.manual_delivery_date || job.delivery_date, today) &&
+    !job.delivery_done &&
+    isDelRunForDriver(job, driver)
+
+  const colVisible =
+    isRunDateCurrentOrFuture(job.manual_collection_date || job.collection_date, today) &&
+    !job.collection_done &&
+    isColRunForDriver(job, driver)
+
+  return Boolean(delVisible || colVisible)
+}
+
+function buildPortalRuns(jobs, driver, today = getLondonDateString()) {
   const runs = []
 
   for (const job of jobs) {
     if (shouldSkipJobForRunBuild(job)) continue
 
-    const delDate = job.manual_delivery_date || job.delivery_date
+    const delDate = getEffectiveDelDate(job)
     const delTime = job.manual_delivery_time || job.delivery_time
-    const colDate = job.manual_collection_date || job.collection_date
+    const colDate = getEffectiveColDate(job)
     const colTime = job.manual_collection_time || job.collection_time
 
     let delEndTime = job.manual_delivery_time
@@ -185,7 +305,11 @@ function buildPortalRuns(jobs, driver) {
     const isDelTimed = !!(delEndTime && !['17:00', '18:00', '00:00'].includes(delEndTime))
     const isColTimed = !!(colEndTime && !['17:00', '18:00', '00:00'].includes(colEndTime))
 
-    if (delDate && !job.delivery_done && isDelRunForDriver(job, driver)) {
+    if (
+      isRunDateCurrentOrFuture(job.manual_delivery_date || job.delivery_date, today) &&
+      !job.delivery_done &&
+      isDelRunForDriver(job, driver)
+    ) {
       runs.push({
         job,
         type: 'DEL',
@@ -197,7 +321,11 @@ function buildPortalRuns(jobs, driver) {
       })
     }
 
-    if (colDate && !job.collection_done && isColRunForDriver(job, driver)) {
+    if (
+      isRunDateCurrentOrFuture(job.manual_collection_date || job.collection_date, today) &&
+      !job.collection_done &&
+      isColRunForDriver(job, driver)
+    ) {
       runs.push({
         job,
         type: 'COL',
@@ -317,12 +445,17 @@ async function attachItemsToJobs(supabase, jobs) {
   }))
 }
 
-async function getDriverPortalRuns(token) {
-  const supabase = getSupabaseAdminClient()
+async function getDriverPortalRuns(token, { now, supabase: injected } = {}) {
+  const supabase = injected || getSupabaseAdminClient()
   const driver = await resolveDriverByToken(supabase, token)
   const assignedJobs = await fetchMergedJobsForDriver(supabase, driver)
-  const jobsWithItems = await attachItemsToJobs(supabase, assignedJobs)
-  const runs = buildPortalRuns(jobsWithItems, driver)
+  const today = getLondonDateString(now)
+  // Drop jobs with only historical pending runs before loading line items.
+  const visibleJobs = assignedJobs.filter((job) =>
+    jobHasVisiblePortalRunForDriver(job, driver, today),
+  )
+  const jobsWithItems = await attachItemsToJobs(supabase, visibleJobs)
+  const runs = buildPortalRuns(jobsWithItems, driver, today)
 
   return {
     ok: true,
@@ -331,7 +464,148 @@ async function getDriverPortalRuns(token) {
   }
 }
 
+function parseMarkDoneBody(body) {
+  const raw = body && typeof body === 'object' ? body : {}
+  const token = normaliseToken(raw.token)
+  const jobId = raw.jobId == null ? '' : String(raw.jobId).trim()
+  const type = raw.type == null ? '' : String(raw.type).trim().toUpperCase()
+
+  if (!token) throw new HttpError('Missing access token.', 400)
+  if (!jobId) throw new HttpError('Missing jobId.', 400)
+  if (!isUuid(jobId)) throw new HttpError('Invalid jobId.', 400)
+  if (type !== 'DEL' && type !== 'COL') {
+    throw new HttpError('Invalid type. Expected DEL or COL.', 400)
+  }
+
+  return { token, jobId, type }
+}
+
+/** Server-side table/field selection — never trust client-supplied table or field. */
+function getCompletionTarget(job, type) {
+  const table = job?.is_manual === true ? 'orders' : 'crms_jobs'
+  const field = type === 'DEL' ? 'delivery_done' : 'collection_done'
+  return { table, field }
+}
+
+async function findAssignedJobForDriver(supabase, driver, jobId) {
+  const id = String(jobId || '').trim()
+  if (!id) throw new HttpError('Missing jobId.', 400)
+  if (!isUuid(id)) throw new HttpError('Invalid jobId.', 400)
+
+  const [crmsRes, orderRes] = await Promise.all([
+    supabase.from('crms_jobs').select('*').eq('id', id).maybeSingle(),
+    supabase.from('orders').select('*').eq('id', id).eq('deleted', false).maybeSingle(),
+  ])
+
+  if (crmsRes.error) {
+    throw new Error(crmsRes.error.message || 'Failed to load job.')
+  }
+  if (orderRes.error) {
+    throw new Error(orderRes.error.message || 'Failed to load order.')
+  }
+
+  // Prefer manual orders when present — they carry is_manual and live in public.orders.
+  let job = null
+  if (orderRes.data) {
+    job = {
+      ...orderRes.data,
+      crms_id: null,
+      crms_ref: orderRes.data.ref,
+      is_manual: true,
+    }
+  } else if (crmsRes.data) {
+    job = crmsRes.data
+  }
+
+  if (!job) {
+    throw new HttpError('Run not found.', 404)
+  }
+  // Same listing eligibility: pending manual, cancelled, deleted, undated RMS, etc.
+  if (shouldSkipJobForRunBuild(job)) {
+    throw new HttpError('Run not found.', 404)
+  }
+  if (!isJobAssignedToDriver(job, driver)) {
+    throw new HttpError('Run not found.', 404)
+  }
+
+  return job
+}
+
+async function markDriverPortalRunDone(input, { now, supabase: injected } = {}) {
+  const { token, jobId, type } = parseMarkDoneBody(input)
+  const supabase = injected || getSupabaseAdminClient()
+  const driver = await resolveDriverByToken(supabase, token)
+  const job = await findAssignedJobForDriver(supabase, driver, jobId)
+
+  if (type === 'DEL') {
+    if (!isDelRunForDriver(job, driver)) {
+      throw new HttpError('Run not found.', 404)
+    }
+  } else if (!isColRunForDriver(job, driver)) {
+    throw new HttpError('Run not found.', 404)
+  }
+
+  const runDate = type === 'DEL' ? getEffectiveDelDate(job) : getEffectiveColDate(job)
+  if (!runDate) {
+    throw new HttpError('Run date is missing.', 400)
+  }
+
+  const today = getLondonDateString(now)
+  if (runDate > today) {
+    throw new HttpError('Cannot mark future runs as done.', 409)
+  }
+  if (runDate < today) {
+    throw new HttpError('Cannot mark historical runs as done.', 409)
+  }
+
+  const doneField = type === 'DEL' ? 'delivery_done' : 'collection_done'
+  if (job[doneField]) {
+    throw new HttpError('Run is already completed.', 409)
+  }
+
+  const { table, field } = getCompletionTarget(job, type)
+
+  const { data, error } = await supabase
+    .from(table)
+    .update({ [field]: true })
+    .eq('id', jobId)
+    .eq(field, false)
+    .select('id')
+
+  if (error) {
+    throw new Error(error.message || 'Failed to update run.')
+  }
+
+  const rows = data || []
+  if (rows.length === 0) {
+    // Conditional false→true matched nothing (race / already completed).
+    throw new HttpError('Run is already completed.', 409)
+  }
+  if (rows.length !== 1) {
+    throw new Error('Unexpected number of rows updated.')
+  }
+
+  return {
+    ok: true,
+    jobId,
+    type,
+  }
+}
+
 module.exports = {
   HttpError,
   getDriverPortalRuns,
+  markDriverPortalRunDone,
+  getLondonDateString,
+  normaliseRunDate,
+  isRunDateCurrentOrFuture,
+  buildPortalRuns,
+  jobHasVisiblePortalRunForDriver,
+  getCompletionTarget,
+  parseMarkDoneBody,
+  getEffectiveDelDate,
+  getEffectiveColDate,
+  isDelRunForDriver,
+  isColRunForDriver,
+  shouldSkipJobForRunBuild,
 }
