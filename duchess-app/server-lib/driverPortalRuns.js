@@ -193,22 +193,21 @@ function isJobAssignedToDriver(job, driver) {
 
 /** Same job-level filter as DriverPortal fetchJobs — at least one pending run for this driver. */
 function jobHasPendingRunForDriver(job, driver) {
-  const delAssigned =
-    driverNameMatches(job.assigned_driver_name, driver.name) ||
-    driverNameMatches(job.assigned_driver_name_2, driver.name) ||
-    driverIdMatches(job.assigned_driver_id, driver.id) ||
-    driverIdMatches(job.assigned_driver_id_2, driver.id)
-
-  const colAssigned =
-    driverNameMatches(job.col_driver_name, driver.name) ||
-    driverNameMatches(job.col_driver_name_2, driver.name) ||
-    driverNameMatches(job.assigned_driver_name, driver.name) ||
-    driverNameMatches(job.assigned_driver_name_2, driver.name)
-
-  const delPending = delAssigned && !job.delivery_done
-  const colPending = colAssigned && !job.collection_done
-
+  const delPending = isDelRunForDriver(job, driver) && !job.delivery_done
+  const colPending = isColRunForDriver(job, driver) && !job.collection_done
   return delPending || colPending
+}
+
+/** True when a collection-driver field has a non-blank value. */
+function hasExplicitCollectionDriverName(value) {
+  return String(value ?? '').trim() !== ''
+}
+
+function hasExplicitCollectionDriver(job) {
+  return (
+    hasExplicitCollectionDriverName(job?.col_driver_name) ||
+    hasExplicitCollectionDriverName(job?.col_driver_name_2)
+  )
 }
 
 function shouldSkipJobForRunBuild(job) {
@@ -234,11 +233,18 @@ function isDelRunForDriver(job, driver) {
 }
 
 function isColRunForDriver(job, driver) {
+  // Explicit COL assignment takes precedence over delivery-driver fallback.
+  if (hasExplicitCollectionDriver(job)) {
+    return (
+      driverNameMatches(job.col_driver_name, driver.name) ||
+      driverNameMatches(job.col_driver_name_2, driver.name)
+    )
+  }
+
+  // Legacy jobs with no collection driver still fall back to assigned DEL drivers.
   return (
     driverNameMatches(job.assigned_driver_name, driver.name) ||
-    driverNameMatches(job.assigned_driver_name_2, driver.name) ||
-    driverNameMatches(job.col_driver_name, driver.name) ||
-    driverNameMatches(job.col_driver_name_2, driver.name)
+    driverNameMatches(job.assigned_driver_name_2, driver.name)
   )
 }
 

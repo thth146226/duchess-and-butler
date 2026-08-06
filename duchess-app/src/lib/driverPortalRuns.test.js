@@ -6,6 +6,8 @@ import {
   getEffectiveColDate,
   getEffectiveDelDate,
   getLondonDateString,
+  isColRunForDriver,
+  isDelRunForDriver,
   jobHasVisiblePortalRunForDriver,
   markDriverPortalRunDone,
   normaliseRunDate,
@@ -31,11 +33,33 @@ const ID_MULTI = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01'
 const ID_MAL = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbb01'
 const ID_HIST_ONLY = 'cccccccc-cccc-4ccc-8ccc-cccccccccc01'
 const ID_VALID = 'dddddddd-dddd-4ddd-8ddd-dddddddddd01'
+const ID_SPLIT = 'f1f1f1f1-f1f1-4f1f-8f1f-f1f1f1f1f1f1'
+const ID_LEGACY = 'f2f2f2f2-f2f2-4f2f-8f2f-f2f2f2f2f2f2'
+const ID_DUAL_COL = 'f3f3f3f3-f3f3-4f3f-8f3f-f3f3f3f3f3f3'
+const ID_WS_COL = 'f4f4f4f4-f4f4-4f4f-8f4f-f4f4f4f4f4f4'
 
 const DRIVER = {
   id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeee01',
   name: 'Alex Driver',
   colour: '#B8965A',
+}
+
+const ASSIF = {
+  id: 'a1111111-a111-4111-8111-a11111111111',
+  name: 'Assif',
+  colour: '#B8965A',
+}
+
+const MARCEL = {
+  id: 'a2222222-a222-4222-8222-a22222222222',
+  name: 'Marcel',
+  colour: '#3B6D11',
+}
+
+const COL_DRIVER_B = {
+  id: 'a3333333-a333-4333-8333-a33333333333',
+  name: 'Colette',
+  colour: '#854F0B',
 }
 
 function baseJob(overrides = {}) {
@@ -385,6 +409,169 @@ describe('driverPortalRuns date filtering', () => {
     expect(supabase.__itemCalls).toEqual([])
     expect(supabase.__fromCalls).not.toContain('crms_job_items')
     expect(supabase.__fromCalls).not.toContain('order_items')
+  })
+})
+
+describe('driverPortalRuns collection driver precedence', () => {
+  function splitAssignmentJob(overrides = {}) {
+    return baseJob({
+      id: ID_SPLIT,
+      event_name: 'Graziela',
+      assigned_driver_name: ASSIF.name,
+      assigned_driver_name_2: null,
+      assigned_driver_id: ASSIF.id,
+      assigned_driver_id_2: null,
+      col_driver_name: MARCEL.name,
+      col_driver_name_2: null,
+      delivery_date: TODAY,
+      collection_date: TODAY,
+      delivery_done: false,
+      collection_done: false,
+      ...overrides,
+    })
+  }
+
+  test('1-4. Assif gets DEL only; Marcel gets COL only', () => {
+    const job = splitAssignmentJob()
+
+    expect(isDelRunForDriver(job, ASSIF)).toBe(true)
+    expect(isColRunForDriver(job, ASSIF)).toBe(false)
+    expect(buildPortalRuns([job], ASSIF, TODAY).map((r) => r.type)).toEqual(['DEL'])
+
+    expect(isDelRunForDriver(job, MARCEL)).toBe(false)
+    expect(isColRunForDriver(job, MARCEL)).toBe(true)
+    expect(buildPortalRuns([job], MARCEL, TODAY).map((r) => r.type)).toEqual(['COL'])
+  })
+
+  test('5. jobHasVisiblePortalRunForDriver is correct per driver', () => {
+    const job = splitAssignmentJob()
+    expect(jobHasVisiblePortalRunForDriver(job, ASSIF, TODAY)).toBe(true)
+    expect(jobHasVisiblePortalRunForDriver(job, MARCEL, TODAY)).toBe(true)
+
+    const assifDelDone = splitAssignmentJob({ delivery_done: true })
+    expect(jobHasVisiblePortalRunForDriver(assifDelDone, ASSIF, TODAY)).toBe(false)
+    expect(jobHasVisiblePortalRunForDriver(assifDelDone, MARCEL, TODAY)).toBe(true)
+  })
+
+  test('6. Assif marking COL done is rejected with 404 and no update', async () => {
+    const job = splitAssignmentJob()
+    const assifDriverRow = {
+      id: ASSIF.id,
+      name: ASSIF.name,
+      colour: ASSIF.colour,
+      active: true,
+      access_token: 'assif-token',
+      token_created_at: new Date().toISOString(),
+    }
+    const supabase = createMockSupabase({
+      drivers: [assifDriverRow],
+      crmsJobs: [job],
+    })
+
+    await expect(
+      markDriverPortalRunDone(
+        { token: 'assif-token', jobId: ID_SPLIT, type: 'COL' },
+        { now: new Date('2026-07-31T12:00:00.000Z'), supabase },
+      ),
+    ).rejects.toMatchObject({ statusCode: 404, message: 'Run not found.' })
+    expect(supabase.__updateCalls).toEqual([])
+  })
+
+  test('7-8. Marcel may mark COL done; updates only collection_done', async () => {
+    const job = splitAssignmentJob()
+    const marcelDriverRow = {
+      id: MARCEL.id,
+      name: MARCEL.name,
+      colour: MARCEL.colour,
+      active: true,
+      access_token: 'marcel-token',
+      token_created_at: new Date().toISOString(),
+    }
+    const supabase = createMockSupabase({
+      drivers: [marcelDriverRow],
+      crmsJobs: [job],
+    })
+
+    const result = await markDriverPortalRunDone(
+      { token: 'marcel-token', jobId: ID_SPLIT, type: 'COL' },
+      { now: new Date('2026-07-31T12:00:00.000Z'), supabase },
+    )
+
+    expect(result).toEqual({ ok: true, jobId: ID_SPLIT, type: 'COL' })
+    expect(supabase.__updateCalls).toEqual([
+      {
+        table: 'crms_jobs',
+        payload: { collection_done: true },
+        filters: { id: ID_SPLIT, collection_done: false },
+      },
+    ])
+  })
+
+  test('9. Both explicit collection drivers may receive COL', () => {
+    const job = splitAssignmentJob({
+      id: ID_DUAL_COL,
+      col_driver_name: MARCEL.name,
+      col_driver_name_2: COL_DRIVER_B.name,
+      delivery_done: true,
+    })
+
+    expect(isColRunForDriver(job, MARCEL)).toBe(true)
+    expect(isColRunForDriver(job, COL_DRIVER_B)).toBe(true)
+    expect(isColRunForDriver(job, ASSIF)).toBe(false)
+    expect(buildPortalRuns([job], MARCEL, TODAY).map((r) => r.type)).toEqual(['COL'])
+    expect(buildPortalRuns([job], COL_DRIVER_B, TODAY).map((r) => r.type)).toEqual(['COL'])
+    expect(buildPortalRuns([job], ASSIF, TODAY).map((r) => r.type)).toEqual([])
+  })
+
+  test('10. Absent collection drivers keep legacy assigned-driver fallback', () => {
+    const job = baseJob({
+      id: ID_LEGACY,
+      assigned_driver_name: ASSIF.name,
+      assigned_driver_id: ASSIF.id,
+      col_driver_name: null,
+      col_driver_name_2: null,
+      delivery_done: true,
+      collection_done: false,
+      collection_date: TODAY,
+    })
+
+    expect(isColRunForDriver(job, ASSIF)).toBe(true)
+    expect(buildPortalRuns([job], ASSIF, TODAY).map((r) => r.type)).toEqual(['COL'])
+    expect(isColRunForDriver(job, MARCEL)).toBe(false)
+  })
+
+  test('11. Whitespace-only col_driver_name does not disable legacy fallback', () => {
+    const job = baseJob({
+      id: ID_WS_COL,
+      assigned_driver_name: ASSIF.name,
+      assigned_driver_id: ASSIF.id,
+      col_driver_name: '   ',
+      col_driver_name_2: '\t',
+      delivery_done: true,
+      collection_done: false,
+      collection_date: TODAY,
+    })
+
+    expect(isColRunForDriver(job, ASSIF)).toBe(true)
+    expect(buildPortalRuns([job], ASSIF, TODAY).map((r) => r.type)).toEqual(['COL'])
+    expect(isColRunForDriver(job, MARCEL)).toBe(false)
+  })
+
+  test('empty string and undefined collection drivers keep legacy fallback', () => {
+    const job = baseJob({
+      id: ID_LEGACY,
+      assigned_driver_name: ASSIF.name,
+      assigned_driver_id: ASSIF.id,
+      col_driver_name: '',
+      col_driver_name_2: undefined,
+      delivery_done: true,
+      collection_done: false,
+      collection_date: TODAY,
+    })
+
+    expect(isColRunForDriver(job, ASSIF)).toBe(true)
+    expect(isColRunForDriver(job, MARCEL)).toBe(false)
+    expect(buildPortalRuns([job], ASSIF, TODAY).map((r) => r.type)).toEqual(['COL'])
   })
 })
 
