@@ -6,6 +6,7 @@ const ALLOWED_SOURCES = new Set([
   'global_sync',
   'backfill',
   'system',
+  'auto_poll_rms',
 ])
 
 const SEVERITY_BY_CHANGE_TYPE = {

@@ -174,6 +174,35 @@ describe('operationalChangeEvents', () => {
     expect(rows).toHaveLength(0)
   })
 
+  test('auto_poll_rms is an allowed operational event source', () => {
+    const rows = buildOperationalItemChangeEventRows({
+      job: JOB,
+      diff: {
+        added: [{ crms_item_id: '55', item_name: 'Plate', quantity: 10, category: 'crockery' }],
+        changed: [],
+        stale: [],
+      },
+      source: 'auto_poll_rms',
+    })
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0].source).toBe('auto_poll_rms')
+  })
+
+  test('unsupported source creates no event rows', () => {
+    const rows = buildOperationalItemChangeEventRows({
+      job: JOB,
+      diff: {
+        added: [{ crms_item_id: '55', item_name: 'Plate', quantity: 10, category: 'crockery' }],
+        changed: [],
+        stale: [],
+      },
+      source: 'not_a_real_source',
+    })
+
+    expect(rows).toHaveLength(0)
+  })
+
   test('duplicate idempotency keys are stable and upsert ignores duplicates', async () => {
     process.env.OPERATIONAL_CHANGE_EVENTS_ENABLED = 'true'
 

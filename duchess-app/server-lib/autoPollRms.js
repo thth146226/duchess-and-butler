@@ -6,6 +6,11 @@ import {
   buildOperationalItemChangeEventRows,
   isAllowedOperationalEventSource,
 } from './operationalChangeEvents.js'
+import {
+  isRuntimeV1Enabled,
+  isRuntimeV1Engine,
+  runRuntimeV1ReportOnly,
+} from './rmsAlertRuntime.js'
 import { shouldSendTelegramForEvent } from './telegramAlerts.js'
 
 export const AUTO_POLL_DEFAULT_WINDOW_DAYS = 14
@@ -191,6 +196,22 @@ export async function runAutoPollRms({ supabase, body = {} }) {
     const error = new Error('auto_poll_rms apply mode is not enabled yet. Use apply: false.')
     error.statusCode = 400
     throw error
+  }
+
+  if (isRuntimeV1Engine(body)) {
+    if (!isRuntimeV1Enabled()) {
+      const error = new Error('AUTO_POLL_RUNTIME_V1_ENABLED is not true; runtime_v1 is fail-closed.')
+      error.statusCode = 403
+      throw error
+    }
+    const runtimeResult = await runRuntimeV1ReportOnly({ supabase, body })
+    return {
+      ...runtimeResult,
+      mode: 'auto_poll_rms',
+      dryRun: true,
+      apply: false,
+      durationMs: Date.now() - started,
+    }
   }
 
   const { jobs, totalMatching, truncated } = await fetchAutoPollScopedJobs(supabase, {

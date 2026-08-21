@@ -13,11 +13,20 @@ import {
 } from '../../server-lib/autoPollRms.js'
 import { reconcileJobItemsFromRms } from '../../server-lib/crmsItemReconcile.js'
 import { isAllowedOperationalEventSource } from '../../server-lib/operationalChangeEvents.js'
+import { runRuntimeV1ReportOnly } from '../../server-lib/rmsAlertRuntime.js'
 import { sendOperationalTelegramAlerts } from '../../server-lib/telegramAlerts.js'
 
 jest.mock('../../server-lib/crmsItemReconcile.js', () => ({
   reconcileJobItemsFromRms: jest.fn(),
 }))
+
+jest.mock('../../server-lib/rmsAlertRuntime.js', () => {
+  const actual = jest.requireActual('../../server-lib/rmsAlertRuntime.js')
+  return {
+    ...actual,
+    runRuntimeV1ReportOnly: jest.fn(),
+  }
+})
 
 jest.mock('../../server-lib/telegramAlerts.js', () => {
   const actual = jest.requireActual('../../server-lib/telegramAlerts.js')
@@ -27,12 +36,18 @@ jest.mock('../../server-lib/telegramAlerts.js', () => {
   }
 })
 
+function utcTodayPlus(days) {
+  const d = new Date()
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
 const JOB_IN_WINDOW = {
   id: 'job-1',
   crms_id: '999',
   crms_ref: 'QDB07915',
   event_name: 'Test Event',
-  delivery_date: '2026-06-20',
+  delivery_date: utcTodayPlus(1),
   event_date: null,
   collection_date: null,
   status: 'confirmed',
@@ -83,14 +98,18 @@ describe('autoPollRms', () => {
   })
 
   test('jobInForwardWindow uses event/delivery/collection dates', () => {
-    expect(jobInForwardWindow(JOB_IN_WINDOW, '2026-06-16', '2026-06-30')).toBe(true)
+    const start = utcTodayPlus(0)
+    const end = utcTodayPlus(14)
+    expect(jobInForwardWindow(JOB_IN_WINDOW, start, end)).toBe(true)
     expect(jobInForwardWindow({
       ...JOB_IN_WINDOW,
-      delivery_date: '2026-01-01',
-    }, '2026-06-16', '2026-06-30')).toBe(false)
+      delivery_date: '2020-01-01',
+    }, start, end)).toBe(false)
   })
 
   test('fetchAutoPollScopedJobs excludes hidden, cancelled, and non-active RMS visibility', async () => {
+    const start = utcTodayPlus(0)
+    const end = utcTodayPlus(14)
     const supabase = {
       from: jest.fn(() => ({
         select: jest.fn(() => ({
@@ -113,8 +132,8 @@ describe('autoPollRms', () => {
     }
 
     const { jobs } = await fetchAutoPollScopedJobs(supabase, {
-      windowStart: '2026-06-16',
-      windowEnd: '2026-06-30',
+      windowStart: start,
+      windowEnd: end,
       maxJobs: 25,
     })
 
@@ -314,5 +333,57 @@ describe('autoPollRms', () => {
       supabase,
       body: { mode: 'auto_poll_rms', apply: true },
     })).rejects.toMatchObject({ statusCode: 400 })
+  })
+
+  test('runtime_v1 fail-closed when feature flag off', async () => {
+    const prev = process.env.AUTO_POLL_RUNTIME_V1_ENABLED
+    delete process.env.AUTO_POLL_RUNTIME_V1_ENABLED
+    await expect(runAutoPollRms({
+      supabase: { rpc: jest.fn() },
+      body: { mode: 'auto_poll_rms', engine: 'runtime_v1', apply: false },
+    })).rejects.toMatchObject({ statusCode: 403 })
+    expect(runRuntimeV1ReportOnly).not.toHaveBeenCalled()
+    if (prev === undefined) delete process.env.AUTO_POLL_RUNTIME_V1_ENABLED
+    else process.env.AUTO_POLL_RUNTIME_V1_ENABLED = prev
+  })
+
+  test('runtime_v1 routes to Stage 1 report-only and never Telegram/reconcile apply', async () => {
+    const prev = process.env.AUTO_POLL_RUNTIME_V1_ENABLED
+    process.env.AUTO_POLL_RUNTIME_V1_ENABLED = 'true'
+    runRuntimeV1ReportOnly.mockResolvedValue({
+      ok: true,
+      engine: 'runtime_v1',
+      stage: 'report_only',
+      eventsCreated: 0,
+      telegramSent: 0,
+      jobResults: [],
+    })
+
+    const result = await runAutoPollRms({
+      supabase: { rpc: jest.fn(), from: jest.fn() },
+      body: { mode: 'auto_poll_rms', engine: 'runtime_v1', apply: false },
+    })
+
+    expect(runRuntimeV1ReportOnly).toHaveBeenCalled()
+    expect(reconcileJobItemsFromRms).not.toHaveBeenCalled()
+    expect(sendOperationalTelegramAlerts).not.toHaveBeenCalled()
+    expect(result.engine).toBe('runtime_v1')
+    expect(result.eventsCreated).toBe(0)
+    expect(result.telegramSent).toBe(0)
+
+    if (prev === undefined) delete process.env.AUTO_POLL_RUNTIME_V1_ENABLED
+    else process.env.AUTO_POLL_RUNTIME_V1_ENABLED = prev
+  })
+
+  test('runtime_v1 apply=true remains blocked before engine dispatch', async () => {
+    const prev = process.env.AUTO_POLL_RUNTIME_V1_ENABLED
+    process.env.AUTO_POLL_RUNTIME_V1_ENABLED = 'true'
+    await expect(runAutoPollRms({
+      supabase: { rpc: jest.fn() },
+      body: { mode: 'auto_poll_rms', engine: 'runtime_v1', apply: true },
+    })).rejects.toMatchObject({ statusCode: 400 })
+    expect(runRuntimeV1ReportOnly).not.toHaveBeenCalled()
+    if (prev === undefined) delete process.env.AUTO_POLL_RUNTIME_V1_ENABLED
+    else process.env.AUTO_POLL_RUNTIME_V1_ENABLED = prev
   })
 })
