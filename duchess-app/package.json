@@ -9,6 +9,7 @@
     "@sparticuz/chromium": "^148.0.0",
     "@supabase/supabase-js": "^2.39.0",
     "html2canvas": "^1.4.1",
+    "idb": "7.1.1",
     "jspdf": "^4.2.1",
     "jszip": "^3.10.1",
     "otpauth": "^9.3.6",
@@ -34,5 +35,8 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
+  },
+  "devDependencies": {
+    "fake-indexeddb": "6.2.5"
   }
 }
