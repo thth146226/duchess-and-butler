@@ -49,7 +49,7 @@ function hasForeignUnexpiredLease(record, nowMs, leaseOwner) {
   return record.lease_owner !== leaseOwner
 }
 
-function isP3Eligible(record, nowMs, leaseOwner) {
+function isEligible(record, nowMs, leaseOwner) {
   if (hasForeignUnexpiredLease(record, nowMs, leaseOwner)) {
     return false
   }
@@ -60,6 +60,15 @@ function isP3Eligible(record, nowMs, leaseOwner) {
     return true
   }
   if (record.status === PHOTO_UPLOAD_STATUSES.UPLOAD_RETRY_WAIT) {
+    return isRetryDue(record, nowMs)
+  }
+  if (record.status === PHOTO_UPLOAD_STATUSES.STORAGE_COMPLETE) {
+    return true
+  }
+  if (record.status === PHOTO_UPLOAD_STATUSES.DB_PENDING) {
+    return true
+  }
+  if (record.status === PHOTO_UPLOAD_STATUSES.DB_RETRY_WAIT) {
     return isRetryDue(record, nowMs)
   }
   return false
@@ -80,6 +89,26 @@ function applyRequiredTransition(record, nowMs) {
       ...record,
       status: decision.status,
       updated_at: nowMs,
+      retry_phase: null,
+      next_retry_at: null,
+    }
+  }
+  if (record.status === PHOTO_UPLOAD_STATUSES.STORAGE_COMPLETE) {
+    const decision = transitionPhotoUpload(record.status, PHOTO_UPLOAD_EVENTS.BEGIN_DB_PHASE)
+    return {
+      ...record,
+      status: decision.status,
+      updated_at: nowMs,
+    }
+  }
+  if (record.status === PHOTO_UPLOAD_STATUSES.DB_RETRY_WAIT) {
+    const decision = transitionPhotoUpload(record.status, PHOTO_UPLOAD_EVENTS.DB_RETRY_DUE)
+    return {
+      ...record,
+      status: decision.status,
+      updated_at: nowMs,
+      retry_phase: null,
+      next_retry_at: null,
     }
   }
   return record
@@ -206,7 +235,10 @@ export function createPhotoUploadManager(options = {}) {
     try {
       if (!stopped && !slot.stale) {
         locallyExecuted.add(slot.queueId)
-        await executeClaimedRecord(record)
+        await executeClaimedRecord(record, {
+          leaseOwner,
+          leaseGeneration: slot.generation,
+        })
       }
     } catch (_error) {
       return
@@ -236,7 +268,9 @@ export function createPhotoUploadManager(options = {}) {
 
     if (
       claimed.status === PHOTO_UPLOAD_STATUSES.QUEUED ||
-      claimed.status === PHOTO_UPLOAD_STATUSES.UPLOAD_RETRY_WAIT
+      claimed.status === PHOTO_UPLOAD_STATUSES.UPLOAD_RETRY_WAIT ||
+      claimed.status === PHOTO_UPLOAD_STATUSES.STORAGE_COMPLETE ||
+      claimed.status === PHOTO_UPLOAD_STATUSES.DB_RETRY_WAIT
     ) {
       workRecord = applyRequiredTransition(claimed, now())
       try {
@@ -255,7 +289,10 @@ export function createPhotoUploadManager(options = {}) {
         }
         return false
       }
-    } else if (claimed.status !== PHOTO_UPLOAD_STATUSES.UPLOADING) {
+    } else if (
+      claimed.status !== PHOTO_UPLOAD_STATUSES.UPLOADING &&
+      claimed.status !== PHOTO_UPLOAD_STATUSES.DB_PENDING
+    ) {
       await safeRelease({
         queueId: claimed.queue_id,
         generation,
@@ -297,7 +334,7 @@ export function createPhotoUploadManager(options = {}) {
         .filter((record) => (
           !attempted.has(record.queue_id)
           && !locallyExecuted.has(record.queue_id)
-          && isP3Eligible(record, nowMs, leaseOwner)
+          && isEligible(record, nowMs, leaseOwner)
         ))
         .sort(compareEligibleRecords)[0]
       if (!candidate) {

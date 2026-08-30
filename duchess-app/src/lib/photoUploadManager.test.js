@@ -724,4 +724,238 @@ describe('photoUploadManager', () => {
     expect(stored.lease_owner).toBe('tab-a')
     expect(stored.lease_generation).toBe(5)
   })
+
+  test('STORAGE_COMPLETE is claimable and becomes DB_PENDING before executor', async () => {
+    const db = handles.db(createPhotoUploadDb({ dbName }))
+    const clock = createClock(FIXED_NOW)
+    let statusAtExecutor = null
+    let fence = null
+    const started = []
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.STORAGE_COMPLETE,
+      remote_public_url: 'https://example.test/photo.jpg',
+      upload_attempt_count: 2,
+      db_attempt_count: 1,
+    }))
+    const manager = handles.manager(createPhotoUploadManager(managerOptions({
+      db,
+      clock,
+      executeClaimedRecord: async (record, context) => {
+        const stored = await db.getRecord({
+          queueId: record.queue_id,
+          actorScopeType: 'office_user',
+          actorScopeId: 'office-a',
+        })
+        statusAtExecutor = stored.status
+        fence = context
+        started.push(record.queue_id)
+      },
+    })))
+    await manager.pump()
+    await waitFor(() => started.length === 1)
+    expect(statusAtExecutor).toBe(PHOTO_UPLOAD_STATUSES.DB_PENDING)
+    expect(fence).toEqual({
+      leaseOwner: 'tab-a',
+      leaseGeneration: 1,
+    })
+    const stored = await db.getRecord({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+    })
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.DB_PENDING)
+    expect(stored.upload_attempt_count).toBe(2)
+    expect(stored.db_attempt_count).toBe(1)
+  })
+
+  test('DB_PENDING is executable without a synthetic transition', async () => {
+    const db = handles.db(createPhotoUploadDb({ dbName }))
+    const clock = createClock(FIXED_NOW)
+    let statusAtExecutor = null
+    const started = []
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.DB_PENDING,
+      remote_public_url: 'https://example.test/photo.jpg',
+      upload_attempt_count: 3,
+      db_attempt_count: 2,
+    }))
+    const manager = handles.manager(createPhotoUploadManager(managerOptions({
+      db,
+      clock,
+      executeClaimedRecord: async (record) => {
+        statusAtExecutor = record.status
+        started.push(record.queue_id)
+      },
+    })))
+    await manager.pump()
+    await waitFor(() => started.length === 1)
+    expect(statusAtExecutor).toBe(PHOTO_UPLOAD_STATUSES.DB_PENDING)
+    const stored = await db.getRecord({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+    })
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.DB_PENDING)
+    expect(stored.upload_attempt_count).toBe(3)
+    expect(stored.db_attempt_count).toBe(2)
+  })
+
+  test('due DB_RETRY_WAIT becomes DB_PENDING before executor', async () => {
+    const db = handles.db(createPhotoUploadDb({ dbName }))
+    const clock = createClock(FIXED_NOW)
+    let statusAtExecutor = null
+    const started = []
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.DB_RETRY_WAIT,
+      retry_phase: 'DB',
+      next_retry_at: FIXED_NOW,
+      db_attempt_count: 2,
+    }))
+    const manager = handles.manager(createPhotoUploadManager(managerOptions({
+      db,
+      clock,
+      executeClaimedRecord: async (record) => {
+        const stored = await db.getRecord({
+          queueId: record.queue_id,
+          actorScopeType: 'office_user',
+          actorScopeId: 'office-a',
+        })
+        statusAtExecutor = stored.status
+        started.push(record.queue_id)
+      },
+    })))
+    await manager.pump()
+    await waitFor(() => started.length === 1)
+    expect(statusAtExecutor).toBe(PHOTO_UPLOAD_STATUSES.DB_PENDING)
+    const stored = await db.getRecord({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+    })
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.DB_PENDING)
+    expect(stored.retry_phase).toBeNull()
+    expect(stored.next_retry_at).toBeNull()
+    expect(stored.db_attempt_count).toBe(2)
+  })
+
+  test('not-due DB_RETRY_WAIT does not execute', async () => {
+    const db = handles.db(createPhotoUploadDb({ dbName }))
+    const clock = createClock(FIXED_NOW)
+    const started = []
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.DB_RETRY_WAIT,
+      retry_phase: 'DB',
+      next_retry_at: FIXED_NOW + 5_000,
+    }))
+    const manager = handles.manager(createPhotoUploadManager(managerOptions({
+      db,
+      clock,
+      executeClaimedRecord: async (record) => {
+        started.push(record.queue_id)
+      },
+    })))
+    await manager.pump()
+    await flushMany()
+    expect(started).toEqual([])
+    const stored = await db.getRecord({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+    })
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.DB_RETRY_WAIT)
+    expect(stored.lease_owner).toBeNull()
+  })
+
+  test('FAILED_DB does not execute automatically', async () => {
+    const db = handles.db(createPhotoUploadDb({ dbName }))
+    const clock = createClock(FIXED_NOW)
+    const started = []
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.FAILED_DB,
+      db_attempt_count: 5,
+    }))
+    const manager = handles.manager(createPhotoUploadManager(managerOptions({
+      db,
+      clock,
+      executeClaimedRecord: async (record) => {
+        started.push(record.queue_id)
+      },
+    })))
+    await manager.pump()
+    await flushMany()
+    expect(started).toEqual([])
+  })
+
+  test('two managers racing the same DB record execute it exactly once', async () => {
+    const dbA = handles.db(createPhotoUploadDb({ dbName }))
+    const dbB = handles.db(createPhotoUploadDb({ dbName }))
+    const clockA = createClock(FIXED_NOW)
+    const clockB = createClock(FIXED_NOW)
+    const executions = []
+    await dbA.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.DB_PENDING,
+      remote_public_url: 'https://example.test/photo.jpg',
+    }))
+    const managerA = handles.manager(createPhotoUploadManager(managerOptions({
+      db: dbA,
+      clock: clockA,
+      leaseOwner: 'tab-A',
+      executeClaimedRecord: async (record) => {
+        executions.push({ owner: 'tab-A', queueId: record.queue_id, status: record.status })
+        await handles.gate().promise
+      },
+    })))
+    const managerB = handles.manager(createPhotoUploadManager(managerOptions({
+      db: dbB,
+      clock: clockB,
+      leaseOwner: 'tab-B',
+      executeClaimedRecord: async (record) => {
+        executions.push({ owner: 'tab-B', queueId: record.queue_id, status: record.status })
+        await handles.gate().promise
+      },
+    })))
+    await Promise.all([managerA.pump(), managerB.pump()])
+    await waitFor(() => executions.length >= 1)
+    await flushMany(12)
+    expect(executions).toHaveLength(1)
+    expect(executions[0].status).toBe(PHOTO_UPLOAD_STATUSES.DB_PENDING)
+    const stored = await dbA.getRecord({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+    })
+    expect(stored.lease_owner).toBe(executions[0].owner)
+  })
+
+  test('DB scheduling does not burn upload or DB attempts', async () => {
+    const db = handles.db(createPhotoUploadDb({ dbName }))
+    const clock = createClock(FIXED_NOW)
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.STORAGE_COMPLETE,
+      remote_public_url: 'https://example.test/photo.jpg',
+      upload_attempt_count: 4,
+      db_attempt_count: 3,
+    }))
+    const manager = handles.manager(createPhotoUploadManager(managerOptions({
+      db,
+      clock,
+      executeClaimedRecord: async () => {},
+    })))
+    await manager.pump()
+    await waitFor(async () => {
+      const row = await db.getRecord({
+        queueId: 'queue-office-a-1',
+        actorScopeType: 'office_user',
+        actorScopeId: 'office-a',
+      })
+      return row && row.status === PHOTO_UPLOAD_STATUSES.DB_PENDING
+    })
+    const stored = await db.getRecord({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+    })
+    expect(stored.upload_attempt_count).toBe(4)
+    expect(stored.db_attempt_count).toBe(3)
+  })
 })
