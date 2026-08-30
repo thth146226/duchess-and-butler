@@ -11,6 +11,8 @@ export const PHOTO_UPLOAD_DB_ERROR_CODES = Object.freeze({
   ACTOR_SCOPE_CONFLICT: 'ACTOR_SCOPE_CONFLICT',
   BLOB_CLEANUP_FORBIDDEN: 'BLOB_CLEANUP_FORBIDDEN',
   DATABASE_ERROR: 'DATABASE_ERROR',
+  LEASE_FENCE_CONFLICT: 'LEASE_FENCE_CONFLICT',
+  LEASE_NOT_AVAILABLE: 'LEASE_NOT_AVAILABLE',
 })
 
 export const PHOTO_UPLOAD_ACTOR_SCOPE_TYPES = Object.freeze({
@@ -117,6 +119,52 @@ function actorConflict(message) {
 
 function blobCleanupForbidden(message) {
   return new PhotoUploadDbError(PHOTO_UPLOAD_DB_ERROR_CODES.BLOB_CLEANUP_FORBIDDEN, message)
+}
+
+function leaseFenceConflict(message) {
+  return new PhotoUploadDbError(PHOTO_UPLOAD_DB_ERROR_CODES.LEASE_FENCE_CONFLICT, message)
+}
+
+function leaseNotAvailable(message) {
+  return new PhotoUploadDbError(PHOTO_UPLOAD_DB_ERROR_CODES.LEASE_NOT_AVAILABLE, message)
+}
+
+function isPositiveInteger(value) {
+  return Number.isInteger(value) && value > 0
+}
+
+function isLeaseExpired(record, now) {
+  return record.lease_expires_at === null || record.lease_expires_at <= now
+}
+
+function requireLeaseOwner(leaseOwner) {
+  if (!isNonEmptyString(leaseOwner)) {
+    throw invalidRecord('leaseOwner must be a non-empty string')
+  }
+}
+
+function requireLeaseGeneration(leaseGeneration) {
+  if (!isNonNegativeInteger(leaseGeneration)) {
+    throw invalidRecord('leaseGeneration must be an integer >= 0')
+  }
+}
+
+function requireNow(now) {
+  if (!isNonNegativeInteger(now)) {
+    throw invalidRecord('now must be epoch milliseconds')
+  }
+}
+
+function requireLeaseTtlMs(leaseTtlMs) {
+  if (!isPositiveInteger(leaseTtlMs)) {
+    throw invalidRecord('leaseTtlMs must be an integer > 0')
+  }
+}
+
+function requireQueueId(queueId) {
+  if (!isNonEmptyString(queueId)) {
+    throw invalidRecord('queueId must be a non-empty string')
+  }
 }
 
 function wrapDatabaseError(error) {
@@ -512,6 +560,179 @@ export function createPhotoUploadDb(options = {}) {
         updated.updated_at = updatedAt
         await store.put(updated)
         await tx.done
+      } catch (error) {
+        throw wrapDatabaseError(error)
+      }
+    },
+
+    async claimLease({
+      queueId,
+      actorScopeType,
+      actorScopeId,
+      leaseOwner,
+      now,
+      leaseTtlMs,
+    }) {
+      requireQueueId(queueId)
+      requireActorScope(actorScopeType, actorScopeId)
+      requireLeaseOwner(leaseOwner)
+      requireNow(now)
+      requireLeaseTtlMs(leaseTtlMs)
+      const db = await getDb()
+      const tx = db.transaction(PHOTO_UPLOAD_QUEUE_STORE, 'readwrite')
+      const store = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
+      try {
+        const existing = await store.get(queueId)
+        if (!existing) {
+          await tx.done
+          throw invalidRecord('record not found')
+        }
+        if (!sameActor(existing, actorScopeType, actorScopeId)) {
+          await tx.done
+          throw actorConflict('cannot claim a lease owned by a different actor')
+        }
+
+        const noOwner = existing.lease_owner === null
+        const expired = isLeaseExpired(existing, now)
+        const sameOwner = existing.lease_owner === leaseOwner
+        let next
+
+        if (noOwner || expired) {
+          next = copyRecord(existing)
+          next.lease_owner = leaseOwner
+          next.lease_generation = existing.lease_generation + 1
+          next.lease_expires_at = now + leaseTtlMs
+        } else if (sameOwner) {
+          next = copyRecord(existing)
+          next.lease_expires_at = now + leaseTtlMs
+        } else {
+          await tx.done
+          throw leaseNotAvailable('lease is held by a different owner')
+        }
+
+        await store.put(next)
+        await tx.done
+        return next
+      } catch (error) {
+        throw wrapDatabaseError(error)
+      }
+    },
+
+    async heartbeatLease({
+      queueId,
+      actorScopeType,
+      actorScopeId,
+      leaseOwner,
+      leaseGeneration,
+      now,
+      leaseTtlMs,
+    }) {
+      requireQueueId(queueId)
+      requireActorScope(actorScopeType, actorScopeId)
+      requireLeaseOwner(leaseOwner)
+      requireLeaseGeneration(leaseGeneration)
+      requireNow(now)
+      requireLeaseTtlMs(leaseTtlMs)
+      const db = await getDb()
+      const tx = db.transaction(PHOTO_UPLOAD_QUEUE_STORE, 'readwrite')
+      const store = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
+      try {
+        const existing = await store.get(queueId)
+        if (!existing) {
+          await tx.done
+          throw invalidRecord('record not found')
+        }
+        if (!sameActor(existing, actorScopeType, actorScopeId)) {
+          await tx.done
+          throw actorConflict('cannot heartbeat a lease owned by a different actor')
+        }
+        if (existing.lease_owner !== leaseOwner || existing.lease_generation !== leaseGeneration) {
+          await tx.done
+          throw leaseFenceConflict('LEASE_FENCE_CONFLICT')
+        }
+        const next = copyRecord(existing)
+        next.lease_expires_at = now + leaseTtlMs
+        await store.put(next)
+        await tx.done
+        return next
+      } catch (error) {
+        throw wrapDatabaseError(error)
+      }
+    },
+
+    async releaseLease({
+      queueId,
+      actorScopeType,
+      actorScopeId,
+      leaseOwner,
+      leaseGeneration,
+    }) {
+      requireQueueId(queueId)
+      requireActorScope(actorScopeType, actorScopeId)
+      requireLeaseOwner(leaseOwner)
+      requireLeaseGeneration(leaseGeneration)
+      const db = await getDb()
+      const tx = db.transaction(PHOTO_UPLOAD_QUEUE_STORE, 'readwrite')
+      const store = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
+      try {
+        const existing = await store.get(queueId)
+        if (!existing) {
+          await tx.done
+          throw invalidRecord('record not found')
+        }
+        if (!sameActor(existing, actorScopeType, actorScopeId)) {
+          await tx.done
+          throw actorConflict('cannot release a lease owned by a different actor')
+        }
+        if (existing.lease_owner !== leaseOwner || existing.lease_generation !== leaseGeneration) {
+          await tx.done
+          throw leaseFenceConflict('LEASE_FENCE_CONFLICT')
+        }
+        const next = copyRecord(existing)
+        next.lease_owner = null
+        next.lease_expires_at = null
+        await store.put(next)
+        await tx.done
+        return next
+      } catch (error) {
+        throw wrapDatabaseError(error)
+      }
+    },
+
+    async putRecordFenced({ record, leaseOwner, leaseGeneration }) {
+      requireLeaseOwner(leaseOwner)
+      requireLeaseGeneration(leaseGeneration)
+      const db = await getDb()
+      const tx = db.transaction(PHOTO_UPLOAD_QUEUE_STORE, 'readwrite')
+      const store = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
+      try {
+        let validated
+        try {
+          validated = validateRecord(record)
+        } catch (error) {
+          await tx.done
+          throw error
+        }
+        const current = await store.get(validated.queue_id)
+        if (!current) {
+          await tx.done
+          throw invalidRecord('record not found')
+        }
+        if (!sameActor(current, validated.actor_scope_type, validated.actor_scope_id)) {
+          await tx.done
+          throw actorConflict('cannot write a record owned by a different actor')
+        }
+        if (current.lease_owner !== leaseOwner || current.lease_generation !== leaseGeneration) {
+          await tx.done
+          throw leaseFenceConflict('LEASE_FENCE_CONFLICT')
+        }
+        const next = copyRecord(validated)
+        next.lease_owner = current.lease_owner
+        next.lease_generation = current.lease_generation
+        next.lease_expires_at = current.lease_expires_at
+        await store.put(next)
+        await tx.done
+        return next
       } catch (error) {
         throw wrapDatabaseError(error)
       }

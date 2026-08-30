@@ -573,4 +573,255 @@ describe('photoUploadDb', () => {
   test('PhotoUploadDbError remains identifiable for INVALID_RECORD', async () => {
     await expect(db.putRecord(makeRecord({ queue_id: '' }))).rejects.toBeInstanceOf(PhotoUploadDbError)
   })
+
+  const LEASE_TTL_MS = 30_000
+  const FIXED_NOW = 1_800_000_000_000
+
+  function claimArgs(overrides = {}) {
+    return {
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+      leaseOwner: 'tab-a',
+      now: FIXED_NOW,
+      leaseTtlMs: LEASE_TTL_MS,
+      ...overrides,
+    }
+  }
+
+  test('first lease claim succeeds and increments generation', async () => {
+    const record = makeRecord()
+    await db.putRecord(record)
+    const claimed = await db.claimLease(claimArgs())
+    expect(claimed.lease_owner).toBe('tab-a')
+    expect(claimed.lease_generation).toBe(1)
+    expect(claimed.lease_expires_at).toBe(FIXED_NOW + LEASE_TTL_MS)
+    const stored = await db.getRecord({
+      queueId: record.queue_id,
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+    })
+    expect(stored.lease_owner).toBe('tab-a')
+    expect(stored.lease_generation).toBe(1)
+    expect(stored.lease_expires_at).toBe(FIXED_NOW + LEASE_TTL_MS)
+  })
+
+  test('same owner active re-claim preserves generation', async () => {
+    await db.putRecord(makeRecord())
+    const first = await db.claimLease(claimArgs())
+    const second = await db.claimLease(claimArgs({ now: FIXED_NOW + 1_000 }))
+    expect(first.lease_generation).toBe(1)
+    expect(second.lease_generation).toBe(1)
+    expect(second.lease_owner).toBe('tab-a')
+    expect(second.lease_expires_at).toBe(FIXED_NOW + 1_000 + LEASE_TTL_MS)
+  })
+
+  test('different owner cannot steal an unexpired lease', async () => {
+    await db.putRecord(makeRecord())
+    await db.claimLease(claimArgs())
+    await expect(db.claimLease(claimArgs({ leaseOwner: 'tab-b' }))).rejects.toMatchObject({
+      code: PHOTO_UPLOAD_DB_ERROR_CODES.LEASE_NOT_AVAILABLE,
+    })
+    const stored = await db.getRecord({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+    })
+    expect(stored.lease_owner).toBe('tab-a')
+    expect(stored.lease_generation).toBe(1)
+  })
+
+  test('expired lease can be reclaimed and generation increments', async () => {
+    await db.putRecord(makeRecord())
+    await db.claimLease(claimArgs())
+    const reclaimed = await db.claimLease(claimArgs({
+      leaseOwner: 'tab-b',
+      now: FIXED_NOW + LEASE_TTL_MS,
+    }))
+    expect(reclaimed.lease_owner).toBe('tab-b')
+    expect(reclaimed.lease_generation).toBe(2)
+    expect(reclaimed.lease_expires_at).toBe(FIXED_NOW + LEASE_TTL_MS + LEASE_TTL_MS)
+  })
+
+  test('stale fenced write is rejected and current fenced write succeeds', async () => {
+    await db.putRecord(makeRecord())
+    const first = await db.claimLease(claimArgs())
+    const staleCandidate = {
+      ...first,
+      status: PHOTO_UPLOAD_STATUSES.UPLOADING,
+      updated_at: FIXED_NOW + 5,
+    }
+    const reclaimed = await db.claimLease(claimArgs({
+      leaseOwner: 'tab-b',
+      now: FIXED_NOW + LEASE_TTL_MS,
+    }))
+    await expect(db.putRecordFenced({
+      record: staleCandidate,
+      leaseOwner: 'tab-a',
+      leaseGeneration: first.lease_generation,
+    })).rejects.toMatchObject({
+      code: PHOTO_UPLOAD_DB_ERROR_CODES.LEASE_FENCE_CONFLICT,
+    })
+    const afterStale = await db.getRecord({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+    })
+    expect(afterStale.lease_owner).toBe('tab-b')
+    expect(afterStale.lease_generation).toBe(2)
+    expect(afterStale.status).toBe(PHOTO_UPLOAD_STATUSES.QUEUED)
+
+    const currentCandidate = {
+      ...reclaimed,
+      status: PHOTO_UPLOAD_STATUSES.UPLOADING,
+      updated_at: FIXED_NOW + LEASE_TTL_MS + 5,
+    }
+    await db.putRecordFenced({
+      record: currentCandidate,
+      leaseOwner: 'tab-b',
+      leaseGeneration: reclaimed.lease_generation,
+    })
+    const stored = await db.getRecord({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+    })
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.UPLOADING)
+    expect(stored.lease_owner).toBe('tab-b')
+    expect(stored.lease_generation).toBe(2)
+  })
+
+  test('heartbeat extends expiry and stale heartbeat is rejected', async () => {
+    await db.putRecord(makeRecord())
+    const claimed = await db.claimLease(claimArgs())
+    const heartbeated = await db.heartbeatLease({
+      ...claimArgs({ now: FIXED_NOW + 10_000 }),
+      leaseGeneration: claimed.lease_generation,
+    })
+    expect(heartbeated.lease_generation).toBe(1)
+    expect(heartbeated.lease_expires_at).toBe(FIXED_NOW + 10_000 + LEASE_TTL_MS)
+    expect(heartbeated.status).toBe(PHOTO_UPLOAD_STATUSES.QUEUED)
+    await db.claimLease(claimArgs({
+      leaseOwner: 'tab-b',
+      now: FIXED_NOW + 10_000 + LEASE_TTL_MS,
+    }))
+    await expect(db.heartbeatLease({
+      ...claimArgs({ now: FIXED_NOW + 10_000 + LEASE_TTL_MS + 1 }),
+      leaseGeneration: claimed.lease_generation,
+    })).rejects.toMatchObject({
+      code: PHOTO_UPLOAD_DB_ERROR_CODES.LEASE_FENCE_CONFLICT,
+    })
+    const stored = await db.getRecord({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+    })
+    expect(stored.lease_owner).toBe('tab-b')
+    expect(stored.lease_generation).toBe(2)
+  })
+
+  test('valid release clears owner and expiry while preserving generation', async () => {
+    await db.putRecord(makeRecord())
+    const claimed = await db.claimLease(claimArgs())
+    const released = await db.releaseLease({
+      queueId: claimed.queue_id,
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+      leaseOwner: 'tab-a',
+      leaseGeneration: claimed.lease_generation,
+    })
+    expect(released.lease_owner).toBeNull()
+    expect(released.lease_expires_at).toBeNull()
+    expect(released.lease_generation).toBe(1)
+    const next = await db.claimLease(claimArgs({ leaseOwner: 'tab-b', now: FIXED_NOW + 50 }))
+    expect(next.lease_generation).toBe(2)
+  })
+
+  test('stale release is rejected and leaves the current lease untouched', async () => {
+    await db.putRecord(makeRecord())
+    const first = await db.claimLease(claimArgs())
+    await db.claimLease(claimArgs({
+      leaseOwner: 'tab-b',
+      now: FIXED_NOW + LEASE_TTL_MS,
+    }))
+    await expect(db.releaseLease({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+      leaseOwner: 'tab-a',
+      leaseGeneration: first.lease_generation,
+    })).rejects.toMatchObject({
+      code: PHOTO_UPLOAD_DB_ERROR_CODES.LEASE_FENCE_CONFLICT,
+    })
+    const stored = await db.getRecord({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+    })
+    expect(stored.lease_owner).toBe('tab-b')
+    expect(stored.lease_generation).toBe(2)
+  })
+
+  test('actor cannot claim another actor record', async () => {
+    await db.putRecord(makeRecord())
+    await expect(db.claimLease(claimArgs({
+      actorScopeId: 'office-b',
+      leaseOwner: 'tab-b',
+    }))).rejects.toMatchObject({
+      code: PHOTO_UPLOAD_DB_ERROR_CODES.ACTOR_SCOPE_CONFLICT,
+    })
+    await expect(db.heartbeatLease({
+      ...claimArgs({ actorScopeId: 'office-b', leaseOwner: 'tab-b' }),
+      leaseGeneration: 1,
+    })).rejects.toMatchObject({
+      code: PHOTO_UPLOAD_DB_ERROR_CODES.ACTOR_SCOPE_CONFLICT,
+    })
+    await expect(db.releaseLease({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-b',
+      leaseOwner: 'tab-b',
+      leaseGeneration: 1,
+    })).rejects.toMatchObject({
+      code: PHOTO_UPLOAD_DB_ERROR_CODES.ACTOR_SCOPE_CONFLICT,
+    })
+    const stored = await db.getRecord({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+    })
+    expect(stored.lease_owner).toBeNull()
+    expect(stored.lease_generation).toBe(0)
+    expect(await readBlobBytes(stored.blob)).toEqual(SOURCE_BYTES)
+  })
+
+  test('claim heartbeat and release preserve Blob metadata and attempt counters', async () => {
+    const record = makeRecord({
+      upload_attempt_count: 3,
+      db_attempt_count: 2,
+      metadata_payload: { nested: 'original' },
+    })
+    await db.putRecord(record)
+    const claimed = await db.claimLease(claimArgs())
+    const heartbeated = await db.heartbeatLease({
+      ...claimArgs({ now: FIXED_NOW + 10_000 }),
+      leaseGeneration: claimed.lease_generation,
+    })
+    const released = await db.releaseLease({
+      queueId: record.queue_id,
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+      leaseOwner: 'tab-a',
+      leaseGeneration: claimed.lease_generation,
+    })
+    for (const row of [claimed, heartbeated, released]) {
+      expect(row.blob).toBeInstanceOf(Blob)
+      expect(await readBlobBytes(row.blob)).toEqual(SOURCE_BYTES)
+      expect(row.metadata_payload).toEqual({ nested: 'original' })
+      expect(row.file_name).toBe('evidence.jpg')
+      expect(row.status).toBe(PHOTO_UPLOAD_STATUSES.QUEUED)
+      expect(row.upload_attempt_count).toBe(3)
+      expect(row.db_attempt_count).toBe(2)
+    }
+  })
 })
