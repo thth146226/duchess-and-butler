@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
+import { usePhotoUploadQueue } from '../hooks/usePhotoUploadQueue'
 
 const RUN_TYPES = [
   { value: 'after_del', label: 'After DEL', bg: '#FCEBEB', color: '#A32D2D', border: '#FCA5A5' },
@@ -12,67 +13,61 @@ export default function EvidenceUpload({ jobId, jobTable = 'crms_jobs', crmsRef,
   const { profile } = useAuth()
   const [photos, setPhotos]       = useState([])
   const [runType, setRunType]     = useState('after_del')
-  const [uploading, setUploading] = useState(false)
   const [lightbox, setLightbox]   = useState(null)
+  const [queueNotice, setQueueNotice] = useState(null)
+  const [queueError, setQueueError] = useState(null)
   const fileRef = useRef()
   const galleryRef = useRef()
-
-  useEffect(() => { if (jobId) fetchPhotos() }, [jobId])
+  const jobIdRef = useRef(jobId)
+  jobIdRef.current = jobId
 
   async function fetchPhotos() {
+    const currentJobId = jobIdRef.current
+    if (!currentJobId) return
     const { data } = await supabase
       .from('evidence_photos')
       .select('*')
-      .eq('order_id', jobId)
+      .eq('order_id', currentJobId)
       .order('created_at', { ascending: false })
     if (data) setPhotos(data)
   }
 
-  async function handleUpload(e) {
-    const files = Array.from(e.target.files)
-    if (!files.length) return
-    setUploading(true)
-    for (const file of files) {
-      const ext = file.name.split('.').pop()
-      const fileName = `${jobId}/${runType}_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('evidence-photos')
-        .upload(fileName, file, { contentType: file.type })
-
-      if (uploadError) {
-        console.error('Storage upload error:', uploadError)
-        continue
-      }
-
-      console.log('Upload success:', uploadData)
-
-      const { data: { publicUrl } } = supabase.storage
-        .from('evidence-photos')
-        .getPublicUrl(fileName)
-
-      console.log('Public URL:', publicUrl)
-
-      const { error: dbError } = await supabase.from('evidence_photos').insert({
-        order_id:         jobId,
-        job_table:        jobTable,
-        crms_ref:         crmsRef || null,
-        event_name:       eventName || null,
-        run_type:         runType,
-        photo_url:        publicUrl,
-        file_path:        fileName,
-        uploaded_by:      profile?.id || null,
-        uploaded_by_name: profile?.name || 'Team',
-        driver_name:      profile?.name || null,
-      })
-
-      if (dbError) {
-        console.error('Database insert error:', dbError)
-      }
+  function handleRemoteDone(record) {
+    if (record && record.entity_id === jobIdRef.current) {
+      fetchPhotos()
     }
-    setUploading(false)
+  }
+
+  const { enqueueFiles, busy } = usePhotoUploadQueue({
+    jobId,
+    jobTable,
+    crmsRef,
+    eventName,
+    runType,
+    profile,
+    onRemoteDone: handleRemoteDone,
+  })
+
+  useEffect(() => { if (jobId) fetchPhotos() }, [jobId])
+
+  async function handleUpload(e) {
+    const files = Array.from(e.target.files || [])
+    if (!files.length) return
+    setQueueNotice(null)
+    setQueueError(null)
+    const result = await enqueueFiles(files)
     if (fileRef.current) fileRef.current.value = ''
     if (galleryRef.current) galleryRef.current.value = ''
-    fetchPhotos()
+    if (result.accepted.length > 0) {
+      setQueueNotice('Photos queued for upload.')
+    }
+    if (result.rejected.length > 0) {
+      setQueueError('Some photos could not be queued. Already queued photos were kept.')
+    }
+    if (result.accepted.length === 0 && result.rejected.length > 0) {
+      setQueueNotice(null)
+      setQueueError('Photos could not be queued for upload.')
+    }
   }
 
   async function deletePhoto(id, filePath) {
@@ -118,6 +113,7 @@ export default function EvidenceUpload({ jobId, jobTable = 'crms_jobs', crmsRef,
           accept="image/*"
           multiple
           capture="environment"
+          data-testid="evidence-camera-input"
           style={{ display: 'none' }}
           onChange={handleUpload}
         />
@@ -126,34 +122,41 @@ export default function EvidenceUpload({ jobId, jobTable = 'crms_jobs', crmsRef,
           type="file"
           accept="image/*"
           multiple
+          data-testid="evidence-gallery-input"
           style={{ display: 'none' }}
           onChange={handleUpload}
         />
         <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
           <button
             onClick={() => fileRef.current.click()}
-            disabled={uploading}
+            disabled={busy}
             style={{
               fontSize: '13px', fontWeight: '500', padding: '10px 20px',
               borderRadius: '6px', border: 'none',
-              background: uploading ? '#DDD8CF' : '#1C1C1E',
-              color: '#fff', cursor: uploading ? 'default' : 'pointer',
+              background: busy ? '#DDD8CF' : '#1C1C1E',
+              color: '#fff', cursor: busy ? 'default' : 'pointer',
               fontFamily: "'DM Sans', sans-serif",
             }}
-          >{uploading ? 'Uploading…' : '📷 Take photo'}</button>
+          >{busy ? 'Queuing…' : '📷 Take photo'}</button>
 
           <button
             onClick={() => galleryRef.current.click()}
-            disabled={uploading}
+            disabled={busy}
             style={{
               fontSize: '13px', fontWeight: '500', padding: '10px 20px',
               borderRadius: '6px', border: '1.5px solid #DDD8CF',
               background: 'transparent',
-              color: '#1C1C1E', cursor: uploading ? 'default' : 'pointer',
+              color: '#1C1C1E', cursor: busy ? 'default' : 'pointer',
               fontFamily: "'DM Sans', sans-serif",
             }}
           >🖼 Choose from gallery</button>
         </div>
+        {queueNotice && (
+          <div style={{ marginTop: '12px', fontSize: '12px', color: '#3B6D11' }}>{queueNotice}</div>
+        )}
+        {queueError && (
+          <div style={{ marginTop: '8px', fontSize: '12px', color: '#A32D2D' }}>{queueError}</div>
+        )}
       </div>
 
       {/* Uploaded photos grouped by type */}
