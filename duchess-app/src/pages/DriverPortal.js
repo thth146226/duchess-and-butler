@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { createClient } from '@supabase/supabase-js'
+import { useDriverPhotoUploadQueue } from '../hooks/useDriverPhotoUploadQueue'
 
 const supabase = createClient(
   'https://ecosxamjvxveawaeluma.supabase.co',
@@ -64,11 +65,13 @@ export default function DriverPortal({ token }) {
   const [notes, setNotes]         = useState([])
   const [photos, setPhotos]       = useState([])
   const [runType, setRunType]     = useState('after_del')
-  const [uploading, setUploading] = useState(false)
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState(null)
+  const [queueNotice, setQueueNotice] = useState(null)
+  const [queueError, setQueueError] = useState(null)
   const fileRef = useRef()
   const galleryRef = useRef()
+  const jobIdRef = useRef(null)
 
   const [reportMode, setReportMode]     = useState(false)
   const [reportJob, setReportJob]       = useState(null)
@@ -141,35 +144,53 @@ export default function DriverPortal({ token }) {
     if (photosData) setPhotos(photosData)
   }
 
-  async function handleUpload(e) {
-    const files = Array.from(e.target.files)
-    if (!files.length || !selectedJob) return
-    setUploading(true)
-    for (const file of files) {
-      const ext = file.name.split('.').pop()
-      const fileName = `${selectedJob.id}/${runType}_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`
-      const { error: uploadError } = await supabase.storage
-        .from('evidence-photos')
-        .upload(fileName, file, { contentType: file.type })
-      if (uploadError) { console.error(uploadError); continue }
-      const { data: { publicUrl } } = supabase.storage.from('evidence-photos').getPublicUrl(fileName)
-      await supabase.from('evidence_photos').insert({
-        order_id:         selectedJob.id,
-        job_table:        'crms_jobs',
-        crms_ref:         selectedJob.crms_ref || null,
-        event_name:       selectedJob.event_name || null,
-        run_type:         runType,
-        photo_url:        publicUrl,
-        file_path:        fileName,
-        uploaded_by_name: driver?.name || 'Driver',
-        driver_name:      driver?.name || null,
-      })
+  jobIdRef.current = selectedJob?.id || null
+
+  async function fetchEvidencePhotos(jobId) {
+    if (!jobId) return
+    const { data } = await supabase
+      .from('evidence_photos')
+      .select('*')
+      .eq('order_id', jobId)
+      .order('created_at', { ascending: false })
+    if (data) setPhotos(data)
+  }
+
+  function handleRemoteDone(record) {
+    if (record && record.entity_id === jobIdRef.current) {
+      fetchEvidencePhotos(jobIdRef.current)
     }
-    setUploading(false)
+  }
+
+  const { enqueueFiles, busy } = useDriverPhotoUploadQueue({
+    driverId: driver?.id || null,
+    jobId: selectedJob?.id || null,
+    jobTable: 'crms_jobs',
+    crmsRef: selectedJob?.crms_ref,
+    eventName: selectedJob?.event_name,
+    runType,
+    driverName: driver?.name || null,
+    onRemoteDone: handleRemoteDone,
+  })
+
+  async function handleUpload(e) {
+    const files = Array.from(e.target.files || [])
+    if (!files.length || !selectedJob) return
+    setQueueNotice(null)
+    setQueueError(null)
+    const result = await enqueueFiles(files)
     if (fileRef.current) fileRef.current.value = ''
     if (galleryRef.current) galleryRef.current.value = ''
-    const { data } = await supabase.from('evidence_photos').select('*').eq('order_id', selectedJob.id).order('created_at', { ascending: false })
-    if (data) setPhotos(data)
+    if (result.accepted.length > 0) {
+      setQueueNotice('Photos queued for upload.')
+    }
+    if (result.rejected.length > 0) {
+      setQueueError('Some photos could not be queued. Already queued photos were kept.')
+    }
+    if (result.accepted.length === 0 && result.rejected.length > 0) {
+      setQueueNotice(null)
+      setQueueError('Photos could not be queued for upload.')
+    }
   }
 
   function openMaps(address) {
@@ -727,16 +748,22 @@ export default function DriverPortal({ token }) {
                         }}>{rt.label}</button>
                       ))}
                     </div>
-                    <input ref={fileRef} type="file" accept="image/*" multiple capture="environment" style={{ display: 'none' }} onChange={handleUpload} />
-                    <input ref={galleryRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={handleUpload} />
+                    <input ref={fileRef} type="file" accept="image/*" multiple capture="environment" data-testid="driver-evidence-camera-input" style={{ display: 'none' }} onChange={handleUpload} />
+                    <input ref={galleryRef} type="file" accept="image/*" multiple data-testid="driver-evidence-gallery-input" style={{ display: 'none' }} onChange={handleUpload} />
                     <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                      <button onClick={() => fileRef.current.click()} disabled={uploading} style={{ fontSize: '12px', fontWeight: '500', padding: '9px 18px', borderRadius: '6px', border: 'none', background: '#1C1C1E', color: '#fff', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
-                        {uploading ? 'Uploading…' : '📷 Take photo'}
+                      <button onClick={() => fileRef.current.click()} disabled={busy} style={{ fontSize: '12px', fontWeight: '500', padding: '9px 18px', borderRadius: '6px', border: 'none', background: '#1C1C1E', color: '#fff', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
+                        {busy ? 'Queuing…' : '📷 Take photo'}
                       </button>
-                      <button onClick={() => galleryRef.current.click()} disabled={uploading} style={{ fontSize: '12px', fontWeight: '500', padding: '9px 18px', borderRadius: '6px', border: '1.5px solid #DDD8CF', background: 'transparent', color: '#1C1C1E', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
+                      <button onClick={() => galleryRef.current.click()} disabled={busy} style={{ fontSize: '12px', fontWeight: '500', padding: '9px 18px', borderRadius: '6px', border: '1.5px solid #DDD8CF', background: 'transparent', color: '#1C1C1E', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
                         🖼 Gallery
                       </button>
                     </div>
+                    {queueNotice && (
+                      <div style={{ marginTop: '10px', fontSize: '12px', color: '#3B6D11' }}>{queueNotice}</div>
+                    )}
+                    {queueError && (
+                      <div style={{ marginTop: '8px', fontSize: '12px', color: '#A32D2D' }}>{queueError}</div>
+                    )}
                   </div>
 
                   {photos.length === 0 ? (
