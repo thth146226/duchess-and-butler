@@ -1,0 +1,564 @@
+import { createRoot } from 'react-dom/client'
+import { act } from 'react'
+import {
+  DRIVER_REPORT_ACTOR_SCOPE_TYPE,
+  DRIVER_REPORT_DONE_OBSERVER_POLL_MS,
+  DRIVER_REPORT_ENTITY_TYPE,
+  DRIVER_REPORT_QUEUE_ERROR_CODES,
+  DRIVER_REPORT_SOURCE_SURFACES,
+  buildDriverReportStoragePath,
+  createDriverReportPhotoUploadQueueController,
+  useDriverReportPhotoUploadQueue,
+} from './useDriverReportPhotoUploadQueue'
+import { PHOTO_UPLOAD_STATUSES } from '../lib/photoUploadDomain'
+
+const SENTINEL_TOKEN = 'p10-sentinel-token-SECRET-never-persist'
+const PORTAL_TOKEN = 'p10-portal-token-SECRET'
+const DRIVER_ID = 'driver-id-aaa'
+const REPORT_ID = 'report-99'
+const PROVISIONAL_ID = 'prov-report-1'
+const FIXED_NOW = 1_920_000_000_000
+const liveControllers = []
+
+function makeFile(name, type, bytes = [1, 2, 3, 4]) {
+  return new File([Uint8Array.from(bytes)], name, { type })
+}
+
+function collectStrings(value, out, seen) {
+  if (value == null) return
+  if (typeof value === 'string') {
+    out.push(value)
+    return
+  }
+  if (typeof value !== 'object') return
+  if (typeof Blob === 'function' && value instanceof Blob) return
+  if (seen.has(value)) return
+  seen.add(value)
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectStrings(item, out, seen))
+    return
+  }
+  Object.keys(value).forEach((key) => {
+    collectStrings(key, out, seen)
+    collectStrings(value[key], out, seen)
+  })
+}
+
+function assertNoSecret(value) {
+  const strings = []
+  collectStrings(value, strings, new Set())
+  const joined = strings.join('\n')
+  expect(joined).not.toContain(SENTINEL_TOKEN)
+  expect(joined).not.toContain(PORTAL_TOKEN)
+}
+
+function createSessionClient({ accessToken = SENTINEL_TOKEN } = {}) {
+  return {
+    supabaseKey: 'anon-key-SENTINEL',
+    auth: {
+      getSession: jest.fn(async () => ({
+        data: {
+          session: accessToken
+            ? { access_token: accessToken, refresh_token: 'refresh-SECRET', user: { id: 'session-user' } }
+            : null,
+        },
+      })),
+    },
+    storage: { from: jest.fn(() => ({ upload: jest.fn() })) },
+    from: jest.fn(() => ({ insert: jest.fn() })),
+  }
+}
+
+function createFakeTimers() {
+  const scheduled = []
+  let nextId = 0
+  return {
+    scheduled,
+    setTimeoutImpl: (fn, ms) => {
+      const id = (nextId += 1)
+      scheduled.push({ id, fn, ms })
+      return id
+    },
+    clearTimeoutImpl: (id) => {
+      const index = scheduled.findIndex((row) => row.id === id)
+      if (index >= 0) scheduled.splice(index, 1)
+    },
+  }
+}
+
+function createDeps(overrides = {}) {
+  const events = []
+  const putRecords = []
+  const startCalls = []
+  const stopCalls = []
+  const closeCalls = []
+  const remoteDone = []
+  const transportUploads = []
+  const recordsById = new Map()
+  const timers = overrides.timers || createFakeTimers()
+  const storeApi = {
+    start: jest.fn(() => {
+      events.push('start')
+      startCalls.push(Date.now())
+    }),
+    stop: jest.fn(async () => {
+      events.push('stop')
+      stopCalls.push(true)
+    }),
+  }
+  let capturedGetAccessToken = null
+  const db = {
+    putRecord: overrides.putRecord || (async (record) => {
+      events.push('put')
+      putRecords.push(record)
+      recordsById.set(record.queue_id, {
+        ...record,
+        blob: record.blob,
+        metadata_payload: { ...record.metadata_payload },
+      })
+    }),
+    getRecord: overrides.getRecord || (async ({ queueId, actorScopeType, actorScopeId }) => {
+      const record = recordsById.get(queueId)
+      if (!record) return null
+      if (record.actor_scope_type !== actorScopeType || record.actor_scope_id !== actorScopeId) {
+        return null
+      }
+      return record
+    }),
+    listRecordsForActor: overrides.listRecordsForActor || (async ({ actorScopeType, actorScopeId }) => (
+      Array.from(recordsById.values()).filter((record) => (
+        record.actor_scope_type === actorScopeType && record.actor_scope_id === actorScopeId
+      ))
+    )),
+    close: jest.fn(async () => {
+      events.push('close')
+      closeCalls.push(true)
+    }),
+  }
+  const supabaseClient = overrides.supabaseClient || createSessionClient()
+  const controller = createDriverReportPhotoUploadQueueController({
+    sourceSurface: overrides.sourceSurface || DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_TAB,
+    supabaseClient,
+    createDb: () => db,
+    createTransport: overrides.createTransport || (() => ({
+      upload: async (...args) => {
+        transportUploads.push(args)
+        return { ok: true }
+      },
+    })),
+    createReconciler: () => ({}),
+    createStore: overrides.createStore || ((opts) => {
+      capturedGetAccessToken = opts.getAccessToken
+      return storeApi
+    }),
+    now: overrides.now || (() => FIXED_NOW),
+    randomUUID: overrides.randomUUID || (() => 'qid-1'),
+    createLeaseOwner: () => 'lease-p10',
+    setTimeoutImpl: timers.setTimeoutImpl,
+    clearTimeoutImpl: timers.clearTimeoutImpl,
+    onRemoteDone: (payload) => { remoteDone.push(payload) },
+  })
+  liveControllers.push(controller)
+  return {
+    controller,
+    events,
+    putRecords,
+    startCalls,
+    stopCalls,
+    closeCalls,
+    remoteDone,
+    transportUploads,
+    recordsById,
+    timers,
+    supabaseClient,
+    getAccessToken: () => capturedGetAccessToken,
+  }
+}
+
+async function enqueueTab(deps, extra = {}) {
+  return deps.controller.enqueueFiles({
+    files: extra.files || [makeFile('shot.jpg', 'image/jpeg')],
+    driverId: extra.driverId === undefined ? DRIVER_ID : extra.driverId,
+    reportId: extra.reportId === undefined ? REPORT_ID : extra.reportId,
+    driverName: extra.driverName === undefined ? 'Pat' : extra.driverName,
+    eventName: extra.eventName === undefined ? 'Gala' : extra.eventName,
+  })
+}
+
+async function enqueueModeB(deps, extra = {}) {
+  return deps.controller.enqueueFiles({
+    files: extra.files || [makeFile('shot.jpg', 'image/jpeg')],
+    driverId: extra.driverId === undefined ? DRIVER_ID : extra.driverId,
+    provisionalId: extra.provisionalId === undefined ? PROVISIONAL_ID : extra.provisionalId,
+    driverName: extra.driverName === undefined ? 'Pat' : extra.driverName,
+    eventName: extra.eventName === undefined ? 'Gala' : extra.eventName,
+    crmsRef: extra.crmsRef === undefined ? 'CRMS-9' : extra.crmsRef,
+  })
+}
+
+afterEach(async () => {
+  while (liveControllers.length) {
+    const controller = liveControllers.pop()
+    await controller.dispose()
+  }
+})
+
+describe('useDriverReportPhotoUploadQueue', () => {
+  beforeEach(() => {
+    global.IS_REACT_ACT_ENVIRONMENT = true
+  })
+
+  test('actor remains driver_portal and driver.id', async () => {
+    const deps = createDeps()
+    await enqueueTab(deps)
+    expect(deps.putRecords[0].actor_scope_type).toBe(DRIVER_REPORT_ACTOR_SCOPE_TYPE)
+    expect(deps.putRecords[0].actor_scope_id).toBe(DRIVER_ID)
+    expect(deps.putRecords[0].actor_scope_id).not.toBe(REPORT_ID)
+  })
+
+  test('missing driver.id rejects before any DB write', async () => {
+    const deps = createDeps()
+    const result = await enqueueTab(deps, { driverId: null })
+    expect(result.rejected[0].code).toBe(DRIVER_REPORT_QUEUE_ERROR_CODES.DRIVER_ID_REQUIRED)
+    expect(deps.putRecords).toHaveLength(0)
+    expect(deps.startCalls).toHaveLength(0)
+  })
+
+  test('entity_type is report', async () => {
+    const deps = createDeps()
+    await enqueueTab(deps)
+    expect(deps.putRecords[0].entity_type).toBe(DRIVER_REPORT_ENTITY_TYPE)
+  })
+
+  test('source driver_report_tab is accepted', async () => {
+    const deps = createDeps({ sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_TAB })
+    const result = await enqueueTab(deps)
+    expect(result.accepted).toHaveLength(1)
+    expect(deps.putRecords[0].source_surface).toBe('driver_report_tab')
+  })
+
+  test('source driver_report_mode is accepted', async () => {
+    const deps = createDeps({ sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE })
+    const result = await enqueueModeB(deps)
+    expect(result.accepted).toHaveLength(1)
+    expect(deps.putRecords[0].source_surface).toBe('driver_report_mode')
+  })
+
+  test('unsupported source is rejected before DB write', async () => {
+    const deps = createDeps({ sourceSurface: 'driver_evidence' })
+    const result = await enqueueTab(deps)
+    expect(result.rejected[0].code).toBe(DRIVER_REPORT_QUEUE_ERROR_CODES.INVALID_SOURCE_SURFACE)
+    expect(deps.putRecords).toHaveLength(0)
+  })
+
+  test('JPEG PNG and WebP are accepted', async () => {
+    let n = 0
+    const deps = createDeps({ randomUUID: () => `qid-${(n += 1)}` })
+    const result = await enqueueTab(deps, {
+      files: [
+        makeFile('a.jpg', 'image/jpeg'),
+        makeFile('b.png', 'image/png'),
+        makeFile('c.webp', 'image/webp'),
+      ],
+    })
+    expect(result.accepted).toHaveLength(3)
+  })
+
+  test('HEIC HEIF and unknown MIME are rejected', async () => {
+    const deps = createDeps()
+    const result = await enqueueTab(deps, {
+      files: [
+        makeFile('a.heic', 'image/heic'),
+        makeFile('b.heif', 'image/heif'),
+        makeFile('c.bin', ''),
+      ],
+    })
+    expect(result.accepted).toHaveLength(0)
+    expect(result.rejected).toHaveLength(3)
+    expect(deps.putRecords).toHaveLength(0)
+  })
+
+  test('original filename is not path authority', async () => {
+    const deps = createDeps()
+    await enqueueTab(deps, { files: [makeFile('pretty photo.JPEG', 'image/jpeg')] })
+    expect(deps.putRecords[0].storage_path).toBe(`reports/${REPORT_ID}/qid-1.jpg`)
+    expect(deps.putRecords[0].storage_path).not.toContain('pretty')
+  })
+
+  test('access token is retrieved just in time and never persisted', async () => {
+    const deps = createDeps()
+    await enqueueTab(deps)
+    assertNoSecret(deps.putRecords[0])
+    assertNoSecret(deps.putRecords[0].metadata_payload)
+    const token = await deps.getAccessToken()()
+    expect(token).toBe(SENTINEL_TOKEN)
+  })
+
+  test('partial queue write failure preserves accepted records and has no legacy fallback', async () => {
+    let n = 0
+    const deps = createDeps({
+      randomUUID: () => `qid-${(n += 1)}`,
+      putRecord: async (record) => {
+        if (record.queue_id === 'qid-2') {
+          throw new Error('idb full')
+        }
+        deps.putRecords.push(record)
+        deps.recordsById.set(record.queue_id, record)
+      },
+    })
+    const result = await enqueueTab(deps, {
+      files: [
+        makeFile('a.jpg', 'image/jpeg'),
+        makeFile('b.png', 'image/png'),
+        makeFile('c.webp', 'image/webp'),
+      ],
+    })
+    expect(result.accepted.map((row) => row.queueId)).toEqual(['qid-1', 'qid-3'])
+    expect(result.rejected).toHaveLength(1)
+    expect(deps.supabaseClient.storage.from).not.toHaveBeenCalled()
+    expect(deps.supabaseClient.from).not.toHaveBeenCalled()
+  })
+
+  test('MODE_A putRecord happens before runtime wake', async () => {
+    const deps = createDeps()
+    await enqueueTab(deps)
+    expect(deps.events[0]).toBe('put')
+    expect(deps.events[1]).toBe('start')
+  })
+
+  test('DONE observer is read-only and emits exactly once per queue id', async () => {
+    const deps = createDeps()
+    await enqueueTab(deps)
+    expect(deps.remoteDone).toHaveLength(0)
+    deps.recordsById.get('qid-1').status = PHOTO_UPLOAD_STATUSES.QUEUED
+    await deps.controller.inspectPending()
+    expect(deps.remoteDone).toHaveLength(0)
+    deps.recordsById.get('qid-1').status = PHOTO_UPLOAD_STATUSES.DONE
+    await deps.controller.inspectPending()
+    expect(deps.remoteDone).toEqual([{
+      queue_id: 'qid-1',
+      entity_id: REPORT_ID,
+      status: PHOTO_UPLOAD_STATUSES.DONE,
+    }])
+    await deps.controller.inspectPending()
+    expect(deps.remoteDone).toHaveLength(1)
+  })
+
+  test('runtime stops and observer timers clear on dispose', async () => {
+    const deps = createDeps()
+    await enqueueTab(deps)
+    expect(deps.timers.scheduled.some((row) => row.ms === DRIVER_REPORT_DONE_OBSERVER_POLL_MS)).toBe(true)
+    await deps.controller.dispose()
+    expect(deps.stopCalls).toHaveLength(1)
+    expect(deps.closeCalls).toHaveLength(1)
+    expect(deps.timers.scheduled).toHaveLength(0)
+  })
+
+  test('MODE_B draft enqueue writes DRAFT_QUEUED with null entity and path and zero transport', async () => {
+    const deps = createDeps({ sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE })
+    const result = await enqueueModeB(deps)
+    expect(result.accepted[0].status).toBe(PHOTO_UPLOAD_STATUSES.DRAFT_QUEUED)
+    expect(deps.putRecords[0].status).toBe(PHOTO_UPLOAD_STATUSES.DRAFT_QUEUED)
+    expect(deps.putRecords[0].entity_id).toBeNull()
+    expect(deps.putRecords[0].storage_path).toBeNull()
+    expect(deps.putRecords[0].provisional_id).toBe(PROVISIONAL_ID)
+    expect(deps.putRecords[0].upload_attempt_count).toBe(0)
+    expect(deps.putRecords[0].db_attempt_count).toBe(0)
+    expect(deps.startCalls).toHaveLength(0)
+    expect(deps.transportUploads).toHaveLength(0)
+  })
+
+  test('MODE_B missing provisional id rejects before DB write', async () => {
+    const deps = createDeps({ sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE })
+    const result = await enqueueModeB(deps, { provisionalId: null })
+    expect(result.rejected[0].code).toBe(DRIVER_REPORT_QUEUE_ERROR_CODES.PROVISIONAL_ID_REQUIRED)
+    expect(deps.putRecords).toHaveLength(0)
+    expect(deps.startCalls).toHaveLength(0)
+  })
+
+  test('multiple draft photos share provisional id with distinct queue ids', async () => {
+    let n = 0
+    const deps = createDeps({
+      sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE,
+      randomUUID: () => `qid-${(n += 1)}`,
+    })
+    await enqueueModeB(deps, {
+      files: [
+        makeFile('a.jpg', 'image/jpeg'),
+        makeFile('b.png', 'image/png'),
+      ],
+    })
+    expect(deps.putRecords).toHaveLength(2)
+    expect(deps.putRecords[0].provisional_id).toBe(PROVISIONAL_ID)
+    expect(deps.putRecords[1].provisional_id).toBe(PROVISIONAL_ID)
+    expect(deps.putRecords[0].queue_id).toBe('qid-1')
+    expect(deps.putRecords[1].queue_id).toBe('qid-2')
+    expect(deps.putRecords[0].queue_id).not.toBe(PROVISIONAL_ID)
+  })
+
+  test('REPORT_ID_PROVEN links drafts to QUEUED exact path before runtime wake', async () => {
+    let n = 0
+    const deps = createDeps({
+      sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE,
+      randomUUID: () => `qid-${(n += 1)}`,
+    })
+    await enqueueModeB(deps, {
+      files: [makeFile('a.jpg', 'image/jpeg'), makeFile('b.png', 'image/png')],
+    })
+    const blobs = deps.putRecords.map((row) => row.blob)
+    const result = await deps.controller.proveReportId({
+      driverId: DRIVER_ID,
+      provisionalId: PROVISIONAL_ID,
+      reportId: REPORT_ID,
+    })
+    expect(result.linked).toHaveLength(2)
+    expect(deps.putRecords[2].status).toBe(PHOTO_UPLOAD_STATUSES.QUEUED)
+    expect(deps.putRecords[2].entity_id).toBe(REPORT_ID)
+    expect(deps.putRecords[2].storage_path).toBe(`reports/${REPORT_ID}/qid-1.jpg`)
+    expect(deps.putRecords[2].queue_id).toBe('qid-1')
+    expect(deps.putRecords[2].blob).toBe(blobs[0])
+    expect(buildDriverReportStoragePath({
+      reportId: REPORT_ID,
+      queueId: 'qid-2',
+      mimeType: 'image/png',
+    })).toBe(`reports/${REPORT_ID}/qid-2.png`)
+    const startIndex = deps.events.indexOf('start')
+    const lastPutIndex = deps.events.lastIndexOf('put')
+    expect(startIndex).toBeGreaterThan(lastPutIndex - 2)
+    expect(deps.events.filter((row) => row === 'put').length).toBeGreaterThan(0)
+    expect(deps.events.indexOf('start')).toBeGreaterThan(deps.events.indexOf('put'))
+    expect(deps.transportUploads).toHaveLength(0)
+  })
+
+  test('partial link failure preserves failed draft and linked QUEUED records', async () => {
+    let n = 0
+    const recordsById = new Map()
+    const putRecords = []
+    const deps = createDeps({
+      sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE,
+      randomUUID: () => `qid-${(n += 1)}`,
+      putRecord: async (record) => {
+        if (record.queue_id === 'qid-2' && record.status === PHOTO_UPLOAD_STATUSES.QUEUED) {
+          throw new Error('link fail')
+        }
+        putRecords.push(record)
+        recordsById.set(record.queue_id, record)
+      },
+      getRecord: async ({ queueId }) => recordsById.get(queueId) || null,
+      listRecordsForActor: async () => Array.from(recordsById.values()),
+    })
+    await enqueueModeB(deps, {
+      files: [
+        makeFile('a.jpg', 'image/jpeg'),
+        makeFile('b.png', 'image/png'),
+        makeFile('c.webp', 'image/webp'),
+      ],
+    })
+    const result = await deps.controller.proveReportId({
+      driverId: DRIVER_ID,
+      provisionalId: PROVISIONAL_ID,
+      reportId: REPORT_ID,
+    })
+    expect(result.linked.map((row) => row.queueId)).toEqual(['qid-1', 'qid-3'])
+    expect(result.failed).toHaveLength(1)
+    expect(recordsById.get('qid-2').status).toBe(PHOTO_UPLOAD_STATUSES.DRAFT_QUEUED)
+    expect(recordsById.get('qid-1').status).toBe(PHOTO_UPLOAD_STATUSES.QUEUED)
+    expect(deps.transportUploads).toHaveLength(0)
+  })
+
+  test('ambiguous result moves drafts to REPORT_LINK_UNKNOWN with zero transport', async () => {
+    const deps = createDeps({ sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE })
+    await enqueueModeB(deps)
+    const result = await deps.controller.markReportResultAmbiguous({
+      driverId: DRIVER_ID,
+      provisionalId: PROVISIONAL_ID,
+    })
+    expect(result.updated[0].status).toBe(PHOTO_UPLOAD_STATUSES.REPORT_LINK_UNKNOWN)
+    expect(deps.recordsById.get('qid-1').status).toBe(PHOTO_UPLOAD_STATUSES.REPORT_LINK_UNKNOWN)
+    expect(deps.recordsById.get('qid-1').entity_id).toBeNull()
+    expect(deps.recordsById.get('qid-1').storage_path).toBeNull()
+    expect(deps.startCalls).toHaveLength(0)
+    expect(deps.transportUploads).toHaveLength(0)
+  })
+
+  test('later proven id recovers REPORT_LINK_UNKNOWN to QUEUED', async () => {
+    const deps = createDeps({ sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE })
+    await enqueueModeB(deps)
+    await deps.controller.markReportResultAmbiguous({
+      driverId: DRIVER_ID,
+      provisionalId: PROVISIONAL_ID,
+    })
+    const result = await deps.controller.proveReportId({
+      driverId: DRIVER_ID,
+      provisionalId: PROVISIONAL_ID,
+      reportId: REPORT_ID,
+    })
+    expect(result.linked[0].status).toBe(PHOTO_UPLOAD_STATUSES.QUEUED)
+    expect(deps.recordsById.get('qid-1').entity_id).toBe(REPORT_ID)
+    expect(deps.recordsById.get('qid-1').storage_path).toBe(`reports/${REPORT_ID}/qid-1.jpg`)
+  })
+
+  test('controller never creates a business report', async () => {
+    const deps = createDeps({ sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE })
+    await enqueueModeB(deps)
+    await deps.controller.proveReportId({
+      driverId: DRIVER_ID,
+      provisionalId: PROVISIONAL_ID,
+      reportId: REPORT_ID,
+    })
+    expect(deps.supabaseClient.from).not.toHaveBeenCalled()
+  })
+
+  test('hook enqueueFiles uses driver.id and clears timers on unmount', async () => {
+    const timers = createFakeTimers()
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    const results = []
+    const enqueueFilesRef = { current: null }
+    function Probe() {
+      const api = useDriverReportPhotoUploadQueue({
+        sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_TAB,
+        driverId: DRIVER_ID,
+        reportId: REPORT_ID,
+        driverName: 'Pat',
+        eventName: 'Gala',
+        supabaseClient: createSessionClient(),
+        createDb: () => ({
+          putRecord: async (record) => { results.push(record) },
+          getRecord: async () => null,
+          listRecordsForActor: async () => [],
+          close: async () => {},
+        }),
+        createTransport: () => ({}),
+        createReconciler: () => ({}),
+        createStore: () => ({
+          start: jest.fn(),
+          stop: jest.fn(async () => {}),
+        }),
+        now: () => FIXED_NOW,
+        randomUUID: () => 'qid-hook',
+        createLeaseOwner: () => 'lease-hook',
+        setTimeoutImpl: timers.setTimeoutImpl,
+        clearTimeoutImpl: timers.clearTimeoutImpl,
+      })
+      enqueueFilesRef.current = api.enqueueFiles
+      return null
+    }
+    await act(async () => {
+      root.render(<Probe />)
+    })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => {
+      await enqueueFilesRef.current([makeFile('a.jpg', 'image/jpeg')])
+    })
+    expect(results[0].actor_scope_id).toBe(DRIVER_ID)
+    expect(results[0].entity_id).toBe(REPORT_ID)
+    expect(results[0].entity_id).not.toBe(DRIVER_ID)
+    await act(async () => {
+      root.unmount()
+    })
+    await act(async () => { await Promise.resolve() })
+    expect(timers.scheduled).toHaveLength(0)
+  })
+})

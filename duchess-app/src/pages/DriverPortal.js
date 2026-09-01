@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useDriverPhotoUploadQueue } from '../hooks/useDriverPhotoUploadQueue'
+import { DRIVER_REPORT_SOURCE_SURFACES, useDriverReportPhotoUploadQueue } from '../hooks/useDriverReportPhotoUploadQueue'
 
 const supabase = createClient(
   'https://ecosxamjvxveawaeluma.supabase.co',
@@ -81,9 +82,9 @@ export default function DriverPortal({ token }) {
   const [signature, setSignature]       = useState(null)
   const [savingReport, setSavingReport] = useState(false)
   const [reportToast, setReportToast]   = useState(null)
-  const [reportPhotoUploading, setReportPhotoUploading] = useState(false)
   const [submittedReportId, setSubmittedReportId]     = useState(null)
-  /** Each entry: { url, path } after upload to evidence-photos bucket */
+  const [reportProvisionalId, setReportProvisionalId] = useState(null)
+  /** Each entry: { queueId, previewUrl } after durable local draft acceptance */
   const [uploadedPhotos, setUploadedPhotos]            = useState([])
   const [deletedItems, setDeletedItems] = useState({})
   const [sigCanvas, setSigCanvas]       = useState(null)
@@ -198,6 +199,20 @@ export default function DriverPortal({ token }) {
     window.open(`https://maps.google.com/?q=${query}`, '_blank')
   }
 
+  const {
+    enqueueFiles: enqueueReportModeFiles,
+    proveReportId,
+    markReportResultAmbiguous,
+    busy: reportModeBusy,
+  } = useDriverReportPhotoUploadQueue({
+    sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE,
+    driverId: driver?.id || null,
+    provisionalId: reportProvisionalId,
+    crmsRef: reportJob?.crms_ref || '',
+    eventName: reportJob?.event_name || reportJob?.title || '',
+    driverName: driver?.name || null,
+  })
+
   function showReportToast(msg, type = 'success') {
     setReportToast({ msg, type })
     setTimeout(() => setReportToast(null), 3000)
@@ -234,6 +249,11 @@ export default function DriverPortal({ token }) {
     setReportJob(job)
     setReportRunType(runType)
     setSubmittedReportId(null)
+    setReportProvisionalId(
+      (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+        ? crypto.randomUUID()
+        : `prov-${Math.random().toString(16).slice(2)}`,
+    )
     setUploadedPhotos([])
     setDriverNotes('')
     setClientName('')
@@ -332,19 +352,14 @@ export default function DriverPortal({ token }) {
 
       if (error) throw error
 
-      if (uploadedPhotos.length > 0) {
-        await supabase.from('evidence_photos').insert(
-          uploadedPhotos.map(p => ({
-            order_id:         report.id,
-            run_type:         'after_col',
-            photo_url:        p.url,
-            file_path:        p.path,
-            uploaded_by_name: driver?.name || 'Driver',
-            event_name:       reportJob?.event_name || '',
-            crms_ref:         reportJob?.crms_ref || '',
-          }))
-        )
+      if (!report?.id) {
+        await markReportResultAmbiguous()
+        showReportToast('Error: report id could not be confirmed', 'error')
+        setSavingReport(false)
+        return
       }
+
+      await proveReportId(report.id)
 
       setSubmittedReportId(report.id)
       showReportToast('Report submitted successfully')
@@ -430,32 +445,32 @@ export default function DriverPortal({ token }) {
             {uploadedPhotos.length > 0 && (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', marginBottom: '10px' }}>
                 {uploadedPhotos.map((photo, i) => (
-                  <img key={i} src={photo.url} alt="COL"
+                  <img key={i} src={photo.previewUrl} alt="COL"
                     style={{ width: '100%', height: '90px', objectFit: 'cover', borderRadius: '6px', border: '1px solid #DDD8CF' }} />
                 ))}
               </div>
             )}
             <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '12px', background: '#F7F3EE', border: '1.5px dashed #DDD8CF', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', color: '#6B6860' }}>
-              <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
+              <input type="file" accept="image/*" capture="environment" data-testid="driver-report-mode-photo-input" style={{ display: 'none' }}
                 onChange={async e => {
                   const file = e.target.files[0]
                   if (!file) return
-                  setReportPhotoUploading(true)
-                  try {
-                    const ext = file.name.split('.').pop()
-                    const path = `reports/temp_${Date.now()}.${ext}`
-                    const { error } = await supabase.storage.from('evidence-photos').upload(path, file)
-                    if (error) throw error
-                    const { data: { publicUrl } } = supabase.storage.from('evidence-photos').getPublicUrl(path)
-                    setUploadedPhotos(p => [...p, { url: publicUrl, path }])
-                    showReportToast('Photo added')
-                  } catch (err) {
-                    showReportToast('Upload failed: ' + err.message, 'error')
+                  const result = await enqueueReportModeFiles([file])
+                  if (result.accepted.length > 0) {
+                    setUploadedPhotos(p => [...p, {
+                      queueId: result.accepted[0].queueId,
+                      previewUrl: (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function')
+                        ? URL.createObjectURL(file)
+                        : '',
+                    }])
+                    showReportToast('Photos queued for upload.')
                   }
-                  setReportPhotoUploading(false)
+                  if (result.rejected.length > 0 && result.accepted.length === 0) {
+                    showReportToast('Photos could not be queued for upload.', 'error')
+                  }
                   e.target.value = ''
                 }} />
-              {reportPhotoUploading ? 'Uploading…' : '📷 Add collection photo'}
+              {reportModeBusy ? 'Queuing…' : '📷 Add collection photo'}
             </label>
           </div>
 
@@ -923,7 +938,7 @@ function RunCard({ run, token, onOpen, onReport, onDone }) {
   )
 }
 
-function DriverReportTab({ job, driver, supabase }) {
+export function DriverReportTab({ job, driver, supabase }) {
   const [report, setReport]         = useState(null)
   const [loading, setLoading]       = useState(true)
   const [creating, setCreating]     = useState(false)
@@ -934,9 +949,31 @@ function DriverReportTab({ job, driver, supabase }) {
   const [sigCanvas, setSigCanvas]   = useState(null)
   const [isDrawing, setIsDrawing]   = useState(false)
   const [photos, setPhotos]         = useState([])
-  const [uploading, setUploading]   = useState(false)
   const [saving, setSaving]         = useState(false)
   const [toast, setToast]           = useState(null)
+  const reportIdRef = useRef(null)
+  reportIdRef.current = report?.id || null
+
+  async function fetchPhotos(reportId) {
+    const { data: p } = await supabase.from('evidence_photos').select('*').eq('order_id', reportId)
+    if (p) setPhotos(p)
+  }
+
+  async function handleRemoteDone(record) {
+    if (record && record.entity_id === reportIdRef.current) {
+      await fetchPhotos(reportIdRef.current)
+      showToast('Photo uploaded')
+    }
+  }
+
+  const { enqueueFiles, busy: reportTabBusy } = useDriverReportPhotoUploadQueue({
+    sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_TAB,
+    driverId: driver?.id || null,
+    reportId: report?.id || null,
+    eventName: job?.event_name || '',
+    driverName: driver?.name || null,
+    onRemoteDone: handleRemoteDone,
+  })
 
   useEffect(() => { fetchReport() }, [job?.id])
 
@@ -1004,25 +1041,15 @@ function DriverReportTab({ job, driver, supabase }) {
     setSignature(null)
   }
 
-  async function uploadPhoto(file, reportId) {
-    setUploading(true)
-    try {
-      const ext = file.name.split('.').pop()
-      const path = `reports/${reportId}/${Date.now()}.${ext}`
-      const { error } = await supabase.storage.from('evidence-photos').upload(path, file)
-      if (error) throw error
-      const { data: { publicUrl } } = supabase.storage.from('evidence-photos').getPublicUrl(path)
-      await supabase.from('evidence_photos').insert({
-        order_id: reportId, run_type: 'after_col',
-        photo_url: publicUrl, file_path: path,
-        uploaded_by_name: driver?.name || 'Driver',
-        event_name: job?.event_name || '',
-      })
-      const { data: p } = await supabase.from('evidence_photos').select('*').eq('order_id', reportId)
-      if (p) setPhotos(p)
-      showToast('Photo uploaded')
-    } catch (e) { showToast('Upload failed', 'error') }
-    setUploading(false)
+  async function uploadPhoto(file) {
+    if (!report || !file) return
+    const result = await enqueueFiles([file])
+    if (result.accepted.length > 0) {
+      showToast('Photos queued for upload.')
+    }
+    if (result.rejected.length > 0 && result.accepted.length === 0) {
+      showToast('Photos could not be queued for upload.', 'error')
+    }
   }
 
   async function submitReport() {
@@ -1101,9 +1128,9 @@ function DriverReportTab({ job, driver, supabase }) {
         </div>
       )}
       <label style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px', background: '#F7F3EE', border: '1px dashed #DDD8CF', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', color: '#6B6860' }}>
-        <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
-          onChange={e => e.target.files[0] && uploadPhoto(e.target.files[0], report.id)} />
-        {uploading ? 'Uploading…' : '+ Add photo'}
+        <input type="file" accept="image/*" capture="environment" data-testid="driver-report-tab-photo-input" style={{ display: 'none' }}
+          onChange={e => e.target.files[0] && uploadPhoto(e.target.files[0])} />
+        {reportTabBusy ? 'Queuing…' : '+ Add photo'}
       </label>
       {toast && <div style={{ marginTop: '10px', background: '#1C1C1E', color: '#fff', padding: '10px 14px', borderRadius: '6px', fontSize: '12px', textAlign: 'center' }}>{toast.msg}</div>}
     </div>

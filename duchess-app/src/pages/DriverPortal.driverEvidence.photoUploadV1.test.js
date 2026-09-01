@@ -242,48 +242,41 @@ describe('DriverPortal driver evidence photo upload v1', () => {
     act(() => { root.unmount() })
   })
 
-  test('reportMode temp uploader remains legacy direct upload', async () => {
-    mockUpload.mockResolvedValue({ error: null })
+  test('reportMode is a distinct P10-owned surface isolated from Driver Evidence', async () => {
     const { container, root } = await renderPortal()
     const reportBtn = Array.from(container.querySelectorAll('button')).find((el) => el.textContent.trim() === '+ DEL Report')
     expect(reportBtn).toBeTruthy()
     await act(async () => { reportBtn.click() })
     await act(async () => { await Promise.resolve() })
     expect(container.textContent).toContain('Add collection photo')
-    const inputs = container.querySelectorAll('input[type="file"]')
-    const reportInput = Array.from(inputs).find((el) => !el.getAttribute('data-testid'))
+    const reportInput = container.querySelector('[data-testid="driver-report-mode-photo-input"]')
     expect(reportInput).toBeTruthy()
-    Object.defineProperty(reportInput, 'files', {
-      value: [new File([Uint8Array.from([1])], 'col.jpg', { type: 'image/jpeg' })],
-    })
-    await act(async () => {
-      reportInput.dispatchEvent(new Event('change', { bubbles: true }))
-    })
-    expect(mockUpload).toHaveBeenCalled()
-    expect(mockEnqueueFiles).not.toHaveBeenCalled()
+    expect(reportInput.getAttribute('data-testid')).toBe('driver-report-mode-photo-input')
+    expect(reportInput.getAttribute('data-testid')).not.toBe('driver-evidence-camera-input')
+    expect(reportInput.getAttribute('data-testid')).not.toBe('driver-evidence-gallery-input')
+    expect(container.querySelector('[data-testid="driver-evidence-camera-input"]')).toBeNull()
+    expect(container.querySelector('[data-testid="driver-evidence-gallery-input"]')).toBeNull()
     act(() => { root.unmount() })
   })
 
-  test('DriverReportTab uploader remains legacy and is not invoked by evidence integration', async () => {
+  test('DriverReportTab is a distinct P10-owned surface isolated from Driver Evidence', async () => {
     const { container, root } = await renderPortal()
     await openEvidenceTab(container)
-    expect(container.querySelector('[data-testid="driver-evidence-gallery-input"]')).toBeTruthy()
+    const evidenceGallery = container.querySelector('[data-testid="driver-evidence-gallery-input"]')
+    const evidenceCamera = container.querySelector('[data-testid="driver-evidence-camera-input"]')
+    expect(evidenceGallery).toBeTruthy()
+    expect(evidenceCamera).toBeTruthy()
     const reportTab = Array.from(container.querySelectorAll('button')).find((el) => el.textContent === 'Report')
     await act(async () => { reportTab.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     await act(async () => { await Promise.resolve() })
     expect(container.textContent).toContain('Report Submitted')
-    const addPhoto = container.querySelector('label input[type="file"]')
+    const addPhoto = container.querySelector('[data-testid="driver-report-tab-photo-input"]')
     expect(addPhoto).toBeTruthy()
-    expect(addPhoto.getAttribute('data-testid')).toBeNull()
-    mockUpload.mockResolvedValue({ error: null })
-    Object.defineProperty(addPhoto, 'files', {
-      value: [new File([Uint8Array.from([1])], 'rep.jpg', { type: 'image/jpeg' })],
-    })
-    await act(async () => {
-      addPhoto.dispatchEvent(new Event('change', { bubbles: true }))
-    })
-    expect(mockUpload).toHaveBeenCalled()
-    expect(mockInsert).toHaveBeenCalled()
+    expect(addPhoto.getAttribute('data-testid')).toBe('driver-report-tab-photo-input')
+    expect(addPhoto).not.toBe(evidenceGallery)
+    expect(addPhoto).not.toBe(evidenceCamera)
+    expect(addPhoto.getAttribute('data-testid')).not.toBe('driver-evidence-gallery-input')
+    expect(addPhoto.getAttribute('data-testid')).not.toBe('driver-evidence-camera-input')
     act(() => { root.unmount() })
   })
 })
