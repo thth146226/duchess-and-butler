@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
+import { OFFICE_REPORT_SOURCE_SURFACES, useOfficeReportPhotoUploadQueue } from '../hooks/useOfficeReportPhotoUploadQueue'
 
 const STATUS_STYLE = {
   draft:     { bg: '#FEF3C7', color: '#854F0B' },
@@ -18,8 +19,8 @@ export default function Reports() {
   const [loading, setLoading]       = useState(true)
   const [selected, setSelected]     = useState(null)
   const [reportItems, setReportItems] = useState([])
-  const [uploadingPhoto, setUploadingPhoto] = useState(false)
   const [reportPhotos, setReportPhotos]     = useState([])
+  const reportIdRef = useRef(null)
   const [sending, setSending]       = useState(false)
   const [toast, setToast]           = useState(null)
   const [emailForm, setEmailForm]   = useState({ to: '', subject: '', message: '' })
@@ -75,34 +76,37 @@ export default function Reports() {
     fetchReportPhotos(report.id)
   }
 
-  async function uploadReportPhoto(file, reportId) {
-    if (!file) return
-    setUploadingPhoto(true)
-    try {
-      const ext = file.name.split('.').pop()
-      const path = `reports/${reportId}/${Date.now()}.${ext}`
-      const { error: uploadError } = await supabase.storage
-        .from('evidence-photos')
-        .upload(path, file)
-      if (uploadError) throw uploadError
-      const { data: { publicUrl } } = supabase.storage
-        .from('evidence-photos')
-        .getPublicUrl(path)
-      await supabase.from('evidence_photos').insert({
-        order_id:         reportId,
-        run_type:         'after_col',
-        photo_url:        publicUrl,
-        file_path:        path,
-        uploaded_by_name: profile?.name || 'Admin',
-        event_name:       selected?.event_name || '',
-        crms_ref:         selected?.crms_ref || '',
-      })
-      fetchReportPhotos(reportId)
+  reportIdRef.current = selected?.id || null
+
+  async function handleRemoteDone(record) {
+    if (record && record.entity_id === reportIdRef.current) {
+      await fetchReportPhotos(reportIdRef.current)
       showToast('Photo uploaded')
-    } catch (e) {
-      showToast('Upload failed: ' + e.message, 'error')
     }
-    setUploadingPhoto(false)
+  }
+
+  const { enqueueFiles, busy } = useOfficeReportPhotoUploadQueue({
+    sourceSurface: OFFICE_REPORT_SOURCE_SURFACES.OFFICE_REPORTS,
+    reportId: selected?.id || null,
+    crmsRef: selected?.crms_ref || '',
+    eventName: selected?.event_name || '',
+    profile,
+    onRemoteDone: handleRemoteDone,
+  })
+
+  async function uploadReportPhoto(files) {
+    const list = Array.from(files || [])
+    if (!list.length || !selected?.id) return
+    const result = await enqueueFiles(list)
+    if (result.accepted.length > 0) {
+      showToast('Photos queued for upload.')
+    }
+    if (result.rejected.length > 0 && result.accepted.length > 0) {
+      showToast('Some photos could not be queued. Already queued photos were kept.', 'error')
+    }
+    if (result.accepted.length === 0 && result.rejected.length > 0) {
+      showToast('Photos could not be queued for upload.', 'error')
+    }
   }
 
   async function deleteReport(reportId) {
@@ -415,6 +419,7 @@ export default function Reports() {
           const isSelected = selected?.id === r.id
           return (
             <div key={r.id}
+              data-testid={`office-reports-row-${r.id}`}
               onClick={() => openReport(r)}
               style={{ background: '#fff', border: `1px solid ${isSelected ? '#1C1C1E' : '#DDD8CF'}`, borderRadius: '8px', padding: '14px 16px', marginBottom: '8px', cursor: 'pointer', transition: 'border 0.15s' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
@@ -559,9 +564,9 @@ export default function Reports() {
                 ))}
               </div>
               <label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 14px', background: '#F7F3EE', border: '1px dashed #DDD8CF', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', color: '#6B6860' }}>
-                <input type="file" accept="image/*" multiple style={{ display: 'none' }}
-                  onChange={e => { Array.from(e.target.files).forEach(f => uploadReportPhoto(f, selected.id)); e.target.value = '' }} />
-                {uploadingPhoto ? 'Uploading…' : '+ Add collection photos'}
+                <input type="file" accept="image/*" multiple data-testid="office-reports-photo-input" style={{ display: 'none' }}
+                  onChange={e => { uploadReportPhoto(e.target.files); e.target.value = '' }} />
+                {busy ? 'Queuing…' : '+ Add collection photos'}
               </label>
             </div>
 

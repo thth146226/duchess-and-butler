@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import JobNotes from '../components/JobNotes'
 import EvidenceUpload from '../components/EvidenceUpload'
+import { OFFICE_REPORT_SOURCE_SURFACES, useOfficeReportPhotoUploadQueue } from '../hooks/useOfficeReportPhotoUploadQueue'
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
 const today    = new Date().toLocaleDateString('en-CA')
@@ -2620,14 +2621,13 @@ function MiniRunCard({ run, onClick, compact = false, draggable = false, onDragS
   )
 }
 
-function ReportTab({ job, runType, profile, supabase, showToast }) {
+export function ReportTab({ job, runType, profile, supabase, showToast }) {
   const [report, setReport] = useState(null)
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [items, setItems] = useState([])
   const [saving, setSaving] = useState(false)
   const [photos, setPhotos] = useState([])
-  const [uploading, setUploading] = useState(false)
   const [sigCanvas, setSigCanvas]   = useState(null)
   const [isDrawing, setIsDrawing]   = useState(false)
   const [newSignature, setNewSignature] = useState(null)
@@ -2664,6 +2664,25 @@ function ReportTab({ job, runType, profile, supabase, showToast }) {
       .eq('run_type', 'after_col')
     if (data) setPhotos(data)
   }
+
+  const reportIdRef = useRef(null)
+  reportIdRef.current = report?.id || null
+
+  async function handleRemoteDone(record) {
+    if (record && record.entity_id === reportIdRef.current) {
+      await fetchPhotos(reportIdRef.current)
+      showToast('Photo uploaded')
+    }
+  }
+
+  const { enqueueFiles, busy } = useOfficeReportPhotoUploadQueue({
+    sourceSurface: OFFICE_REPORT_SOURCE_SURFACES.OFFICE_SCHEDULE_REPORT,
+    reportId: report?.id || null,
+    crmsRef: job?.crms_ref || '',
+    eventName: job?.event_name || '',
+    profile,
+    onRemoteDone: handleRemoteDone,
+  })
 
   async function loadItems() {
     const { data } = await supabase
@@ -2773,28 +2792,17 @@ function ReportTab({ job, runType, profile, supabase, showToast }) {
   }
 
   async function uploadPhoto(file) {
-    if (!report) return
-    setUploading(true)
-    try {
-      const ext = file.name.split('.').pop()
-      const path = `reports/${report.id}/${Date.now()}.${ext}`
-      await supabase.storage.from('evidence-photos').upload(path, file)
-      const { data: { publicUrl } } = supabase.storage.from('evidence-photos').getPublicUrl(path)
-      await supabase.from('evidence_photos').insert({
-        order_id: report.id,
-        run_type: 'after_col',
-        photo_url: publicUrl,
-        file_path: path,
-        uploaded_by_name: profile?.name || 'Admin',
-        event_name: job.event_name || '',
-        crms_ref: job.crms_ref || '',
-      })
-      fetchPhotos(report.id)
-      showToast('Photo uploaded')
-    } catch (e) {
-      showToast('Upload failed', 'error')
+    if (!report || !file) return
+    const result = await enqueueFiles([file])
+    if (result.accepted.length > 0) {
+      showToast('Photos queued for upload.')
     }
-    setUploading(false)
+    if (result.rejected.length > 0 && result.accepted.length > 0) {
+      showToast('Some photos could not be queued. Already queued photos were kept.', 'error')
+    }
+    if (result.accepted.length === 0 && result.rejected.length > 0) {
+      showToast('Photos could not be queued for upload.', 'error')
+    }
   }
 
   if (loading) return <div style={{ padding: '24px', color: '#6B6860', fontSize: '13px' }}>Loading report…</div>
@@ -2853,9 +2861,9 @@ function ReportTab({ job, runType, profile, supabase, showToast }) {
           ))}
         </div>
         <label style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 12px', background: '#F7F3EE', border: '1px dashed #DDD8CF', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', color: '#6B6860' }}>
-          <input type="file" accept="image/*" style={{ display: 'none' }}
+          <input type="file" accept="image/*" data-testid="office-schedule-report-photo-input" style={{ display: 'none' }}
             onChange={e => e.target.files[0] && uploadPhoto(e.target.files[0])} />
-          {uploading ? 'Uploading…' : '+ Add photo'}
+          {busy ? 'Queuing…' : '+ Add photo'}
         </label>
       </div>
     </div>
