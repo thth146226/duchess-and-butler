@@ -1440,4 +1440,412 @@ describe('photoUploadStore', () => {
     expect(resumeBody).not.toMatch(/inspectRemoteObject/)
     expect(resumeBody).not.toMatch(/evidence_photos/)
   })
+
+  test('BA FAILED_UPLOAD count 5 → manualUploadRetry → QUEUED with count 0 and preserved fields', async () => {
+    const pumps = []
+    const transport = createFakeTransport()
+    const { db, store } = createRuntime({
+      transport,
+      managerFactory: () => ({
+        pump: async () => { pumps.push('pump') },
+        stop: async () => {},
+      }),
+    })
+    const blob = jpegBlob()
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.FAILED_UPLOAD,
+      upload_attempt_count: 5,
+      db_attempt_count: 2,
+      last_error: { code: 'MAX_UPLOAD_ATTEMPTS_REACHED', message: 'MAX_UPLOAD_ATTEMPTS_REACHED' },
+      last_http_status: 500,
+      next_retry_at: FIXED_NOW + 1000,
+      retry_phase: PHOTO_UPLOAD_RETRY_PHASES.UPLOAD,
+      failure_stage: PHOTO_UPLOAD_RETRY_PHASES.UPLOAD,
+      tus_upload_url: TUS_URL,
+      tus_created_at: FIXED_NOW - 10,
+      remote_public_url: null,
+      blob,
+    }))
+    const result = await store.manualUploadRetry({ queueId: 'queue-office-a-1' })
+    expect(result).toEqual({ ok: true, status: PHOTO_UPLOAD_STATUSES.QUEUED })
+    expect(pumps).toEqual(['pump'])
+    const stored = await getRow(db)
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.QUEUED)
+    expect(stored.upload_attempt_count).toBe(0)
+    expect(stored.db_attempt_count).toBe(2)
+    expect(stored.last_error).toBeNull()
+    expect(stored.last_http_status).toBeNull()
+    expect(stored.next_retry_at).toBeNull()
+    expect(stored.retry_phase).toBeNull()
+    expect(stored.failure_stage).toBeNull()
+    expect(stored.tus_upload_url).toBe(TUS_URL)
+    expect(stored.tus_created_at).toBe(FIXED_NOW - 10)
+    expect(stored.storage_path).toBe('job-1/delivery_queue-office-a-1.jpg')
+    expect(stored.blob).toBeInstanceOf(Blob)
+    expect(stored.blob.size).toBe(blob.size)
+    expect(stored.blob.type).toBe(blob.type)
+    expect(stored.remote_public_url).toBeNull()
+    expect(transport.startCalls).toHaveLength(0)
+  })
+
+  test.each([
+    ['QUEUED', PHOTO_UPLOAD_STATUSES.QUEUED],
+    ['UPLOADING', PHOTO_UPLOAD_STATUSES.UPLOADING],
+    ['UPLOAD_PAUSED', PHOTO_UPLOAD_STATUSES.UPLOAD_PAUSED],
+    ['STORAGE_COMPLETE', PHOTO_UPLOAD_STATUSES.STORAGE_COMPLETE],
+    ['FAILED_DB', PHOTO_UPLOAD_STATUSES.FAILED_DB],
+    ['DONE', PHOTO_UPLOAD_STATUSES.DONE],
+  ])('BB manualUploadRetry on %s performs zero mutation and no pump', async (_label, status) => {
+    const pumps = []
+    const transport = createFakeTransport()
+    const { db, store } = createRuntime({
+      transport,
+      managerFactory: () => ({
+        pump: async () => { pumps.push('pump') },
+        stop: async () => {},
+      }),
+    })
+    await db.putRecord(makeRecord({
+      status,
+      upload_attempt_count: 3,
+    }))
+    const result = await store.manualUploadRetry({ queueId: 'queue-office-a-1' })
+    expect(result.ok).toBe(false)
+    expect(pumps).toEqual([])
+    const stored = await getRow(db)
+    expect(stored.status).toBe(status)
+    expect(stored.upload_attempt_count).toBe(3)
+    expect(transport.startCalls).toHaveLength(0)
+  })
+
+  test('BC manualUploadRetry missing queueId performs zero mutation', async () => {
+    const pumps = []
+    const transport = createFakeTransport()
+    const { db, store } = createRuntime({
+      transport,
+      managerFactory: () => ({
+        pump: async () => { pumps.push('pump') },
+        stop: async () => {},
+      }),
+    })
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.FAILED_UPLOAD,
+      upload_attempt_count: 5,
+    }))
+    const result = await store.manualUploadRetry({ queueId: '' })
+    expect(result).toEqual({
+      ok: false,
+      code: PHOTO_UPLOAD_RUNTIME_ERROR_CODES.INVALID_QUEUE_ID,
+    })
+    expect(pumps).toEqual([])
+    const stored = await getRow(db)
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.FAILED_UPLOAD)
+    expect(stored.upload_attempt_count).toBe(5)
+    expect(transport.startCalls).toHaveLength(0)
+  })
+
+  test('BD manualUploadRetry missing row performs zero mutation', async () => {
+    const pumps = []
+    const transport = createFakeTransport()
+    const { db, store } = createRuntime({
+      transport,
+      managerFactory: () => ({
+        pump: async () => { pumps.push('pump') },
+        stop: async () => {},
+      }),
+    })
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.FAILED_UPLOAD,
+      upload_attempt_count: 5,
+    }))
+    const result = await store.manualUploadRetry({ queueId: 'missing-queue' })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe(PHOTO_UPLOAD_RUNTIME_ERROR_CODES.LEASE_UNAVAILABLE)
+    expect(pumps).toEqual([])
+    const stored = await getRow(db)
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.FAILED_UPLOAD)
+    expect(stored.upload_attempt_count).toBe(5)
+    expect(transport.startCalls).toHaveLength(0)
+  })
+
+  test('BE manualUploadRetry wrong actor performs zero mutation', async () => {
+    const pumps = []
+    const transport = createFakeTransport()
+    const { db, store } = createRuntime({
+      transport,
+      actorScopeId: 'office-b',
+      managerFactory: () => ({
+        pump: async () => { pumps.push('pump') },
+        stop: async () => {},
+      }),
+    })
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.FAILED_UPLOAD,
+      upload_attempt_count: 5,
+    }))
+    const result = await store.manualUploadRetry({ queueId: 'queue-office-a-1' })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe(PHOTO_UPLOAD_RUNTIME_ERROR_CODES.LEASE_UNAVAILABLE)
+    expect(pumps).toEqual([])
+    const stored = await getRow(db)
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.FAILED_UPLOAD)
+    expect(stored.upload_attempt_count).toBe(5)
+    expect(transport.startCalls).toHaveLength(0)
+  })
+
+  test('BF manualUploadRetry fence loss does not overwrite newer state', async () => {
+    const pumps = []
+    const transport = createFakeTransport()
+    const { db, store, clock } = createRuntime({
+      transport,
+      managerFactory: () => ({
+        pump: async () => { pumps.push('pump') },
+        stop: async () => {},
+      }),
+    })
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.FAILED_UPLOAD,
+      upload_attempt_count: 5,
+    }))
+    const dbB = handles.db(createPhotoUploadDb({ dbName }))
+    await dbB.claimLease({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+      leaseOwner: 'thief',
+      now: clock.now(),
+      leaseTtlMs: LEASE_TTL_MS,
+    })
+    await dbB.putRecordFenced({
+      record: {
+        ...makeRecord({
+          status: PHOTO_UPLOAD_STATUSES.FAILED_UPLOAD,
+          upload_attempt_count: 5,
+        }),
+        status: PHOTO_UPLOAD_STATUSES.DONE,
+        upload_attempt_count: 5,
+      },
+      leaseOwner: 'thief',
+      leaseGeneration: 1,
+    })
+    const result = await store.manualUploadRetry({ queueId: 'queue-office-a-1' })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe(PHOTO_UPLOAD_RUNTIME_ERROR_CODES.LEASE_UNAVAILABLE)
+    expect(pumps).toEqual([])
+    const stored = await getRow(dbB)
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.DONE)
+    expect(stored.upload_attempt_count).toBe(5)
+    expect(transport.startCalls).toHaveLength(0)
+  })
+
+  test('BG manualDbRetry FAILED_DB count 5 → DB_PENDING with db count 0 and upload count preserved', async () => {
+    const pumps = []
+    const transport = createFakeTransport()
+    const { db, store } = createRuntime({
+      transport,
+      managerFactory: () => ({
+        pump: async () => { pumps.push('pump') },
+        stop: async () => {},
+      }),
+    })
+    const blob = jpegBlob()
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.FAILED_DB,
+      upload_attempt_count: 3,
+      db_attempt_count: 5,
+      last_error: { code: 'DB_PERMANENT', message: 'DB_PERMANENT' },
+      last_http_status: 500,
+      next_retry_at: FIXED_NOW + 1000,
+      retry_phase: PHOTO_UPLOAD_RETRY_PHASES.DB,
+      failure_stage: PHOTO_UPLOAD_RETRY_PHASES.DB,
+      remote_public_url: PUBLIC_URL,
+      storage_path: 'job-1/delivery_queue-office-a-1.jpg',
+      tus_upload_url: TUS_URL,
+      tus_created_at: FIXED_NOW - 10,
+      blob,
+    }))
+    const result = await store.manualDbRetry({ queueId: 'queue-office-a-1' })
+    expect(result).toEqual({ ok: true, status: PHOTO_UPLOAD_STATUSES.DB_PENDING })
+    expect(pumps).toEqual(['pump'])
+    const stored = await getRow(db)
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.DB_PENDING)
+    expect(stored.db_attempt_count).toBe(0)
+    expect(stored.upload_attempt_count).toBe(3)
+    expect(stored.last_error).toBeNull()
+    expect(stored.last_http_status).toBeNull()
+    expect(stored.next_retry_at).toBeNull()
+    expect(stored.retry_phase).toBeNull()
+    expect(stored.failure_stage).toBeNull()
+    expect(stored.remote_public_url).toBe(PUBLIC_URL)
+    expect(stored.storage_path).toBe('job-1/delivery_queue-office-a-1.jpg')
+    expect(stored.tus_upload_url).toBe(TUS_URL)
+    expect(stored.tus_created_at).toBe(FIXED_NOW - 10)
+    expect(stored.blob).toBeInstanceOf(Blob)
+    expect(stored.blob.size).toBe(blob.size)
+    expect(stored.blob.type).toBe(blob.type)
+    expect(transport.startCalls).toHaveLength(0)
+  })
+
+  test.each([
+    ['FAILED_UPLOAD', PHOTO_UPLOAD_STATUSES.FAILED_UPLOAD],
+    ['QUEUED', PHOTO_UPLOAD_STATUSES.QUEUED],
+    ['STORAGE_COMPLETE', PHOTO_UPLOAD_STATUSES.STORAGE_COMPLETE],
+    ['DB_PENDING', PHOTO_UPLOAD_STATUSES.DB_PENDING],
+    ['DONE', PHOTO_UPLOAD_STATUSES.DONE],
+  ])('BH manualDbRetry on %s performs zero mutation and no pump', async (_label, status) => {
+    const pumps = []
+    const transport = createFakeTransport()
+    const { db, store } = createRuntime({
+      transport,
+      managerFactory: () => ({
+        pump: async () => { pumps.push('pump') },
+        stop: async () => {},
+      }),
+    })
+    await db.putRecord(makeRecord({
+      status,
+      db_attempt_count: 3,
+    }))
+    const result = await store.manualDbRetry({ queueId: 'queue-office-a-1' })
+    expect(result.ok).toBe(false)
+    expect(pumps).toEqual([])
+    const stored = await getRow(db)
+    expect(stored.status).toBe(status)
+    expect(stored.db_attempt_count).toBe(3)
+    expect(transport.startCalls).toHaveLength(0)
+  })
+
+  test('BI manualDbRetry missing queueId performs zero mutation', async () => {
+    const pumps = []
+    const transport = createFakeTransport()
+    const { db, store } = createRuntime({
+      transport,
+      managerFactory: () => ({
+        pump: async () => { pumps.push('pump') },
+        stop: async () => {},
+      }),
+    })
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.FAILED_DB,
+      db_attempt_count: 5,
+    }))
+    const result = await store.manualDbRetry({ queueId: null })
+    expect(result).toEqual({
+      ok: false,
+      code: PHOTO_UPLOAD_RUNTIME_ERROR_CODES.INVALID_QUEUE_ID,
+    })
+    expect(pumps).toEqual([])
+    const stored = await getRow(db)
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.FAILED_DB)
+    expect(stored.db_attempt_count).toBe(5)
+    expect(transport.startCalls).toHaveLength(0)
+  })
+
+  test('BJ manualDbRetry missing row performs zero mutation', async () => {
+    const pumps = []
+    const transport = createFakeTransport()
+    const { db, store } = createRuntime({
+      transport,
+      managerFactory: () => ({
+        pump: async () => { pumps.push('pump') },
+        stop: async () => {},
+      }),
+    })
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.FAILED_DB,
+      db_attempt_count: 5,
+    }))
+    const result = await store.manualDbRetry({ queueId: 'missing-queue' })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe(PHOTO_UPLOAD_RUNTIME_ERROR_CODES.LEASE_UNAVAILABLE)
+    expect(pumps).toEqual([])
+    const stored = await getRow(db)
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.FAILED_DB)
+    expect(stored.db_attempt_count).toBe(5)
+    expect(transport.startCalls).toHaveLength(0)
+  })
+
+  test('BK manualDbRetry wrong actor performs zero mutation', async () => {
+    const pumps = []
+    const transport = createFakeTransport()
+    const { db, store } = createRuntime({
+      transport,
+      actorScopeId: 'office-b',
+      managerFactory: () => ({
+        pump: async () => { pumps.push('pump') },
+        stop: async () => {},
+      }),
+    })
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.FAILED_DB,
+      db_attempt_count: 5,
+    }))
+    const result = await store.manualDbRetry({ queueId: 'queue-office-a-1' })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe(PHOTO_UPLOAD_RUNTIME_ERROR_CODES.LEASE_UNAVAILABLE)
+    expect(pumps).toEqual([])
+    const stored = await getRow(db)
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.FAILED_DB)
+    expect(stored.db_attempt_count).toBe(5)
+    expect(transport.startCalls).toHaveLength(0)
+  })
+
+  test('BL manualDbRetry fence loss does not overwrite newer state', async () => {
+    const pumps = []
+    const transport = createFakeTransport()
+    const { db, store, clock } = createRuntime({
+      transport,
+      managerFactory: () => ({
+        pump: async () => { pumps.push('pump') },
+        stop: async () => {},
+      }),
+    })
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.FAILED_DB,
+      db_attempt_count: 5,
+    }))
+    const dbB = handles.db(createPhotoUploadDb({ dbName }))
+    await dbB.claimLease({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+      leaseOwner: 'thief',
+      now: clock.now(),
+      leaseTtlMs: LEASE_TTL_MS,
+    })
+    await dbB.putRecordFenced({
+      record: {
+        ...makeRecord({
+          status: PHOTO_UPLOAD_STATUSES.FAILED_DB,
+          db_attempt_count: 5,
+        }),
+        status: PHOTO_UPLOAD_STATUSES.DONE,
+        db_attempt_count: 5,
+      },
+      leaseOwner: 'thief',
+      leaseGeneration: 1,
+    })
+    const result = await store.manualDbRetry({ queueId: 'queue-office-a-1' })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe(PHOTO_UPLOAD_RUNTIME_ERROR_CODES.LEASE_UNAVAILABLE)
+    expect(pumps).toEqual([])
+    const stored = await getRow(dbB)
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.DONE)
+    expect(stored.db_attempt_count).toBe(5)
+    expect(transport.startCalls).toHaveLength(0)
+  })
+
+  test('BM manual retry source uses MANUAL_UPLOAD_RETRY and MANUAL_DB_RETRY and never transports directly', () => {
+    const source = fs.readFileSync(path.join(__dirname, 'photoUploadStore.js'), 'utf8')
+    const manualFn = source.slice(source.indexOf('async function manualUploadRetry'))
+    const manualBody = manualFn.slice(0, manualFn.indexOf('return { ok: true, status: PHOTO_UPLOAD_STATUSES.QUEUED }') + 60)
+    expect(manualBody).toMatch(/MANUAL_UPLOAD_RETRY/)
+    expect(manualBody).not.toMatch(/transport\.startUpload/)
+    expect(manualBody).not.toMatch(/new tus\.Upload/)
+    const dbFn = source.slice(source.indexOf('async function manualDbRetry'))
+    const dbBody = dbFn.slice(0, dbFn.indexOf('return { ok: true, status: PHOTO_UPLOAD_STATUSES.DB_PENDING }') + 65)
+    expect(dbBody).toMatch(/MANUAL_DB_RETRY/)
+    expect(dbBody).not.toMatch(/transport\.startUpload/)
+    expect(dbBody).not.toMatch(/new tus\.Upload/)
+  })
 })

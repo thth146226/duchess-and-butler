@@ -32,6 +32,9 @@ export const PHOTO_UPLOAD_RUNTIME_ERROR_CODES = Object.freeze({
   OFFLINE: 'OFFLINE',
   ACCESS_TOKEN_UNAVAILABLE: 'ACCESS_TOKEN_UNAVAILABLE',
   DONE_BLOB_CLEANUP_FAILED: 'DONE_BLOB_CLEANUP_FAILED',
+  INVALID_QUEUE_ID: 'INVALID_QUEUE_ID',
+  WRONG_STATUS: 'WRONG_STATUS',
+  LEASE_UNAVAILABLE: 'LEASE_UNAVAILABLE',
 })
 
 const TRANSPORT_CODES = Object.freeze({
@@ -874,6 +877,148 @@ function createPhotoUploadStore(options = {}) {
     }
   }
 
+  async function ensureManagerForPump() {
+    if (manager) {
+      return
+    }
+    manager = managerFactory({
+      db,
+      actorScopeType,
+      actorScopeId,
+      leaseOwner,
+      executeClaimedRecord,
+      now,
+      setTimeoutImpl,
+      clearTimeoutImpl,
+    })
+    started = true
+  }
+
+  async function claimManualRetry(queueId) {
+    if (!isNonEmptyString(queueId)) {
+      return {
+        ok: false,
+        code: PHOTO_UPLOAD_RUNTIME_ERROR_CODES.INVALID_QUEUE_ID,
+      }
+    }
+    let claimed
+    try {
+      claimed = await db.claimLease({
+        queueId,
+        actorScopeType,
+        actorScopeId,
+        leaseOwner,
+        now: now(),
+        leaseTtlMs: LEASE_TTL_MS,
+      })
+    } catch (error) {
+      return {
+        ok: false,
+        code: PHOTO_UPLOAD_RUNTIME_ERROR_CODES.LEASE_UNAVAILABLE,
+      }
+    }
+    return { ok: true, claimed }
+  }
+
+  async function persistManualRetry(claimed, generation, event, sourceStatus, mutator) {
+    if (claimed.status !== sourceStatus) {
+      await safeReleaseResumeLease(claimed.queue_id, generation)
+      return {
+        ok: false,
+        code: PHOTO_UPLOAD_RUNTIME_ERROR_CODES.WRONG_STATUS,
+      }
+    }
+    const decision = transitionPhotoUpload(claimed.status, event)
+    const next = {
+      ...claimed,
+      ...mutator(claimed),
+      status: decision.status,
+      updated_at: now(),
+    }
+    try {
+      await db.putRecordFenced({
+        record: next,
+        leaseOwner,
+        leaseGeneration: generation,
+      })
+    } catch (error) {
+      if (isFenceConflict(error)) {
+        return {
+          ok: false,
+          code: PHOTO_UPLOAD_RUNTIME_ERROR_CODES.LEASE_UNAVAILABLE,
+        }
+      }
+      await safeReleaseResumeLease(claimed.queue_id, generation)
+      throw error
+    }
+    await safeReleaseResumeLease(claimed.queue_id, generation)
+    return { ok: true, status: next.status }
+  }
+
+  async function manualUploadRetry({ queueId } = {}) {
+    if (stopped) {
+      return { ok: false, code: PHOTO_UPLOAD_RUNTIME_ERROR_CODES.LEASE_UNAVAILABLE }
+    }
+    const claim = await claimManualRetry(queueId)
+    if (!claim.ok) {
+      return claim
+    }
+    const claimed = claim.claimed
+    const generation = claimed.lease_generation
+    const result = await persistManualRetry(
+      claimed,
+      generation,
+      PHOTO_UPLOAD_EVENTS.MANUAL_UPLOAD_RETRY,
+      PHOTO_UPLOAD_STATUSES.FAILED_UPLOAD,
+      (record) => ({
+        upload_attempt_count: 0,
+        last_error: null,
+        last_http_status: null,
+        next_retry_at: null,
+        retry_phase: null,
+        failure_stage: null,
+      })
+    )
+    if (!result.ok) {
+      return result
+    }
+    await ensureManagerForPump()
+    await manager.pump()
+    return { ok: true, status: PHOTO_UPLOAD_STATUSES.QUEUED }
+  }
+
+  async function manualDbRetry({ queueId } = {}) {
+    if (stopped) {
+      return { ok: false, code: PHOTO_UPLOAD_RUNTIME_ERROR_CODES.LEASE_UNAVAILABLE }
+    }
+    const claim = await claimManualRetry(queueId)
+    if (!claim.ok) {
+      return claim
+    }
+    const claimed = claim.claimed
+    const generation = claimed.lease_generation
+    const result = await persistManualRetry(
+      claimed,
+      generation,
+      PHOTO_UPLOAD_EVENTS.MANUAL_DB_RETRY,
+      PHOTO_UPLOAD_STATUSES.FAILED_DB,
+      (record) => ({
+        db_attempt_count: 0,
+        last_error: null,
+        last_http_status: null,
+        next_retry_at: null,
+        retry_phase: null,
+        failure_stage: null,
+      })
+    )
+    if (!result.ok) {
+      return result
+    }
+    await ensureManagerForPump()
+    await manager.pump()
+    return { ok: true, status: PHOTO_UPLOAD_STATUSES.DB_PENDING }
+  }
+
   async function resumePausedUploads() {
     if (stopped) {
       return { resumed: 0 }
@@ -972,6 +1117,8 @@ function createPhotoUploadStore(options = {}) {
     start,
     stop,
     resumePausedUploads,
+    manualUploadRetry,
+    manualDbRetry,
     getRuntimeStatus: runtimeStatus,
   }
 }

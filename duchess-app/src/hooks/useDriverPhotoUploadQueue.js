@@ -19,6 +19,7 @@ export const DRIVER_EVIDENCE_MIME_EXTENSIONS = Object.freeze({
 export const DRIVER_EVIDENCE_QUEUE_ERROR_CODES = Object.freeze({
   DRIVER_ID_REQUIRED: 'DRIVER_ID_REQUIRED',
   JOB_ID_REQUIRED: 'JOB_ID_REQUIRED',
+  QUEUE_ID_REQUIRED: 'QUEUE_ID_REQUIRED',
   UNSUPPORTED_MIME: 'UNSUPPORTED_MIME',
   QUEUE_WRITE_FAILED: 'QUEUE_WRITE_FAILED',
   RUNTIME_UNAVAILABLE: 'RUNTIME_UNAVAILABLE',
@@ -577,11 +578,57 @@ export function createDriverPhotoUploadQueueController(options = {}) {
     db = null
   }
 
+  async function manualUploadRetry({ queueId } = {}) {
+    if (!isNonEmptyString(actorScopeId)) {
+      return {
+        ok: false,
+        code: DRIVER_EVIDENCE_QUEUE_ERROR_CODES.DRIVER_ID_REQUIRED,
+      }
+    }
+    if (!isNonEmptyString(queueId)) {
+      return {
+        ok: false,
+        code: DRIVER_EVIDENCE_QUEUE_ERROR_CODES.QUEUE_ID_REQUIRED,
+      }
+    }
+    if (!store || typeof store.manualUploadRetry !== 'function') {
+      return {
+        ok: false,
+        code: DRIVER_EVIDENCE_QUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE,
+      }
+    }
+    return store.manualUploadRetry({ queueId })
+  }
+
+  async function manualDbRetry({ queueId } = {}) {
+    if (!isNonEmptyString(actorScopeId)) {
+      return {
+        ok: false,
+        code: DRIVER_EVIDENCE_QUEUE_ERROR_CODES.DRIVER_ID_REQUIRED,
+      }
+    }
+    if (!isNonEmptyString(queueId)) {
+      return {
+        ok: false,
+        code: DRIVER_EVIDENCE_QUEUE_ERROR_CODES.QUEUE_ID_REQUIRED,
+      }
+    }
+    if (!store || typeof store.manualDbRetry !== 'function') {
+      return {
+        ok: false,
+        code: DRIVER_EVIDENCE_QUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE,
+      }
+    }
+    return store.manualDbRetry({ queueId })
+  }
+
   return {
     boot,
     enqueueFiles,
     dispose,
     inspectPending,
+    manualUploadRetry,
+    manualDbRetry,
     getAccessToken,
     getLeaseOwner: () => leaseOwner,
     getActorScopeId: () => actorScopeId,
@@ -693,8 +740,32 @@ export function useDriverPhotoUploadQueue({
     }
   }, [driverId, jobId, jobTable, crmsRef, eventName, runType, driverName])
 
+  const manualUploadRetry = useCallback(async (queueId) => {
+    const controller = controllerRef.current
+    if (!controller) {
+      return {
+        ok: false,
+        code: DRIVER_EVIDENCE_QUEUE_ERROR_CODES.DRIVER_ID_REQUIRED,
+      }
+    }
+    return controller.manualUploadRetry({ queueId })
+  }, [])
+
+  const manualDbRetry = useCallback(async (queueId) => {
+    const controller = controllerRef.current
+    if (!controller) {
+      return {
+        ok: false,
+        code: DRIVER_EVIDENCE_QUEUE_ERROR_CODES.DRIVER_ID_REQUIRED,
+      }
+    }
+    return controller.manualDbRetry({ queueId })
+  }, [])
+
   return {
     enqueueFiles,
+    manualUploadRetry,
+    manualDbRetry,
     busy,
     lastResult,
   }

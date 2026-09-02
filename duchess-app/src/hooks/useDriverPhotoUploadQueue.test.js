@@ -134,6 +134,8 @@ function createDeps(overrides = {}) {
       events.push('stop')
     }),
     resumePausedUploads: jest.fn(async () => ({ resumed: 0 })),
+    manualUploadRetry: jest.fn(async () => ({ ok: true, status: PHOTO_UPLOAD_STATUSES.QUEUED })),
+    manualDbRetry: jest.fn(async () => ({ ok: true, status: PHOTO_UPLOAD_STATUSES.DB_PENDING })),
   }
   let capturedGetAccessToken = null
   let capturedStoreActor = null
@@ -840,5 +842,98 @@ describe('useDriverPhotoUploadQueue P11A environmental wake', () => {
     assertNoSecret(storeApi, BEARER_SENTINEL)
     assertNoSecret(storeApi, PORTAL_TOKEN_SENTINEL)
     assertNoSecret(controller.getActorScopeId(), BEARER_SENTINEL)
+  })
+})
+
+describe('useDriverPhotoUploadQueue P11B manual retry', () => {
+  afterEach(async () => {
+    while (liveControllers.length) {
+      const controller = liveControllers.pop()
+      await controller.dispose()
+    }
+  })
+
+  test('controller exposes manualUploadRetry and manualDbRetry', async () => {
+    const { controller } = createDeps()
+    await controller.boot({ driverId: DRIVER_ID })
+    expect(typeof controller.manualUploadRetry).toBe('function')
+    expect(typeof controller.manualDbRetry).toBe('function')
+  })
+
+  test('manualUploadRetry delegates queueId to store scoped to driver.id', async () => {
+    const { controller, storeApi } = createDeps()
+    await controller.boot({ driverId: DRIVER_ID })
+    const result = await controller.manualUploadRetry({ queueId: 'dq-1' })
+    expect(storeApi.manualUploadRetry).toHaveBeenCalledWith({ queueId: 'dq-1' })
+    expect(result).toEqual({ ok: true, status: PHOTO_UPLOAD_STATUSES.QUEUED })
+  })
+
+  test('manualDbRetry delegates queueId to store scoped to driver.id', async () => {
+    const { controller, storeApi } = createDeps()
+    await controller.boot({ driverId: DRIVER_ID })
+    const result = await controller.manualDbRetry({ queueId: 'dq-1' })
+    expect(storeApi.manualDbRetry).toHaveBeenCalledWith({ queueId: 'dq-1' })
+    expect(result).toEqual({ ok: true, status: PHOTO_UPLOAD_STATUSES.DB_PENDING })
+  })
+
+  test('missing driver.id returns DRIVER_ID_REQUIRED before store call', async () => {
+    const { controller, storeApi } = createDeps()
+    await controller.boot({ driverId: null })
+    const upload = await controller.manualUploadRetry({ queueId: 'dq-1' })
+    const db = await controller.manualDbRetry({ queueId: 'dq-1' })
+    expect(upload.code).toBe(DRIVER_EVIDENCE_QUEUE_ERROR_CODES.DRIVER_ID_REQUIRED)
+    expect(db.code).toBe(DRIVER_EVIDENCE_QUEUE_ERROR_CODES.DRIVER_ID_REQUIRED)
+    expect(storeApi.manualUploadRetry).not.toHaveBeenCalled()
+    expect(storeApi.manualDbRetry).not.toHaveBeenCalled()
+  })
+
+  test('missing queueId returns error before store call', async () => {
+    const { controller, storeApi } = createDeps()
+    await controller.boot({ driverId: DRIVER_ID })
+    const upload = await controller.manualUploadRetry({ queueId: null })
+    const db = await controller.manualDbRetry({ queueId: '' })
+    expect(upload.code).toBe(DRIVER_EVIDENCE_QUEUE_ERROR_CODES.QUEUE_ID_REQUIRED)
+    expect(db.code).toBe(DRIVER_EVIDENCE_QUEUE_ERROR_CODES.QUEUE_ID_REQUIRED)
+    expect(storeApi.manualUploadRetry).not.toHaveBeenCalled()
+    expect(storeApi.manualDbRetry).not.toHaveBeenCalled()
+  })
+
+  test('hook exposes manualUploadRetry and manualDbRetry', async () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    const apiRef = { current: null }
+    function Probe() {
+      apiRef.current = useDriverPhotoUploadQueue({
+        driverId: DRIVER_ID,
+        jobId: JOB_ID,
+        runType: 'after_del',
+        supabaseClient: createSessionClient(),
+        createDb: () => ({
+          putRecord: async () => {},
+          getRecord: async () => null,
+          listRecordsForActor: async () => [],
+          close: async () => {},
+        }),
+        createTransport: () => ({ startUpload: jest.fn() }),
+        createReconciler: () => ({}),
+        createStore: () => ({
+          start: jest.fn(),
+          stop: jest.fn(async () => {}),
+          manualUploadRetry: jest.fn(async () => ({ ok: true })),
+          manualDbRetry: jest.fn(async () => ({ ok: true })),
+        }),
+        now: () => FIXED_NOW,
+        randomUUID: () => 'qid-hook',
+        createLeaseOwner: () => 'lease-hook',
+      })
+      return null
+    }
+    await act(async () => { root.render(<Probe />) })
+    await act(async () => { await Promise.resolve() })
+    expect(typeof apiRef.current.manualUploadRetry).toBe('function')
+    expect(typeof apiRef.current.manualDbRetry).toBe('function')
+    await act(async () => { root.unmount() })
+    container.remove()
   })
 })

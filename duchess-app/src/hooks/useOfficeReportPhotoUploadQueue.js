@@ -24,6 +24,7 @@ export const OFFICE_REPORT_MIME_EXTENSIONS = Object.freeze({
 export const OFFICE_REPORT_QUEUE_ERROR_CODES = Object.freeze({
   AUTH_REQUIRED: 'AUTH_REQUIRED',
   REPORT_ID_REQUIRED: 'REPORT_ID_REQUIRED',
+  QUEUE_ID_REQUIRED: 'QUEUE_ID_REQUIRED',
   INVALID_SOURCE_SURFACE: 'INVALID_SOURCE_SURFACE',
   UNSUPPORTED_MIME: 'UNSUPPORTED_MIME',
   QUEUE_WRITE_FAILED: 'QUEUE_WRITE_FAILED',
@@ -589,11 +590,57 @@ export function createOfficeReportPhotoUploadQueueController(options = {}) {
     db = null
   }
 
+  async function manualUploadRetry({ queueId } = {}) {
+    if (!isNonEmptyString(actorScopeId)) {
+      return {
+        ok: false,
+        code: OFFICE_REPORT_QUEUE_ERROR_CODES.AUTH_REQUIRED,
+      }
+    }
+    if (!isNonEmptyString(queueId)) {
+      return {
+        ok: false,
+        code: OFFICE_REPORT_QUEUE_ERROR_CODES.QUEUE_ID_REQUIRED,
+      }
+    }
+    if (!store || typeof store.manualUploadRetry !== 'function') {
+      return {
+        ok: false,
+        code: OFFICE_REPORT_QUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE,
+      }
+    }
+    return store.manualUploadRetry({ queueId })
+  }
+
+  async function manualDbRetry({ queueId } = {}) {
+    if (!isNonEmptyString(actorScopeId)) {
+      return {
+        ok: false,
+        code: OFFICE_REPORT_QUEUE_ERROR_CODES.AUTH_REQUIRED,
+      }
+    }
+    if (!isNonEmptyString(queueId)) {
+      return {
+        ok: false,
+        code: OFFICE_REPORT_QUEUE_ERROR_CODES.QUEUE_ID_REQUIRED,
+      }
+    }
+    if (!store || typeof store.manualDbRetry !== 'function') {
+      return {
+        ok: false,
+        code: OFFICE_REPORT_QUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE,
+      }
+    }
+    return store.manualDbRetry({ queueId })
+  }
+
   return {
     boot,
     enqueueFiles,
     dispose,
     inspectPending,
+    manualUploadRetry,
+    manualDbRetry,
     getAccessToken,
     getLeaseOwner: () => leaseOwner,
     getActorScopeId: () => actorScopeId,
@@ -695,8 +742,32 @@ export function useOfficeReportPhotoUploadQueue({
     }
   }, [reportId, crmsRef, eventName, profile])
 
+  const manualUploadRetry = useCallback(async (queueId) => {
+    const controller = controllerRef.current
+    if (!controller) {
+      return {
+        ok: false,
+        code: OFFICE_REPORT_QUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE,
+      }
+    }
+    return controller.manualUploadRetry({ queueId })
+  }, [])
+
+  const manualDbRetry = useCallback(async (queueId) => {
+    const controller = controllerRef.current
+    if (!controller) {
+      return {
+        ok: false,
+        code: OFFICE_REPORT_QUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE,
+      }
+    }
+    return controller.manualDbRetry({ queueId })
+  }, [])
+
   return {
     enqueueFiles,
+    manualUploadRetry,
+    manualDbRetry,
     busy,
     lastResult,
   }

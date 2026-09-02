@@ -127,6 +127,8 @@ function createDeps(overrides = {}) {
       stopCalls.push(true)
     }),
     resumePausedUploads: jest.fn(async () => ({ resumed: 0 })),
+    manualUploadRetry: jest.fn(async () => ({ ok: true, status: PHOTO_UPLOAD_STATUSES.QUEUED })),
+    manualDbRetry: jest.fn(async () => ({ ok: true, status: PHOTO_UPLOAD_STATUSES.DB_PENDING })),
   }
   let capturedGetAccessToken = null
   const db = {
@@ -596,5 +598,100 @@ describe('useOfficeReportPhotoUploadQueue', () => {
     })
     await act(async () => { await Promise.resolve() })
     expect(timers.scheduled).toHaveLength(0)
+  })
+})
+
+describe('useOfficeReportPhotoUploadQueue P11B manual retry', () => {
+  afterEach(async () => {
+    while (liveControllers.length) {
+      const controller = liveControllers.pop()
+      await controller.dispose()
+    }
+  })
+
+  test('controller exposes manualUploadRetry and manualDbRetry', async () => {
+    const deps = createDeps()
+    await deps.controller.boot()
+    expect(typeof deps.controller.manualUploadRetry).toBe('function')
+    expect(typeof deps.controller.manualDbRetry).toBe('function')
+  })
+
+  test('manualUploadRetry delegates queueId to store scoped to session.user.id', async () => {
+    const deps = createDeps()
+    await deps.controller.boot()
+    const result = await deps.controller.manualUploadRetry({ queueId: 'rq-1' })
+    expect(deps.storeApi.manualUploadRetry).toHaveBeenCalledWith({ queueId: 'rq-1' })
+    expect(result).toEqual({ ok: true, status: PHOTO_UPLOAD_STATUSES.QUEUED })
+  })
+
+  test('manualDbRetry delegates queueId to store scoped to session.user.id', async () => {
+    const deps = createDeps()
+    await deps.controller.boot()
+    const result = await deps.controller.manualDbRetry({ queueId: 'rq-1' })
+    expect(deps.storeApi.manualDbRetry).toHaveBeenCalledWith({ queueId: 'rq-1' })
+    expect(result).toEqual({ ok: true, status: PHOTO_UPLOAD_STATUSES.DB_PENDING })
+  })
+
+  test('missing session returns AUTH_REQUIRED before store call', async () => {
+    const deps = createDeps({ supabaseClient: createSessionClient({ userId: null }) })
+    await deps.controller.boot()
+    const upload = await deps.controller.manualUploadRetry({ queueId: 'rq-1' })
+    const db = await deps.controller.manualDbRetry({ queueId: 'rq-1' })
+    expect(upload.code).toBe(OFFICE_REPORT_QUEUE_ERROR_CODES.AUTH_REQUIRED)
+    expect(db.code).toBe(OFFICE_REPORT_QUEUE_ERROR_CODES.AUTH_REQUIRED)
+    expect(deps.storeApi.manualUploadRetry).not.toHaveBeenCalled()
+    expect(deps.storeApi.manualDbRetry).not.toHaveBeenCalled()
+  })
+
+  test('missing queueId returns error before store call', async () => {
+    const deps = createDeps()
+    await deps.controller.boot()
+    const upload = await deps.controller.manualUploadRetry({ queueId: '' })
+    const db = await deps.controller.manualDbRetry({ queueId: null })
+    expect(upload.code).toBe(OFFICE_REPORT_QUEUE_ERROR_CODES.QUEUE_ID_REQUIRED)
+    expect(db.code).toBe(OFFICE_REPORT_QUEUE_ERROR_CODES.QUEUE_ID_REQUIRED)
+    expect(deps.storeApi.manualUploadRetry).not.toHaveBeenCalled()
+    expect(deps.storeApi.manualDbRetry).not.toHaveBeenCalled()
+  })
+
+  test('hook exposes manualUploadRetry and manualDbRetry', async () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    const apiRef = { current: null }
+    function Probe() {
+      apiRef.current = useOfficeReportPhotoUploadQueue({
+        sourceSurface: OFFICE_REPORT_SOURCE_SURFACES.OFFICE_REPORTS,
+        reportId: REPORT_ID,
+        crmsRef: 'CRMS-9',
+        eventName: 'Gala',
+        profile: { id: DIFFERENT_PROFILE_UUID, name: 'Admin Ada' },
+        supabaseClient: createSessionClient(),
+        createDb: () => ({
+          putRecord: async () => {},
+          getRecord: async () => null,
+          listRecordsForActor: async () => [],
+          close: async () => {},
+        }),
+        createTransport: () => ({ startUpload: jest.fn() }),
+        createReconciler: () => ({}),
+        createStore: () => ({
+          start: jest.fn(),
+          stop: jest.fn(async () => {}),
+          manualUploadRetry: jest.fn(async () => ({ ok: true })),
+          manualDbRetry: jest.fn(async () => ({ ok: true })),
+        }),
+        now: () => FIXED_NOW,
+        randomUUID: () => 'qid-hook',
+        createLeaseOwner: () => 'lease-hook',
+      })
+      return null
+    }
+    await act(async () => { root.render(<Probe />) })
+    await act(async () => { await Promise.resolve() })
+    expect(typeof apiRef.current.manualUploadRetry).toBe('function')
+    expect(typeof apiRef.current.manualDbRetry).toBe('function')
+    await act(async () => { root.unmount() })
+    container.remove()
   })
 })

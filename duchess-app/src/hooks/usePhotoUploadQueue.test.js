@@ -129,6 +129,8 @@ function createDeps(overrides = {}) {
       stopCalls.push(true)
     }),
     resumePausedUploads: jest.fn(async () => ({ resumed: 0 })),
+    manualUploadRetry: jest.fn(async () => ({ ok: true, status: PHOTO_UPLOAD_STATUSES.QUEUED })),
+    manualDbRetry: jest.fn(async () => ({ ok: true, status: PHOTO_UPLOAD_STATUSES.DB_PENDING })),
   }
   let capturedGetAccessToken = null
   const db = {
@@ -955,5 +957,146 @@ describe('usePhotoUploadQueue P11A environmental wake', () => {
     await controller.boot()
     assertNoToken(storeApi)
     assertNoToken(controller.getActorScopeId())
+  })
+})
+
+describe('usePhotoUploadQueue P11B manual retry', () => {
+  afterEach(async () => {
+    while (liveControllers.length) {
+      const controller = liveControllers.pop()
+      await controller.dispose()
+    }
+  })
+
+  test('controller exposes manualUploadRetry and manualDbRetry', async () => {
+    const { controller } = createDeps()
+    await controller.boot()
+    expect(typeof controller.manualUploadRetry).toBe('function')
+    expect(typeof controller.manualDbRetry).toBe('function')
+  })
+
+  test('manualUploadRetry delegates queueId to store without caller actor', async () => {
+    const { controller, storeApi } = createDeps()
+    await controller.boot()
+    const result = await controller.manualUploadRetry({ queueId: 'q-1' })
+    expect(storeApi.manualUploadRetry).toHaveBeenCalledWith({ queueId: 'q-1' })
+    expect(storeApi.manualUploadRetry).toHaveBeenCalledTimes(1)
+    expect(result).toEqual({ ok: true, status: PHOTO_UPLOAD_STATUSES.QUEUED })
+  })
+
+  test('manualDbRetry delegates queueId to store without caller actor', async () => {
+    const { controller, storeApi } = createDeps()
+    await controller.boot()
+    const result = await controller.manualDbRetry({ queueId: 'q-1' })
+    expect(storeApi.manualDbRetry).toHaveBeenCalledWith({ queueId: 'q-1' })
+    expect(storeApi.manualDbRetry).toHaveBeenCalledTimes(1)
+    expect(result).toEqual({ ok: true, status: PHOTO_UPLOAD_STATUSES.DB_PENDING })
+  })
+
+  test('missing queueId returns error before store call', async () => {
+    const { controller, storeApi } = createDeps()
+    await controller.boot()
+    const upload = await controller.manualUploadRetry({ queueId: '' })
+    const db = await controller.manualDbRetry({ queueId: null })
+    expect(upload).toEqual({
+      ok: false,
+      code: OFFICE_EVIDENCE_QUEUE_ERROR_CODES.QUEUE_ID_REQUIRED,
+    })
+    expect(db).toEqual({
+      ok: false,
+      code: OFFICE_EVIDENCE_QUEUE_ERROR_CODES.QUEUE_ID_REQUIRED,
+    })
+    expect(storeApi.manualUploadRetry).not.toHaveBeenCalled()
+    expect(storeApi.manualDbRetry).not.toHaveBeenCalled()
+  })
+
+  test('unbooted controller returns AUTH_REQUIRED for manual retries', async () => {
+    const { controller, storeApi } = createDeps()
+    const upload = await controller.manualUploadRetry({ queueId: 'q-1' })
+    const db = await controller.manualDbRetry({ queueId: 'q-1' })
+    expect(upload.code).toBe(OFFICE_EVIDENCE_QUEUE_ERROR_CODES.AUTH_REQUIRED)
+    expect(db.code).toBe(OFFICE_EVIDENCE_QUEUE_ERROR_CODES.AUTH_REQUIRED)
+    expect(storeApi.manualUploadRetry).not.toHaveBeenCalled()
+    expect(storeApi.manualDbRetry).not.toHaveBeenCalled()
+  })
+
+  test('hook exposes manualUploadRetry and manualDbRetry', async () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    const apiRef = { current: null }
+    function Probe() {
+      apiRef.current = usePhotoUploadQueue({
+        jobId: JOB_ID,
+        runType: 'after_del',
+        supabaseClient: createSessionClient(),
+        createDb: () => ({
+          putRecord: async () => {},
+          getRecord: async () => null,
+          listRecordsForActor: async () => [],
+          close: async () => {},
+        }),
+        createTransport: () => ({ startUpload: jest.fn() }),
+        createReconciler: () => ({}),
+        createStore: () => ({
+          start: jest.fn(),
+          stop: jest.fn(async () => {}),
+          manualUploadRetry: jest.fn(async () => ({ ok: true })),
+          manualDbRetry: jest.fn(async () => ({ ok: true })),
+        }),
+        now: () => FIXED_NOW,
+        randomUUID: () => 'qid-hook',
+        createLeaseOwner: () => 'lease-hook',
+      })
+      return null
+    }
+    await act(async () => { root.render(<Probe />) })
+    await act(async () => { await Promise.resolve() })
+    expect(typeof apiRef.current.manualUploadRetry).toBe('function')
+    expect(typeof apiRef.current.manualDbRetry).toBe('function')
+    await act(async () => { root.unmount() })
+    container.remove()
+  })
+
+  test('hook manualUploadRetry delegates to controller with no caller actor', async () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    const manualUploadRetry = jest.fn(async () => ({ ok: true }))
+    const manualDbRetry = jest.fn(async () => ({ ok: true }))
+    const apiRef = { current: null }
+    function Probe() {
+      apiRef.current = usePhotoUploadQueue({
+        jobId: JOB_ID,
+        runType: 'after_del',
+        supabaseClient: createSessionClient(),
+        createDb: () => ({
+          putRecord: async () => {},
+          getRecord: async () => null,
+          listRecordsForActor: async () => [],
+          close: async () => {},
+        }),
+        createTransport: () => ({ startUpload: jest.fn() }),
+        createReconciler: () => ({}),
+        createStore: () => ({
+          start: jest.fn(),
+          stop: jest.fn(async () => {}),
+          manualUploadRetry,
+          manualDbRetry,
+        }),
+        now: () => FIXED_NOW,
+        randomUUID: () => 'qid-hook',
+        createLeaseOwner: () => 'lease-hook',
+      })
+      return null
+    }
+    await act(async () => { root.render(<Probe />) })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { await apiRef.current.manualUploadRetry('q-1') })
+    await act(async () => { await apiRef.current.manualDbRetry('q-2') })
+    expect(manualUploadRetry).toHaveBeenCalledWith({ queueId: 'q-1' })
+    expect(manualDbRetry).toHaveBeenCalledWith({ queueId: 'q-2' })
+    await act(async () => { root.unmount() })
+    container.remove()
   })
 })
