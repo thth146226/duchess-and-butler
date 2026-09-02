@@ -10,7 +10,7 @@ import {
   createDriverReportPhotoUploadQueueController,
   useDriverReportPhotoUploadQueue,
 } from './useDriverReportPhotoUploadQueue'
-import { PHOTO_UPLOAD_STATUSES } from '../lib/photoUploadDomain'
+import { PHOTO_UPLOAD_EVENTS, PHOTO_UPLOAD_STATUSES, transitionPhotoUpload } from '../lib/photoUploadDomain'
 
 const SENTINEL_TOKEN = 'p10-sentinel-token-SECRET-never-persist'
 const PORTAL_TOKEN = 'p10-portal-token-SECRET'
@@ -119,6 +119,8 @@ function createDeps(overrides = {}) {
     resumePausedUploads: jest.fn(async () => ({ resumed: 0 })),
   }
   let capturedGetAccessToken = null
+  const deleteCalls = []
+  const listCalls = []
   const db = {
     putRecord: overrides.putRecord || (async (record) => {
       events.push('put')
@@ -137,11 +139,21 @@ function createDeps(overrides = {}) {
       }
       return record
     }),
-    listRecordsForActor: overrides.listRecordsForActor || (async ({ actorScopeType, actorScopeId }) => (
-      Array.from(recordsById.values()).filter((record) => (
+    listRecordsForActor: overrides.listRecordsForActor || (async ({ actorScopeType, actorScopeId }) => {
+      listCalls.push({ actorScopeType, actorScopeId })
+      return Array.from(recordsById.values()).filter((record) => (
         record.actor_scope_type === actorScopeType && record.actor_scope_id === actorScopeId
       ))
-    )),
+    }),
+    deleteLocalRecord: overrides.deleteLocalRecord || (async ({ queueId, actorScopeType, actorScopeId }) => {
+      deleteCalls.push({ queueId, actorScopeType, actorScopeId })
+      const record = recordsById.get(queueId)
+      if (!record) return
+      if (record.actor_scope_type !== actorScopeType || record.actor_scope_id !== actorScopeId) {
+        throw new Error('actor conflict')
+      }
+      recordsById.delete(queueId)
+    }),
     close: jest.fn(async () => {
       events.push('close')
       closeCalls.push(true)
@@ -186,6 +198,9 @@ function createDeps(overrides = {}) {
     timers,
     supabaseClient,
     getAccessToken: () => capturedGetAccessToken,
+    db,
+    deleteCalls,
+    listCalls,
   }
 }
 
@@ -671,5 +686,348 @@ describe('useDriverReportPhotoUploadQueue', () => {
     })
     await act(async () => { await Promise.resolve() })
     expect(timers.scheduled).toHaveLength(0)
+  })
+
+  test('discardNeverUploadedDrafts is exposed on controller and hook', async () => {
+    const deps = createDeps({ sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE })
+    expect(typeof deps.controller.discardNeverUploadedDrafts).toBe('function')
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    const apiRef = { current: null }
+    function Probe() {
+      apiRef.current = useDriverReportPhotoUploadQueue({
+        sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE,
+        driverId: DRIVER_ID,
+        provisionalId: PROVISIONAL_ID,
+        supabaseClient: createSessionClient(),
+        createDb: () => ({
+          putRecord: async () => {},
+          getRecord: async () => null,
+          listRecordsForActor: async () => [],
+          deleteLocalRecord: async () => {},
+          close: async () => {},
+        }),
+        createTransport: () => ({}),
+        createReconciler: () => ({}),
+        createStore: () => ({ start: jest.fn(), stop: jest.fn(async () => {}) }),
+        now: () => FIXED_NOW,
+        randomUUID: () => 'qid-hook-discard',
+        createLeaseOwner: () => 'lease-hook-discard',
+      })
+      return null
+    }
+    await act(async () => { root.render(<Probe />) })
+    await act(async () => { await Promise.resolve() })
+    expect(typeof apiRef.current.discardNeverUploadedDrafts).toBe('function')
+    await act(async () => { root.unmount() })
+  })
+
+  test('discard missing driver.id lists and deletes zero records', async () => {
+    const deps = createDeps({ sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE })
+    const result = await deps.controller.discardNeverUploadedDrafts({ provisionalId: PROVISIONAL_ID })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe(DRIVER_REPORT_QUEUE_ERROR_CODES.DRIVER_ID_REQUIRED)
+    expect(result.deleted).toEqual([])
+    expect(deps.listCalls).toHaveLength(0)
+    expect(deps.deleteCalls).toHaveLength(0)
+    expect(deps.transportUploads).toHaveLength(0)
+  })
+
+  test('discard missing driver.id on hook does not list or delete', async () => {
+    const listRecordsForActor = jest.fn(async () => [])
+    const deleteLocalRecord = jest.fn(async () => {})
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    const apiRef = { current: null }
+    function Probe() {
+      apiRef.current = useDriverReportPhotoUploadQueue({
+        sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE,
+        driverId: null,
+        provisionalId: PROVISIONAL_ID,
+        supabaseClient: createSessionClient(),
+        createDb: () => ({
+          putRecord: async () => {},
+          getRecord: async () => null,
+          listRecordsForActor,
+          deleteLocalRecord,
+          close: async () => {},
+        }),
+        createTransport: () => ({}),
+        createReconciler: () => ({}),
+        createStore: () => ({ start: jest.fn(), stop: jest.fn(async () => {}) }),
+      })
+      return null
+    }
+    await act(async () => { root.render(<Probe />) })
+    await act(async () => { await Promise.resolve() })
+    const result = await apiRef.current.discardNeverUploadedDrafts({ provisionalId: PROVISIONAL_ID })
+    expect(result.code).toBe(DRIVER_REPORT_QUEUE_ERROR_CODES.DRIVER_ID_REQUIRED)
+    expect(listRecordsForActor).not.toHaveBeenCalled()
+    expect(deleteLocalRecord).not.toHaveBeenCalled()
+    await act(async () => { root.unmount() })
+  })
+
+  test('discard invalid provisionalId deletes zero records', async () => {
+    const deps = createDeps({ sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE })
+    await enqueueModeB(deps)
+    const startDeletes = deps.deleteCalls.length
+    const missing = await deps.controller.discardNeverUploadedDrafts({ provisionalId: null })
+    const empty = await deps.controller.discardNeverUploadedDrafts({ provisionalId: '' })
+    expect(missing.ok).toBe(false)
+    expect(missing.code).toBe(DRIVER_REPORT_QUEUE_ERROR_CODES.PROVISIONAL_ID_REQUIRED)
+    expect(empty.code).toBe(DRIVER_REPORT_QUEUE_ERROR_CODES.PROVISIONAL_ID_REQUIRED)
+    expect(missing.deleted).toEqual([])
+    expect(deps.deleteCalls).toHaveLength(startDeletes)
+    expect(deps.transportUploads).toHaveLength(0)
+    expect(deps.recordsById.has('qid-1')).toBe(true)
+  })
+
+  test('discard lists only actor-scoped driver_portal records', async () => {
+    const deps = createDeps({ sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE })
+    await enqueueModeB(deps)
+    deps.recordsById.set('other-actor', {
+      ...deps.recordsById.get('qid-1'),
+      queue_id: 'other-actor',
+      actor_scope_id: 'driver-id-bbb',
+    })
+    const result = await deps.controller.discardNeverUploadedDrafts({ provisionalId: PROVISIONAL_ID })
+    expect(result.ok).toBe(true)
+    expect(result.deleted).toEqual(['qid-1'])
+    expect(deps.listCalls[0]).toEqual({
+      actorScopeType: DRIVER_REPORT_ACTOR_SCOPE_TYPE,
+      actorScopeId: DRIVER_ID,
+    })
+    expect(deps.deleteCalls[0]).toEqual({
+      queueId: 'qid-1',
+      actorScopeType: 'driver_portal',
+      actorScopeId: DRIVER_ID,
+    })
+    expect(deps.recordsById.has('other-actor')).toBe(true)
+    expect(deps.recordsById.has('qid-1')).toBe(false)
+  })
+
+  test('discard deletes only exact never-uploaded driver_report_mode drafts', async () => {
+    const deps = createDeps({ sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE })
+    await enqueueModeB(deps)
+    const result = await deps.controller.discardNeverUploadedDrafts({ provisionalId: PROVISIONAL_ID })
+    expect(result.ok).toBe(true)
+    expect(result.deleted).toEqual(['qid-1'])
+    expect(deps.recordsById.has('qid-1')).toBe(false)
+    expect(deps.startCalls).toHaveLength(0)
+    expect(deps.transportUploads).toHaveLength(0)
+    expect(deps.supabaseClient.from).not.toHaveBeenCalled()
+    expect(deps.supabaseClient.storage.from).not.toHaveBeenCalled()
+    expect(transitionPhotoUpload(
+      PHOTO_UPLOAD_STATUSES.DRAFT_QUEUED,
+      PHOTO_UPLOAD_EVENTS.DISCARD_REQUESTED,
+    )).toEqual({ kind: 'DELETE_LOCAL' })
+  })
+
+  test('discard deletes two safe drafts under the same provisional id', async () => {
+    let n = 0
+    const deps = createDeps({
+      sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE,
+      randomUUID: () => `qid-${(n += 1)}`,
+    })
+    await enqueueModeB(deps, {
+      files: [makeFile('a.jpg', 'image/jpeg'), makeFile('b.png', 'image/png')],
+    })
+    const result = await deps.controller.discardNeverUploadedDrafts({ provisionalId: PROVISIONAL_ID })
+    expect(result.ok).toBe(true)
+    expect(result.deleted).toEqual(['qid-1', 'qid-2'])
+    expect(deps.recordsById.size).toBe(0)
+    expect(deps.deleteCalls).toHaveLength(2)
+  })
+
+  test('discard leaves a different provisional id untouched', async () => {
+    let n = 0
+    const deps = createDeps({
+      sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE,
+      randomUUID: () => `qid-${(n += 1)}`,
+    })
+    await enqueueModeB(deps, { files: [makeFile('a.jpg', 'image/jpeg')] })
+    await enqueueModeB(deps, {
+      files: [makeFile('b.png', 'image/png')],
+      provisionalId: 'prov-other',
+    })
+    const result = await deps.controller.discardNeverUploadedDrafts({ provisionalId: PROVISIONAL_ID })
+    expect(result.deleted).toEqual(['qid-1'])
+    expect(deps.recordsById.has('qid-2')).toBe(true)
+    expect(deps.recordsById.get('qid-2').provisional_id).toBe('prov-other')
+  })
+
+  test('discard leaves another source surface untouched', async () => {
+    const deps = createDeps({ sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE })
+    await enqueueModeB(deps)
+    deps.recordsById.set('tab-1', {
+      ...deps.recordsById.get('qid-1'),
+      queue_id: 'tab-1',
+      source_surface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_TAB,
+    })
+    const result = await deps.controller.discardNeverUploadedDrafts({ provisionalId: PROVISIONAL_ID })
+    expect(result.ok).toBe(true)
+    expect(result.deleted).toEqual(['qid-1'])
+    expect(deps.recordsById.has('tab-1')).toBe(true)
+    expect(deps.deleteCalls.every((row) => row.queueId !== 'tab-1')).toBe(true)
+  })
+
+  test('zero same-provisional rows is a successful no-op', async () => {
+    const deps = createDeps({ sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE })
+    await deps.controller.boot({ driverId: DRIVER_ID })
+    const result = await deps.controller.discardNeverUploadedDrafts({ provisionalId: PROVISIONAL_ID })
+    expect(result.ok).toBe(true)
+    expect(result.deleted).toEqual([])
+    expect(deps.deleteCalls).toHaveLength(0)
+  })
+})
+
+describe('useDriverReportPhotoUploadQueue discard never-uploaded drafts', () => {
+  function expectNoRemoteMutation(deps) {
+    expect(deps.transportUploads).toHaveLength(0)
+    expect(deps.supabaseClient.from).not.toHaveBeenCalled()
+    expect(deps.supabaseClient.storage.from).not.toHaveBeenCalled()
+    expect(deps.startCalls).toHaveLength(0)
+  }
+
+  async function draftDeps(mutate) {
+    const deps = createDeps({ sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE })
+    await enqueueModeB(deps)
+    if (mutate) mutate(deps.recordsById.get('qid-1'))
+    return deps
+  }
+
+  const unsafeFieldCases = [
+    ['entity_id non-null', (record) => { record.entity_id = REPORT_ID }],
+    ['storage_path non-null', (record) => { record.storage_path = 'reports/x/qid-1.jpg' }],
+    ['upload_attempt_count > 0', (record) => { record.upload_attempt_count = 1 }],
+    ['tus_upload_url non-null', (record) => { record.tus_upload_url = 'https://tus.example/u' }],
+    ['remote_public_url non-null', (record) => { record.remote_public_url = 'https://cdn.example/p.jpg' }],
+    ['db_row_id non-null', (record) => { record.db_row_id = 'row-1' }],
+  ]
+
+  test.each(unsafeFieldCases)('unsafe field %s blocks the entire composition', async (_name, mutate) => {
+    const deps = await draftDeps(mutate)
+    const before = { ...deps.recordsById.get('qid-1') }
+    const result = await deps.controller.discardNeverUploadedDrafts({ provisionalId: PROVISIONAL_ID })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe(DRIVER_REPORT_QUEUE_ERROR_CODES.UNSAFE_COMPOSITION)
+    expect(result.deleted).toEqual([])
+    expect(deps.deleteCalls).toHaveLength(0)
+    expect(deps.recordsById.get('qid-1')).toEqual(before)
+    expectNoRemoteMutation(deps)
+  })
+
+  const unsafeStatusCases = [
+    PHOTO_UPLOAD_STATUSES.REPORT_LINK_UNKNOWN,
+    PHOTO_UPLOAD_STATUSES.QUEUED,
+    PHOTO_UPLOAD_STATUSES.UPLOADING,
+    PHOTO_UPLOAD_STATUSES.UPLOAD_PAUSED,
+    PHOTO_UPLOAD_STATUSES.FAILED_UPLOAD,
+    PHOTO_UPLOAD_STATUSES.STORAGE_COMPLETE,
+    PHOTO_UPLOAD_STATUSES.DB_PENDING,
+    PHOTO_UPLOAD_STATUSES.DB_RETRY_WAIT,
+    PHOTO_UPLOAD_STATUSES.FAILED_DB,
+    PHOTO_UPLOAD_STATUSES.DONE,
+  ]
+
+  test.each(unsafeStatusCases)('status %s blocks the entire composition', async (status) => {
+    const deps = await draftDeps((record) => { record.status = status })
+    const result = await deps.controller.discardNeverUploadedDrafts({ provisionalId: PROVISIONAL_ID })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe(DRIVER_REPORT_QUEUE_ERROR_CODES.UNSAFE_COMPOSITION)
+    expect(result.deleted).toEqual([])
+    expect(deps.deleteCalls).toHaveLength(0)
+    expect(deps.recordsById.get('qid-1').status).toBe(status)
+    expectNoRemoteMutation(deps)
+  })
+
+  test('mixed safe and unsafe composition deletes zero rows', async () => {
+    let n = 0
+    const deps = createDeps({
+      sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE,
+      randomUUID: () => `qid-${(n += 1)}`,
+    })
+    await enqueueModeB(deps, {
+      files: [makeFile('a.jpg', 'image/jpeg'), makeFile('b.png', 'image/png')],
+    })
+    deps.recordsById.get('qid-2').status = PHOTO_UPLOAD_STATUSES.REPORT_LINK_UNKNOWN
+    const result = await deps.controller.discardNeverUploadedDrafts({ provisionalId: PROVISIONAL_ID })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe(DRIVER_REPORT_QUEUE_ERROR_CODES.UNSAFE_COMPOSITION)
+    expect(result.deleted).toEqual([])
+    expect(deps.deleteCalls).toHaveLength(0)
+    expect(deps.recordsById.get('qid-1').status).toBe(PHOTO_UPLOAD_STATUSES.DRAFT_QUEUED)
+    expect(deps.recordsById.get('qid-2').status).toBe(PHOTO_UPLOAD_STATUSES.REPORT_LINK_UNKNOWN)
+    expectNoRemoteMutation(deps)
+  })
+
+  test('does not write DISCARD_PENDING or mutate attempt counters', async () => {
+    const deps = await draftDeps()
+    const attemptsBefore = deps.recordsById.get('qid-1').upload_attempt_count
+    const dbAttemptsBefore = deps.recordsById.get('qid-1').db_attempt_count
+    await deps.controller.discardNeverUploadedDrafts({ provisionalId: PROVISIONAL_ID })
+    expect(deps.putRecords.every((row) => row.status !== PHOTO_UPLOAD_STATUSES.DISCARD_PENDING)).toBe(true)
+    expect(attemptsBefore).toBe(0)
+    expect(dbAttemptsBefore).toBe(0)
+    expect(deps.putRecords[0].upload_attempt_count).toBe(0)
+    expect(deps.putRecords[0].db_attempt_count).toBe(0)
+    expectNoRemoteMutation(deps)
+  })
+
+  test('local delete failure is returned and undeleted rows remain durable', async () => {
+    const deps = createDeps({
+      sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE,
+      deleteLocalRecord: async () => {
+        throw new Error('idb delete failed')
+      },
+    })
+    await enqueueModeB(deps)
+    const result = await deps.controller.discardNeverUploadedDrafts({ provisionalId: PROVISIONAL_ID })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe(DRIVER_REPORT_QUEUE_ERROR_CODES.QUEUE_WRITE_FAILED)
+    expect(result.deleted).toEqual([])
+    expect(deps.recordsById.has('qid-1')).toBe(true)
+    expect(deps.recordsById.get('qid-1').status).toBe(PHOTO_UPLOAD_STATUSES.DRAFT_QUEUED)
+    expect(deps.recordsById.get('qid-1').blob).toBeTruthy()
+    expectNoRemoteMutation(deps)
+  })
+
+  test('local delete failure after a prior success keeps remaining rows durable', async () => {
+    let n = 0
+    let deletes = 0
+    const deps = createDeps({
+      sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE,
+      randomUUID: () => `qid-${(n += 1)}`,
+      deleteLocalRecord: async ({ queueId, actorScopeType, actorScopeId }) => {
+        deletes += 1
+        deps.deleteCalls.push({ queueId, actorScopeType, actorScopeId })
+        if (deletes > 1) {
+          throw new Error('second delete failed')
+        }
+        deps.recordsById.delete(queueId)
+      },
+    })
+    await enqueueModeB(deps, {
+      files: [makeFile('a.jpg', 'image/jpeg'), makeFile('b.png', 'image/png')],
+    })
+    const result = await deps.controller.discardNeverUploadedDrafts({ provisionalId: PROVISIONAL_ID })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe(DRIVER_REPORT_QUEUE_ERROR_CODES.QUEUE_WRITE_FAILED)
+    expect(result.deleted).toEqual(['qid-1'])
+    expect(deps.recordsById.has('qid-1')).toBe(false)
+    expect(deps.recordsById.has('qid-2')).toBe(true)
+    expectNoRemoteMutation(deps)
+  })
+
+  test('portal token is not used or persisted during discard', async () => {
+    const deps = createDeps({ sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE })
+    await enqueueModeB(deps)
+    await deps.controller.discardNeverUploadedDrafts({ provisionalId: PROVISIONAL_ID })
+    assertNoSecret(deps.recordsById)
+    assertNoSecret(deps.deleteCalls)
+    assertNoSecret(deps.listCalls)
+    assertNoSecret(deps.controller.getActorScopeId())
   })
 })

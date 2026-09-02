@@ -31,6 +31,7 @@ export const DRIVER_REPORT_QUEUE_ERROR_CODES = Object.freeze({
   QUEUE_WRITE_FAILED: 'QUEUE_WRITE_FAILED',
   LINK_WRITE_FAILED: 'LINK_WRITE_FAILED',
   RUNTIME_UNAVAILABLE: 'RUNTIME_UNAVAILABLE',
+  UNSAFE_COMPOSITION: 'UNSAFE_COMPOSITION',
 })
 
 export const DRIVER_REPORT_DONE_OBSERVER_POLL_MS = 1000
@@ -155,6 +156,21 @@ function isDriverReportActorRecord(record, actorId, sourceSurface) {
     && record.actor_scope_id === actorId
     && record.source_surface === sourceSurface
     && isNonEmptyString(record.queue_id)
+  )
+}
+
+function isNeverUploadedReportModeDraft(record, provisionalId) {
+  return Boolean(
+    record
+    && record.source_surface === DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE
+    && record.provisional_id === provisionalId
+    && record.status === PHOTO_UPLOAD_STATUSES.DRAFT_QUEUED
+    && record.entity_id == null
+    && record.storage_path == null
+    && record.upload_attempt_count === 0
+    && record.tus_upload_url == null
+    && record.remote_public_url == null
+    && record.db_row_id == null
   )
 }
 
@@ -763,6 +779,122 @@ export function createDriverReportPhotoUploadQueueController(options = {}) {
     return { updated, failed }
   }
 
+  async function discardNeverUploadedDrafts({ provisionalId } = {}) {
+    const deleted = []
+    if (!isNonEmptyString(actorScopeId)) {
+      return {
+        ok: false,
+        deleted,
+        code: DRIVER_REPORT_QUEUE_ERROR_CODES.DRIVER_ID_REQUIRED,
+      }
+    }
+    if (!isNonEmptyString(provisionalId)) {
+      return {
+        ok: false,
+        deleted,
+        code: DRIVER_REPORT_QUEUE_ERROR_CODES.PROVISIONAL_ID_REQUIRED,
+      }
+    }
+
+    let handle
+    try {
+      handle = ensureDb()
+    } catch (_error) {
+      return {
+        ok: false,
+        deleted,
+        code: DRIVER_REPORT_QUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE,
+      }
+    }
+
+    if (!handle || typeof handle.listRecordsForActor !== 'function') {
+      return {
+        ok: false,
+        deleted,
+        code: DRIVER_REPORT_QUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE,
+      }
+    }
+
+    let records
+    try {
+      records = await handle.listRecordsForActor({
+        actorScopeType: DRIVER_REPORT_ACTOR_SCOPE_TYPE,
+        actorScopeId,
+      })
+    } catch (_error) {
+      return {
+        ok: false,
+        deleted,
+        code: DRIVER_REPORT_QUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE,
+      }
+    }
+
+    const sameProvisional = (Array.isArray(records) ? records : []).filter((record) => (
+      record
+      && record.actor_scope_type === DRIVER_REPORT_ACTOR_SCOPE_TYPE
+      && record.actor_scope_id === actorScopeId
+      && record.source_surface === DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE
+      && record.provisional_id === provisionalId
+    ))
+
+    if (sameProvisional.length === 0) {
+      return { ok: true, deleted, code: null }
+    }
+
+    if (sameProvisional.some((record) => !isNeverUploadedReportModeDraft(record, provisionalId))) {
+      return {
+        ok: false,
+        deleted,
+        code: DRIVER_REPORT_QUEUE_ERROR_CODES.UNSAFE_COMPOSITION,
+      }
+    }
+
+    if (typeof handle.deleteLocalRecord !== 'function') {
+      return {
+        ok: false,
+        deleted,
+        code: DRIVER_REPORT_QUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE,
+      }
+    }
+
+    for (const record of sameProvisional) {
+      let decision
+      try {
+        decision = transitionPhotoUpload(record.status, PHOTO_UPLOAD_EVENTS.DISCARD_REQUESTED)
+      } catch (_error) {
+        return {
+          ok: false,
+          deleted,
+          code: DRIVER_REPORT_QUEUE_ERROR_CODES.UNSAFE_COMPOSITION,
+        }
+      }
+      if (!decision || decision.kind !== 'DELETE_LOCAL') {
+        return {
+          ok: false,
+          deleted,
+          code: DRIVER_REPORT_QUEUE_ERROR_CODES.UNSAFE_COMPOSITION,
+        }
+      }
+      try {
+        await handle.deleteLocalRecord({
+          queueId: record.queue_id,
+          actorScopeType: DRIVER_REPORT_ACTOR_SCOPE_TYPE,
+          actorScopeId,
+        })
+        pendingObservation.delete(record.queue_id)
+        deleted.push(record.queue_id)
+      } catch (_error) {
+        return {
+          ok: false,
+          deleted,
+          code: DRIVER_REPORT_QUEUE_ERROR_CODES.QUEUE_WRITE_FAILED,
+        }
+      }
+    }
+
+    return { ok: true, deleted, code: null }
+  }
+
   async function dispose() {
     stopped = true
     detachEnvironmentalWake()
@@ -784,6 +916,7 @@ export function createDriverReportPhotoUploadQueueController(options = {}) {
     enqueueFiles,
     proveReportId,
     markReportResultAmbiguous,
+    discardNeverUploadedDrafts,
     dispose,
     inspectPending,
     getAccessToken,
@@ -921,10 +1054,32 @@ export function useDriverReportPhotoUploadQueue({
     })
   }, [driverId, provisionalId])
 
+  const discardNeverUploadedDrafts = useCallback(async ({ provisionalId: nextProvisionalId } = {}) => {
+    if (!isNonEmptyString(driverId)) {
+      return {
+        ok: false,
+        deleted: [],
+        code: DRIVER_REPORT_QUEUE_ERROR_CODES.DRIVER_ID_REQUIRED,
+      }
+    }
+    const controller = controllerRef.current
+    if (!controller) {
+      return {
+        ok: false,
+        deleted: [],
+        code: DRIVER_REPORT_QUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE,
+      }
+    }
+    return controller.discardNeverUploadedDrafts({
+      provisionalId: nextProvisionalId,
+    })
+  }, [driverId])
+
   return {
     enqueueFiles,
     proveReportId,
     markReportResultAmbiguous,
+    discardNeverUploadedDrafts,
     busy,
     lastResult,
   }

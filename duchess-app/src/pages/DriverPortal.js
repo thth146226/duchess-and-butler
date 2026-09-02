@@ -203,6 +203,7 @@ export default function DriverPortal({ token }) {
     enqueueFiles: enqueueReportModeFiles,
     proveReportId,
     markReportResultAmbiguous,
+    discardNeverUploadedDrafts,
     busy: reportModeBusy,
   } = useDriverReportPhotoUploadQueue({
     sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE,
@@ -371,6 +372,28 @@ export default function DriverPortal({ token }) {
     setSavingReport(false)
   }
 
+  async function abandonReportMode() {
+    if (reportModeBusy || savingReport) {
+      return
+    }
+    const provisionalId = reportProvisionalId
+    let result
+    try {
+      result = await discardNeverUploadedDrafts({ provisionalId })
+    } catch (_error) {
+      showReportToast('Queued photos are still being processed. Please try again.', 'error')
+      return
+    }
+    if (!result || result.ok !== true) {
+      showReportToast('Queued photos are still being processed. Please try again.', 'error')
+      return
+    }
+    setReportMode(false)
+    setSubmittedReportId(null)
+    setUploadedPhotos([])
+    setReportProvisionalId(null)
+  }
+
   const CAT_NOTE = {
     urgent:    { bg: '#FCEBEB', border: '#A32D2D', badgeBg: '#FCA5A5', badgeColor: '#7F1D1D' },
     equipment: { bg: '#FEF3C7', border: '#BA7517', badgeBg: '#FDE68A', badgeColor: '#633806' },
@@ -404,8 +427,9 @@ export default function DriverPortal({ token }) {
 
           {/* Header */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-            <button onClick={() => { setReportMode(false); setSubmittedReportId(null); setUploadedPhotos([]) }}
-              style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '6px', padding: '8px 14px', cursor: 'pointer', fontSize: '13px', fontFamily: "'DM Sans', sans-serif" }}>← Back</button>
+            <button onClick={abandonReportMode}
+              disabled={reportModeBusy || savingReport}
+              style={{ background: '#fff', border: '1px solid #DDD8CF', borderRadius: '6px', padding: '8px 14px', cursor: (reportModeBusy || savingReport) ? 'not-allowed' : 'pointer', fontSize: '13px', fontFamily: "'DM Sans', sans-serif" }}>← Back</button>
             <div>
               <div style={{ fontSize: '15px', fontWeight: '500' }}>{reportRunType} Report</div>
               <div style={{ fontSize: '11px', color: '#6B6860' }}>{reportJob.event_name || reportJob.title}</div>
