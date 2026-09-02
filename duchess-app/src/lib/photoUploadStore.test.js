@@ -410,6 +410,7 @@ describe('photoUploadStore', () => {
       random: overrides.random || (() => 0),
       setTimeoutImpl: clock.setTimeoutImpl,
       clearTimeoutImpl: clock.clearTimeoutImpl,
+      ...(overrides.managerFactory ? { managerFactory: overrides.managerFactory } : {}),
     }))
     return {
       db,
@@ -1191,5 +1192,252 @@ describe('photoUploadStore', () => {
     const other = await getRow(db, 'queue-office-b-1', 'office-b')
     expect(other.status).toBe(PHOTO_UPLOAD_STATUSES.QUEUED)
     expect(other.lease_owner).toBeNull()
+  })
+
+  test('resumePausedUploads transitions only UPLOAD_PAUSED via UPLOAD_RESUME_READY and pumps once after persist', async () => {
+    const pumps = []
+    const persistAtPump = []
+    const blob = jpegBlob()
+    const { db, store, transport } = createRuntime({
+      transport: createFakeTransport(),
+      managerFactory: () => ({
+        pump: async () => {
+          const row = await getRow(db)
+          persistAtPump.push(row && row.status)
+          pumps.push('pump')
+        },
+        stop: async () => {},
+      }),
+    })
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.UPLOAD_PAUSED,
+      blob,
+      upload_attempt_count: 3,
+      db_attempt_count: 2,
+      tus_upload_url: TUS_URL,
+      tus_created_at: FIXED_NOW - 10,
+      storage_path: 'job-1/delivery_queue-office-a-1.jpg',
+      file_name: 'evidence.jpg',
+    }))
+    await db.putRecord(makeRecord({
+      queue_id: 'q-failed-upload',
+      storage_path: 'job-1/delivery_q-failed-upload.jpg',
+      status: PHOTO_UPLOAD_STATUSES.FAILED_UPLOAD,
+      upload_attempt_count: 5,
+    }))
+    await db.putRecord(makeRecord({
+      queue_id: 'q-failed-db',
+      storage_path: 'job-1/delivery_q-failed-db.jpg',
+      status: PHOTO_UPLOAD_STATUSES.FAILED_DB,
+      db_attempt_count: 5,
+    }))
+    await db.putRecord(makeRecord({
+      queue_id: 'q-upload-wait',
+      storage_path: 'job-1/delivery_q-upload-wait.jpg',
+      status: PHOTO_UPLOAD_STATUSES.UPLOAD_RETRY_WAIT,
+      next_retry_at: FIXED_NOW + 9_000,
+    }))
+    await db.putRecord(makeRecord({
+      queue_id: 'q-db-wait',
+      storage_path: 'job-1/delivery_q-db-wait.jpg',
+      status: PHOTO_UPLOAD_STATUSES.DB_RETRY_WAIT,
+      next_retry_at: FIXED_NOW + 9_000,
+    }))
+    await db.putRecord(makeRecord({
+      queue_id: 'q-draft',
+      storage_path: null,
+      entity_id: null,
+      status: PHOTO_UPLOAD_STATUSES.DRAFT_QUEUED,
+      provisional_id: 'prov-1',
+    }))
+    await db.putRecord(makeRecord({
+      queue_id: 'q-unknown',
+      storage_path: null,
+      entity_id: null,
+      status: PHOTO_UPLOAD_STATUSES.REPORT_LINK_UNKNOWN,
+      provisional_id: 'prov-2',
+    }))
+    await db.putRecord(makeRecord({
+      queue_id: 'q-done',
+      storage_path: 'job-1/delivery_q-done.jpg',
+      status: PHOTO_UPLOAD_STATUSES.DONE,
+      blob: null,
+      completed_at: FIXED_NOW,
+    }))
+    await db.putRecord(makeRecord({
+      queue_id: 'q-paused-2',
+      storage_path: 'job-1/delivery_q-paused-2.jpg',
+      status: PHOTO_UPLOAD_STATUSES.UPLOAD_PAUSED,
+      upload_attempt_count: 1,
+      db_attempt_count: 0,
+    }))
+    const result = await store.resumePausedUploads()
+    expect(result).toEqual({ resumed: 2 })
+    expect(pumps).toEqual(['pump'])
+    expect(persistAtPump).toEqual([PHOTO_UPLOAD_STATUSES.QUEUED])
+    expect(transport.startCalls).toHaveLength(0)
+    const resumed = await getRow(db)
+    expect(resumed.status).toBe(PHOTO_UPLOAD_STATUSES.QUEUED)
+    expect(resumed.queue_id).toBe('queue-office-a-1')
+    expect(resumed.actor_scope_type).toBe('office_user')
+    expect(resumed.actor_scope_id).toBe('office-a')
+    expect(resumed.entity_type).toBe('job')
+    expect(resumed.entity_id).toBe('job-1')
+    expect(resumed.provisional_id).toBeNull()
+    expect(resumed.storage_path).toBe('job-1/delivery_queue-office-a-1.jpg')
+    expect(resumed.blob).toBeInstanceOf(Blob)
+    expect(resumed.blob.size).toBe(blob.size)
+    expect(resumed.blob.type).toBe(blob.type)
+    expect(resumed.file_name).toBe('evidence.jpg')
+    expect(resumed.mime_type).toBe('image/jpeg')
+    expect(resumed.file_size).toBe(SOURCE_BYTES.length)
+    expect(resumed.source_surface).toBe('evidence_upload')
+    expect(resumed.tus_upload_url).toBe(TUS_URL)
+    expect(resumed.upload_attempt_count).toBe(3)
+    expect(resumed.db_attempt_count).toBe(2)
+    expect(resumed.created_at).toBe(FIXED_CREATED_AT)
+    expect((await getRow(db, 'q-failed-upload')).status).toBe(PHOTO_UPLOAD_STATUSES.FAILED_UPLOAD)
+    expect((await getRow(db, 'q-failed-db')).status).toBe(PHOTO_UPLOAD_STATUSES.FAILED_DB)
+    expect((await getRow(db, 'q-upload-wait')).status).toBe(PHOTO_UPLOAD_STATUSES.UPLOAD_RETRY_WAIT)
+    expect((await getRow(db, 'q-db-wait')).status).toBe(PHOTO_UPLOAD_STATUSES.DB_RETRY_WAIT)
+    expect((await getRow(db, 'q-draft')).status).toBe(PHOTO_UPLOAD_STATUSES.DRAFT_QUEUED)
+    expect((await getRow(db, 'q-unknown')).status).toBe(PHOTO_UPLOAD_STATUSES.REPORT_LINK_UNKNOWN)
+    expect((await getRow(db, 'q-done')).status).toBe(PHOTO_UPLOAD_STATUSES.DONE)
+  })
+
+  test('resumePausedUploads with zero paused rows does not pump', async () => {
+    const pumps = []
+    const { db, store } = createRuntime({
+      managerFactory: () => ({
+        pump: async () => {
+          pumps.push('pump')
+        },
+        stop: async () => {},
+      }),
+    })
+    await db.putRecord(makeRecord({ status: PHOTO_UPLOAD_STATUSES.QUEUED }))
+    const result = await store.resumePausedUploads()
+    expect(result).toEqual({ resumed: 0 })
+    expect(pumps).toEqual([])
+  })
+
+  test('resumePausedUploads cannot resume another actor queue', async () => {
+    const pumps = []
+    const { db, store } = createRuntime({
+      managerFactory: () => ({
+        pump: async () => {
+          pumps.push('pump')
+        },
+        stop: async () => {},
+      }),
+    })
+    await db.putRecord(makeRecord({
+      queue_id: 'queue-office-b-1',
+      actor_scope_id: 'office-b',
+      storage_path: 'job-1/delivery_queue-office-b-1.jpg',
+      status: PHOTO_UPLOAD_STATUSES.UPLOAD_PAUSED,
+    }))
+    const result = await store.resumePausedUploads()
+    expect(result).toEqual({ resumed: 0 })
+    expect(pumps).toEqual([])
+    const other = await getRow(db, 'queue-office-b-1', 'office-b')
+    expect(other.status).toBe(PHOTO_UPLOAD_STATUSES.UPLOAD_PAUSED)
+  })
+
+  test('stale resume cannot clobber a newer UPLOADING record', async () => {
+    const { db, store, clock } = createRuntime({
+      managerFactory: () => ({
+        pump: async () => {},
+        stop: async () => {},
+      }),
+    })
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.UPLOAD_PAUSED,
+    }))
+    const held = await db.claimLease({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+      leaseOwner: 'tab-b',
+      now: clock.now(),
+      leaseTtlMs: LEASE_TTL_MS,
+    })
+    await db.putRecordFenced({
+      record: {
+        ...held,
+        status: PHOTO_UPLOAD_STATUSES.UPLOADING,
+        updated_at: clock.now(),
+      },
+      leaseOwner: 'tab-b',
+      leaseGeneration: held.lease_generation,
+    })
+    const result = await store.resumePausedUploads()
+    expect(result).toEqual({ resumed: 0 })
+    const stored = await getRow(db)
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.UPLOADING)
+    expect(stored.lease_owner).toBe('tab-b')
+  })
+
+  test('fence loss cannot clobber newer state', async () => {
+    const { db, store, clock } = createRuntime({
+      leaseOwner: 'runtime-a',
+      managerFactory: () => ({
+        pump: async () => {},
+        stop: async () => {},
+      }),
+    })
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.UPLOAD_PAUSED,
+    }))
+    const originalClaim = db.claimLease.bind(db)
+    db.claimLease = async (args) => {
+      const claimed = await originalClaim(args)
+      await db.putRecord({
+        ...claimed,
+        status: PHOTO_UPLOAD_STATUSES.UPLOADING,
+        lease_owner: 'thief',
+        lease_generation: claimed.lease_generation + 1,
+        lease_expires_at: clock.now() + LEASE_TTL_MS,
+        updated_at: clock.now(),
+      })
+      return claimed
+    }
+    const result = await store.resumePausedUploads()
+    expect(result).toEqual({ resumed: 0 })
+    const stored = await getRow(db)
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.UPLOADING)
+    expect(stored.lease_owner).toBe('thief')
+  })
+
+  test('failed fenced persist leaves the paused record durable', async () => {
+    const { db, store } = createRuntime({
+      managerFactory: () => ({
+        pump: async () => {},
+        stop: async () => {},
+      }),
+    })
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.UPLOAD_PAUSED,
+      upload_attempt_count: 2,
+    }))
+    db.putRecordFenced = async () => {
+      throw new Error('persist exploded')
+    }
+    const result = await store.resumePausedUploads()
+    expect(result).toEqual({ resumed: 0 })
+    const stored = await getRow(db)
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.UPLOAD_PAUSED)
+    expect(stored.upload_attempt_count).toBe(2)
+  })
+
+  test('resumePausedUploads source uses UPLOAD_RESUME_READY and never transports directly', () => {
+    const source = fs.readFileSync(path.join(__dirname, 'photoUploadStore.js'), 'utf8')
+    const resumeFn = source.slice(source.indexOf('async function resumePausedUploads'))
+    const resumeBody = resumeFn.slice(0, resumeFn.indexOf('return { resumed }') + 20)
+    expect(resumeBody).toMatch(/UPLOAD_RESUME_READY/)
+    expect(resumeBody).not.toMatch(/tus\.Upload/)
+    expect(resumeBody).not.toMatch(/transport\.startUpload/)
+    expect(resumeBody).not.toMatch(/inspectRemoteObject/)
+    expect(resumeBody).not.toMatch(/evidence_photos/)
   })
 })

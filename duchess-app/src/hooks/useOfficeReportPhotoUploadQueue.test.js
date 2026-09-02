@@ -50,6 +50,7 @@ function assertNoToken(value) {
 }
 
 function createSessionClient({ userId = USER_ID, accessToken = SENTINEL_TOKEN } = {}) {
+  const unsubscribe = jest.fn()
   return {
     auth: {
       getSession: jest.fn(async () => ({
@@ -58,6 +59,9 @@ function createSessionClient({ userId = USER_ID, accessToken = SENTINEL_TOKEN } 
             ? { access_token: accessToken, refresh_token: 'refresh-SECRET', user: { id: userId } }
             : null,
         },
+      })),
+      onAuthStateChange: jest.fn(() => ({
+        data: { subscription: { unsubscribe } },
       })),
     },
     storage: {
@@ -68,6 +72,13 @@ function createSessionClient({ userId = USER_ID, accessToken = SENTINEL_TOKEN } 
     from: jest.fn(() => ({
       insert: jest.fn(),
     })),
+    _authUnsubscribe: unsubscribe,
+  }
+}
+
+async function flushWake(times = 40) {
+  for (let i = 0; i < times; i += 1) {
+    await Promise.resolve()
   }
 }
 
@@ -115,6 +126,7 @@ function createDeps(overrides = {}) {
       events.push('stop')
       stopCalls.push(true)
     }),
+    resumePausedUploads: jest.fn(async () => ({ resumed: 0 })),
   }
   let capturedGetAccessToken = null
   const db = {
@@ -160,6 +172,7 @@ function createDeps(overrides = {}) {
     now: overrides.now || (() => FIXED_NOW),
     randomUUID: overrides.randomUUID || (() => 'qid-1'),
     createLeaseOwner: () => 'lease-p9',
+    isOnline: overrides.isOnline || (() => true),
     setTimeoutImpl: timers.setTimeoutImpl,
     clearTimeoutImpl: timers.clearTimeoutImpl,
     onRemoteDone: (payload) => { remoteDone.push(payload) },
@@ -167,6 +180,7 @@ function createDeps(overrides = {}) {
   liveControllers.push(controller)
   return {
     controller,
+    storeApi,
     events,
     putRecords,
     startCalls,
@@ -427,6 +441,107 @@ describe('useOfficeReportPhotoUploadQueue', () => {
     expect(deps.closeCalls).toHaveLength(1)
     expect(deps.timers.scheduled).toHaveLength(0)
     expect(deps.controller.getObserverTimerPending()).toBe(false)
+  })
+
+  test('P11A actor is session.user.id not profile.id and resume is additive', async () => {
+    const deps = createDeps()
+    await deps.controller.boot()
+    expect(deps.controller.getActorScopeId()).toBe(USER_ID)
+    expect(deps.controller.getActorScopeId()).not.toBe(DIFFERENT_PROFILE_UUID)
+    expect(deps.storeApi.start).toHaveBeenCalled()
+    expect(deps.storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    const result = await enqueueModeA(deps)
+    expect(result.accepted).toHaveLength(1)
+    expect(deps.putRecords[0].actor_scope_id).toBe(USER_ID)
+    expect(deps.putRecords[0].actor_scope_id).not.toBe(DIFFERENT_PROFILE_UUID)
+  })
+
+  test('P11A online listener is registered and removed on cleanup', async () => {
+    const addSpy = jest.spyOn(window, 'addEventListener')
+    const removeSpy = jest.spyOn(window, 'removeEventListener')
+    const deps = createDeps()
+    await deps.controller.boot()
+    expect(addSpy).toHaveBeenCalledWith('online', expect.any(Function))
+    await deps.controller.dispose()
+    expect(removeSpy).toHaveBeenCalledWith('online', expect.any(Function))
+    addSpy.mockRestore()
+    removeSpy.mockRestore()
+  })
+
+  test('P11A online event calls guarded resume', async () => {
+    const deps = createDeps()
+    await deps.controller.boot()
+    deps.storeApi.resumePausedUploads.mockClear()
+    window.dispatchEvent(new Event('online'))
+    await flushWake()
+    expect(deps.storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+  })
+
+  test('P11A offline boot does not resume', async () => {
+    const deps = createDeps({ isOnline: () => false })
+    await deps.controller.boot()
+    expect(deps.storeApi.start).toHaveBeenCalled()
+    expect(deps.storeApi.resumePausedUploads).not.toHaveBeenCalled()
+  })
+
+  test('P11A online boot resumes when credentials are ready', async () => {
+    const deps = createDeps()
+    await deps.controller.boot()
+    expect(deps.storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+  })
+
+  test('P11A credential failure leaves paused state and does not reject', async () => {
+    const deps = createDeps({
+      supabaseClient: createSessionClient({ userId: USER_ID, accessToken: null }),
+    })
+    await expect(deps.controller.boot()).resolves.toBeUndefined()
+    expect(deps.storeApi.resumePausedUploads).not.toHaveBeenCalled()
+  })
+
+  test('P11A resume rejection does not become an unhandled rejection', async () => {
+    const deps = createDeps()
+    deps.storeApi.resumePausedUploads.mockImplementation(async () => {
+      throw new Error('resume failed')
+    })
+    await expect(deps.controller.boot()).resolves.toBeUndefined()
+  })
+
+  test('P11A auth-change wake is subscribed and cleaned up', async () => {
+    const deps = createDeps()
+    await deps.controller.boot()
+    expect(deps.supabaseClient.auth.onAuthStateChange).toHaveBeenCalled()
+    deps.storeApi.resumePausedUploads.mockClear()
+    const onChange = deps.supabaseClient.auth.onAuthStateChange.mock.calls[0][0]
+    onChange('SIGNED_IN')
+    await flushWake()
+    expect(deps.storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    await deps.controller.dispose()
+    expect(deps.supabaseClient._authUnsubscribe).toHaveBeenCalled()
+  })
+
+  test('P11A SESSION_USER_ID_CHANGED does not resume the old actor queue', async () => {
+    const deps = createDeps()
+    await deps.controller.boot()
+    deps.storeApi.resumePausedUploads.mockClear()
+    deps.supabaseClient.auth.getSession.mockResolvedValue({
+      data: {
+        session: {
+          access_token: SENTINEL_TOKEN,
+          user: { id: 'other-office-user' },
+        },
+      },
+    })
+    window.dispatchEvent(new Event('online'))
+    await flushWake()
+    expect(deps.storeApi.resumePausedUploads).not.toHaveBeenCalled()
+    expect(deps.controller.getActorScopeId()).toBe(USER_ID)
+  })
+
+  test('P11A boot resume does not persist the session token', async () => {
+    const deps = createDeps()
+    await deps.controller.boot()
+    assertNoToken(deps.storeApi)
+    assertNoToken(deps.controller.getActorScopeId())
   })
 
   test('hook enqueueFiles uses current reportId and clears timers on unmount', async () => {

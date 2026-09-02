@@ -4,7 +4,7 @@ import {
   transitionPhotoUpload,
 } from './photoUploadDomain'
 import { PHOTO_UPLOAD_DB_ERROR_CODES } from './photoUploadDb'
-import { createPhotoUploadManager } from './photoUploadManager'
+import { createPhotoUploadManager, LEASE_TTL_MS } from './photoUploadManager'
 
 export const MAX_MANAGER_UPLOAD_ATTEMPTS = 5
 export const MAX_DB_ATTEMPTS = 5
@@ -65,6 +65,10 @@ const SKIP_PERSIST = Symbol('SKIP_PERSIST')
 
 function isFenceConflict(error) {
   return Boolean(error && error.code === PHOTO_UPLOAD_DB_ERROR_CODES.LEASE_FENCE_CONFLICT)
+}
+
+function isLeaseUnavailable(error) {
+  return Boolean(error && error.code === PHOTO_UPLOAD_DB_ERROR_CODES.LEASE_NOT_AVAILABLE)
 }
 
 function errorCode(error) {
@@ -856,9 +860,118 @@ function createPhotoUploadStore(options = {}) {
     }
   }
 
+  async function safeReleaseResumeLease(queueId, generation) {
+    try {
+      await db.releaseLease({
+        queueId,
+        actorScopeType,
+        actorScopeId,
+        leaseOwner,
+        leaseGeneration: generation,
+      })
+    } catch (_error) {
+      return
+    }
+  }
+
+  async function resumePausedUploads() {
+    if (stopped) {
+      return { resumed: 0 }
+    }
+    let records
+    try {
+      records = await db.listRecordsForActor({
+        actorScopeType,
+        actorScopeId,
+      })
+    } catch (_error) {
+      return { resumed: 0 }
+    }
+    const paused = (Array.isArray(records) ? records : []).filter((record) => (
+      record
+      && record.status === PHOTO_UPLOAD_STATUSES.UPLOAD_PAUSED
+      && record.actor_scope_type === actorScopeType
+      && record.actor_scope_id === actorScopeId
+    ))
+    let resumed = 0
+    for (const candidate of paused) {
+      if (stopped) {
+        break
+      }
+      let claimed
+      try {
+        claimed = await db.claimLease({
+          queueId: candidate.queue_id,
+          actorScopeType,
+          actorScopeId,
+          leaseOwner,
+          now: now(),
+          leaseTtlMs: LEASE_TTL_MS,
+        })
+      } catch (error) {
+        if (isLeaseUnavailable(error) || isFenceConflict(error)) {
+          continue
+        }
+        continue
+      }
+      const generation = claimed.lease_generation
+      if (claimed.status !== PHOTO_UPLOAD_STATUSES.UPLOAD_PAUSED) {
+        await safeReleaseResumeLease(claimed.queue_id, generation)
+        continue
+      }
+      let next
+      try {
+        const decision = transitionPhotoUpload(
+          claimed.status,
+          PHOTO_UPLOAD_EVENTS.UPLOAD_RESUME_READY
+        )
+        next = {
+          ...claimed,
+          status: decision.status,
+          updated_at: now(),
+        }
+      } catch (_error) {
+        await safeReleaseResumeLease(claimed.queue_id, generation)
+        continue
+      }
+      try {
+        await db.putRecordFenced({
+          record: next,
+          leaseOwner,
+          leaseGeneration: generation,
+        })
+      } catch (error) {
+        if (!isFenceConflict(error)) {
+          await safeReleaseResumeLease(claimed.queue_id, generation)
+        }
+        continue
+      }
+      await safeReleaseResumeLease(claimed.queue_id, generation)
+      resumed += 1
+    }
+    if (resumed > 0 && !stopped) {
+      if (!manager) {
+        manager = managerFactory({
+          db,
+          actorScopeType,
+          actorScopeId,
+          leaseOwner,
+          executeClaimedRecord,
+          now,
+          setTimeoutImpl,
+          clearTimeoutImpl,
+        })
+        started = true
+      }
+      await manager.pump()
+    }
+    return { resumed }
+  }
+
   return {
     start,
     stop,
+    resumePausedUploads,
     getRuntimeStatus: runtimeStatus,
   }
 }

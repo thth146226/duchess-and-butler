@@ -176,9 +176,98 @@ export function createDriverPhotoUploadQueueController(options = {}) {
   const notifiedDone = new Set()
   let pollTimer = null
   let inspectInFlight = false
+  let envWakeCleanup = null
 
   async function getAccessToken() {
     return resolveDriverSupabaseBearer(supabaseClient)
+  }
+
+  function environmentIsPlausiblyUsable() {
+    try {
+      if (typeof isOnline === 'function' && isOnline() === false) {
+        return false
+      }
+    } catch (_error) {
+      return false
+    }
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return false
+    }
+    return true
+  }
+
+  async function requestResumePausedUploads() {
+    if (stopped) {
+      return
+    }
+    try {
+      if (!environmentIsPlausiblyUsable()) {
+        return
+      }
+      if (!store || typeof store.resumePausedUploads !== 'function') {
+        return
+      }
+      if (!isNonEmptyString(actorScopeId)) {
+        return
+      }
+      const token = await getAccessToken()
+      if (!isNonEmptyString(token)) {
+        return
+      }
+      await store.resumePausedUploads()
+    } catch (_error) {
+      return
+    }
+  }
+
+  function attachEnvironmentalWake() {
+    if (stopped || envWakeCleanup) {
+      return
+    }
+    const cleanups = []
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      const onOnline = () => {
+        void requestResumePausedUploads()
+      }
+      window.addEventListener('online', onOnline)
+      cleanups.push(() => {
+        if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+          window.removeEventListener('online', onOnline)
+        }
+      })
+    }
+    const auth = supabaseClient && supabaseClient.auth
+    if (auth && typeof auth.onAuthStateChange === 'function') {
+      try {
+        const result = auth.onAuthStateChange(() => {
+          void requestResumePausedUploads()
+        })
+        const subscription = result && result.data ? result.data.subscription : null
+        if (subscription && typeof subscription.unsubscribe === 'function') {
+          cleanups.push(() => {
+            subscription.unsubscribe()
+          })
+        }
+      } catch (_error) {
+        // existing client does not support auth wake
+      }
+    }
+    envWakeCleanup = () => {
+      for (const fn of cleanups) {
+        try {
+          fn()
+        } catch (_cleanupError) {
+          // ignore
+        }
+      }
+      envWakeCleanup = null
+    }
+  }
+
+  function detachEnvironmentalWake() {
+    if (typeof envWakeCleanup === 'function') {
+      envWakeCleanup()
+    }
   }
 
   function ensureDb() {
@@ -358,6 +447,8 @@ export function createDriverPhotoUploadQueueController(options = {}) {
       return
     }
     await startRuntime(driverId)
+    attachEnvironmentalWake()
+    await requestResumePausedUploads()
     await seedPendingFromExisting(driverId)
     await inspectPending()
   }
@@ -472,6 +563,7 @@ export function createDriverPhotoUploadQueueController(options = {}) {
 
   async function dispose() {
     stopped = true
+    detachEnvironmentalWake()
     cancelObserverTimer()
     pendingObservation.clear()
     if (store && typeof store.stop === 'function') {

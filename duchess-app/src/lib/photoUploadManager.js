@@ -147,6 +147,8 @@ export function createPhotoUploadManager(options = {}) {
   const activeSlots = new Map()
   const locallyExecuted = new Set()
   const openTimers = new Set()
+  let retryWakeTimer = null
+  let retryWakeAt = null
 
   function scheduleTimeout(callback, delay) {
     const id = setTimeoutImpl(() => {
@@ -168,6 +170,74 @@ export function createPhotoUploadManager(options = {}) {
   function clearAllTimers() {
     for (const id of [...openTimers]) {
       cancelTimeout(id)
+    }
+  }
+
+  function clearRetryWakeTimer() {
+    if (retryWakeTimer != null) {
+      cancelTimeout(retryWakeTimer)
+      retryWakeTimer = null
+    }
+    retryWakeAt = null
+  }
+
+  function armRetryWakeTimer(wakeAt) {
+    const delay = Math.max(0, wakeAt - now())
+    retryWakeAt = wakeAt
+    retryWakeTimer = scheduleTimeout(() => {
+      retryWakeTimer = null
+      retryWakeAt = null
+      if (stopped) {
+        return
+      }
+      void pump()
+    }, delay)
+  }
+
+  async function scheduleRetryWake() {
+    if (stopped) {
+      return
+    }
+    let records
+    try {
+      records = await db.listRecordsForActor({
+        actorScopeType,
+        actorScopeId,
+      })
+    } catch (_error) {
+      return
+    }
+    const nowMs = now()
+    let earliest = null
+    for (const record of Array.isArray(records) ? records : []) {
+      if (
+        record.status !== PHOTO_UPLOAD_STATUSES.UPLOAD_RETRY_WAIT
+        && record.status !== PHOTO_UPLOAD_STATUSES.DB_RETRY_WAIT
+      ) {
+        continue
+      }
+      if (!Number.isInteger(record.next_retry_at) || record.next_retry_at <= nowMs) {
+        continue
+      }
+      if (earliest === null || record.next_retry_at < earliest) {
+        earliest = record.next_retry_at
+      }
+    }
+    if (earliest === null) {
+      clearRetryWakeTimer()
+      return
+    }
+    if (retryWakeTimer != null && retryWakeAt != null && earliest >= retryWakeAt) {
+      return
+    }
+    clearRetryWakeTimer()
+    armRetryWakeTimer(earliest)
+  }
+
+  function getRetryWakeState() {
+    return {
+      pending: retryWakeTimer != null,
+      wakeAt: retryWakeAt,
     }
   }
 
@@ -249,6 +319,33 @@ export function createPhotoUploadManager(options = {}) {
       }
       activeSlots.delete(slot.queueId)
       if (!stopped) {
+        try {
+          if (typeof db.getRecord === 'function') {
+            const durable = await db.getRecord({
+              queueId: slot.queueId,
+              actorScopeType,
+              actorScopeId,
+            })
+            if (
+              durable
+              && durable.status === PHOTO_UPLOAD_STATUSES.UPLOAD_PAUSED
+            ) {
+              locallyExecuted.delete(slot.queueId)
+            } else if (
+              durable
+              && (
+                durable.status === PHOTO_UPLOAD_STATUSES.UPLOAD_RETRY_WAIT
+                || durable.status === PHOTO_UPLOAD_STATUSES.DB_RETRY_WAIT
+              )
+              && Number.isInteger(durable.next_retry_at)
+              && durable.next_retry_at > now()
+            ) {
+              locallyExecuted.delete(slot.queueId)
+            }
+          }
+        } catch (_readError) {
+          // keep locallyExecuted
+        }
         await pump()
       }
     }
@@ -368,6 +465,7 @@ export function createPhotoUploadManager(options = {}) {
         if (stopped) {
           break
         }
+        await scheduleRetryWake()
       } while (pumpAgain)
     } finally {
       pumping = false
@@ -384,6 +482,7 @@ export function createPhotoUploadManager(options = {}) {
 
   async function stop() {
     stopped = true
+    clearRetryWakeTimer()
     clearAllTimers()
     for (const slot of activeSlots.values()) {
       stopHeartbeat(slot)
@@ -405,5 +504,6 @@ export function createPhotoUploadManager(options = {}) {
   return {
     pump,
     stop,
+    getRetryWakeState,
   }
 }

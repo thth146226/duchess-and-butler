@@ -53,6 +53,7 @@ function assertNoSecret(value) {
 }
 
 function createSessionClient({ accessToken = SENTINEL_TOKEN } = {}) {
+  const unsubscribe = jest.fn()
   return {
     supabaseKey: 'anon-key-SENTINEL',
     auth: {
@@ -63,9 +64,19 @@ function createSessionClient({ accessToken = SENTINEL_TOKEN } = {}) {
             : null,
         },
       })),
+      onAuthStateChange: jest.fn(() => ({
+        data: { subscription: { unsubscribe } },
+      })),
     },
     storage: { from: jest.fn(() => ({ upload: jest.fn() })) },
     from: jest.fn(() => ({ insert: jest.fn() })),
+    _authUnsubscribe: unsubscribe,
+  }
+}
+
+async function flushWake(times = 40) {
+  for (let i = 0; i < times; i += 1) {
+    await Promise.resolve()
   }
 }
 
@@ -105,6 +116,7 @@ function createDeps(overrides = {}) {
       events.push('stop')
       stopCalls.push(true)
     }),
+    resumePausedUploads: jest.fn(async () => ({ resumed: 0 })),
   }
   let capturedGetAccessToken = null
   const db = {
@@ -154,6 +166,7 @@ function createDeps(overrides = {}) {
     now: overrides.now || (() => FIXED_NOW),
     randomUUID: overrides.randomUUID || (() => 'qid-1'),
     createLeaseOwner: () => 'lease-p10',
+    isOnline: overrides.isOnline || (() => true),
     setTimeoutImpl: timers.setTimeoutImpl,
     clearTimeoutImpl: timers.clearTimeoutImpl,
     onRemoteDone: (payload) => { remoteDone.push(payload) },
@@ -161,6 +174,7 @@ function createDeps(overrides = {}) {
   liveControllers.push(controller)
   return {
     controller,
+    storeApi,
     events,
     putRecords,
     startCalls,
@@ -507,6 +521,103 @@ describe('useDriverReportPhotoUploadQueue', () => {
       reportId: REPORT_ID,
     })
     expect(deps.supabaseClient.from).not.toHaveBeenCalled()
+  })
+
+  test('P11A actor is driver.id and resume is additive', async () => {
+    const deps = createDeps()
+    await deps.controller.boot({ driverId: DRIVER_ID })
+    expect(deps.controller.getActorScopeId()).toBe(DRIVER_ID)
+    expect(deps.storeApi.start).toHaveBeenCalled()
+    expect(deps.storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    const result = await enqueueTab(deps)
+    expect(result.accepted).toHaveLength(1)
+    expect(deps.putRecords[0].actor_scope_id).toBe(DRIVER_ID)
+  })
+
+  test('P11A online listener is registered and removed on cleanup', async () => {
+    const addSpy = jest.spyOn(window, 'addEventListener')
+    const removeSpy = jest.spyOn(window, 'removeEventListener')
+    const deps = createDeps()
+    await deps.controller.boot({ driverId: DRIVER_ID })
+    expect(addSpy).toHaveBeenCalledWith('online', expect.any(Function))
+    await deps.controller.dispose()
+    expect(removeSpy).toHaveBeenCalledWith('online', expect.any(Function))
+    addSpy.mockRestore()
+    removeSpy.mockRestore()
+  })
+
+  test('P11A online event calls guarded resume', async () => {
+    const deps = createDeps()
+    await deps.controller.boot({ driverId: DRIVER_ID })
+    deps.storeApi.resumePausedUploads.mockClear()
+    window.dispatchEvent(new Event('online'))
+    await flushWake()
+    expect(deps.storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+  })
+
+  test('P11A offline boot does not resume', async () => {
+    const deps = createDeps({ isOnline: () => false })
+    await deps.controller.boot({ driverId: DRIVER_ID })
+    expect(deps.storeApi.start).toHaveBeenCalled()
+    expect(deps.storeApi.resumePausedUploads).not.toHaveBeenCalled()
+  })
+
+  test('P11A online boot resumes when credentials are ready', async () => {
+    const deps = createDeps()
+    await deps.controller.boot({ driverId: DRIVER_ID })
+    expect(deps.storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+  })
+
+  test('P11A credential failure leaves paused state and does not reject', async () => {
+    const supabaseClient = createSessionClient({ accessToken: null })
+    supabaseClient.supabaseKey = ''
+    const deps = createDeps({ supabaseClient })
+    await expect(deps.controller.boot({ driverId: DRIVER_ID })).resolves.toBeUndefined()
+    expect(deps.storeApi.resumePausedUploads).not.toHaveBeenCalled()
+  })
+
+  test('P11A resume rejection does not become an unhandled rejection', async () => {
+    const deps = createDeps()
+    deps.storeApi.resumePausedUploads.mockImplementation(async () => {
+      throw new Error('resume failed')
+    })
+    await expect(deps.controller.boot({ driverId: DRIVER_ID })).resolves.toBeUndefined()
+  })
+
+  test('P11A auth-change wake is subscribed and cleaned up', async () => {
+    const deps = createDeps()
+    await deps.controller.boot({ driverId: DRIVER_ID })
+    expect(deps.supabaseClient.auth.onAuthStateChange).toHaveBeenCalled()
+    deps.storeApi.resumePausedUploads.mockClear()
+    const onChange = deps.supabaseClient.auth.onAuthStateChange.mock.calls[0][0]
+    onChange('SIGNED_IN')
+    await flushWake()
+    expect(deps.storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    await deps.controller.dispose()
+    expect(deps.supabaseClient._authUnsubscribe).toHaveBeenCalled()
+  })
+
+  test('P11A old driver actor is not resumed after identity change', async () => {
+    const deps = createDeps()
+    await deps.controller.boot({ driverId: DRIVER_ID })
+    await deps.controller.boot({ driverId: 'driver-id-bbb' })
+    expect(deps.controller.getActorScopeId()).toBe('driver-id-bbb')
+    expect(deps.storeApi.stop).toHaveBeenCalled()
+    deps.storeApi.resumePausedUploads.mockClear()
+    window.dispatchEvent(new Event('online'))
+    await flushWake()
+    expect(deps.storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    expect(deps.controller.getActorScopeId()).not.toBe(DRIVER_ID)
+  })
+
+  test('P11A portal token is not TUS bearer and no token is persisted', async () => {
+    const deps = createDeps()
+    await deps.controller.boot({ driverId: DRIVER_ID })
+    const token = await deps.getAccessToken()()
+    expect(token).toBe(SENTINEL_TOKEN)
+    expect(token).not.toBe(PORTAL_TOKEN)
+    assertNoSecret(deps.storeApi)
+    assertNoSecret(deps.controller.getActorScopeId())
   })
 
   test('hook enqueueFiles uses driver.id and clears timers on unmount', async () => {

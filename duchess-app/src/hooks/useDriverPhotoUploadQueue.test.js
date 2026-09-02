@@ -59,6 +59,7 @@ function createSessionClient({
   supabaseKey = ANON_SENTINEL,
   session = true,
 } = {}) {
+  const unsubscribe = jest.fn()
   return {
     supabaseKey,
     auth: {
@@ -69,6 +70,9 @@ function createSessionClient({
             : null,
         },
       })),
+      onAuthStateChange: jest.fn(() => ({
+        data: { subscription: { unsubscribe } },
+      })),
     },
     storage: {
       from: jest.fn(() => ({
@@ -78,6 +82,13 @@ function createSessionClient({
     from: jest.fn(() => ({
       insert: jest.fn(),
     })),
+    _authUnsubscribe: unsubscribe,
+  }
+}
+
+async function flushWake(times = 40) {
+  for (let i = 0; i < times; i += 1) {
+    await Promise.resolve()
   }
 }
 
@@ -122,6 +133,7 @@ function createDeps(overrides = {}) {
     stop: jest.fn(async () => {
       events.push('stop')
     }),
+    resumePausedUploads: jest.fn(async () => ({ resumed: 0 })),
   }
   let capturedGetAccessToken = null
   let capturedStoreActor = null
@@ -708,5 +720,125 @@ describe('useDriverPhotoUploadQueue hook lifecycle', () => {
     await act(async () => { await Promise.resolve() })
     expect(events.indexOf('stop')).toBeGreaterThan(events.indexOf('start'))
     expect(events.indexOf('close')).toBeGreaterThan(events.indexOf('stop'))
+  })
+})
+
+describe('useDriverPhotoUploadQueue P11A environmental wake', () => {
+  afterEach(async () => {
+    while (liveControllers.length) {
+      const controller = liveControllers.pop()
+      await controller.dispose()
+    }
+  })
+
+  test('authoritative driver actor boot and enqueue remain unchanged while resume is additive', async () => {
+    const { controller, putRecords, storeApi, getCapturedStoreActor } = createDeps()
+    await controller.boot({ driverId: DRIVER_ID })
+    expect(controller.getActorScopeId()).toBe(DRIVER_ID)
+    expect(getCapturedStoreActor()).toEqual({
+      actorScopeType: DRIVER_EVIDENCE_ACTOR_SCOPE_TYPE,
+      actorScopeId: DRIVER_ID,
+    })
+    expect(storeApi.start).toHaveBeenCalled()
+    expect(storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    const result = await controller.enqueueFiles({
+      files: [makeFile('a.jpg', 'image/jpeg')],
+      driverId: DRIVER_ID,
+      jobId: JOB_ID,
+      runType: 'after_del',
+    })
+    expect(result.accepted).toHaveLength(1)
+    expect(putRecords[0].actor_scope_id).toBe(DRIVER_ID)
+  })
+
+  test('online listener is registered and removed on cleanup', async () => {
+    const addSpy = jest.spyOn(window, 'addEventListener')
+    const removeSpy = jest.spyOn(window, 'removeEventListener')
+    const { controller } = createDeps()
+    await controller.boot({ driverId: DRIVER_ID })
+    expect(addSpy).toHaveBeenCalledWith('online', expect.any(Function))
+    await controller.dispose()
+    expect(removeSpy).toHaveBeenCalledWith('online', expect.any(Function))
+    addSpy.mockRestore()
+    removeSpy.mockRestore()
+  })
+
+  test('online event calls guarded resume', async () => {
+    const { controller, storeApi } = createDeps()
+    await controller.boot({ driverId: DRIVER_ID })
+    storeApi.resumePausedUploads.mockClear()
+    window.dispatchEvent(new Event('online'))
+    await flushWake()
+    expect(storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+  })
+
+  test('offline boot does not resume', async () => {
+    const { controller, storeApi } = createDeps({
+      controller: { isOnline: () => false },
+    })
+    await controller.boot({ driverId: DRIVER_ID })
+    expect(storeApi.start).toHaveBeenCalled()
+    expect(storeApi.resumePausedUploads).not.toHaveBeenCalled()
+  })
+
+  test('online boot resumes when credentials are ready', async () => {
+    const { controller, storeApi } = createDeps()
+    await controller.boot({ driverId: DRIVER_ID })
+    expect(storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+  })
+
+  test('credential readiness failure leaves paused state and does not reject', async () => {
+    const { controller, storeApi } = createDeps({
+      supabaseClient: createSessionClient({ session: false, supabaseKey: '' }),
+    })
+    await expect(controller.boot({ driverId: DRIVER_ID })).resolves.toBeUndefined()
+    expect(storeApi.resumePausedUploads).not.toHaveBeenCalled()
+  })
+
+  test('resume rejection does not become an unhandled rejection', async () => {
+    const { controller, storeApi } = createDeps()
+    storeApi.resumePausedUploads.mockImplementation(async () => {
+      throw new Error('resume failed')
+    })
+    await expect(controller.boot({ driverId: DRIVER_ID })).resolves.toBeUndefined()
+  })
+
+  test('auth-change wake is subscribed and cleaned up', async () => {
+    const { controller, storeApi, supabaseClient } = createDeps()
+    await controller.boot({ driverId: DRIVER_ID })
+    expect(supabaseClient.auth.onAuthStateChange).toHaveBeenCalled()
+    storeApi.resumePausedUploads.mockClear()
+    const onChange = supabaseClient.auth.onAuthStateChange.mock.calls[0][0]
+    onChange('SIGNED_IN')
+    await flushWake()
+    expect(storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    await controller.dispose()
+    expect(supabaseClient._authUnsubscribe).toHaveBeenCalled()
+  })
+
+  test('old driver actor is not resumed after identity change', async () => {
+    const { controller, storeApi } = createDeps()
+    await controller.boot({ driverId: DRIVER_ID })
+    expect(controller.getActorScopeId()).toBe(DRIVER_ID)
+    await controller.boot({ driverId: OTHER_DRIVER_ID })
+    expect(controller.getActorScopeId()).toBe(OTHER_DRIVER_ID)
+    expect(storeApi.stop).toHaveBeenCalled()
+    storeApi.resumePausedUploads.mockClear()
+    window.dispatchEvent(new Event('online'))
+    await flushWake()
+    expect(storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    expect(controller.getActorScopeId()).toBe(OTHER_DRIVER_ID)
+    expect(controller.getActorScopeId()).not.toBe(DRIVER_ID)
+  })
+
+  test('portal token is not used as TUS bearer and no token is persisted', async () => {
+    const { controller, storeApi, getCapturedGetAccessToken } = createDeps()
+    await controller.boot({ driverId: DRIVER_ID })
+    const token = await getCapturedGetAccessToken()()
+    expect(token).toBe(BEARER_SENTINEL)
+    expect(token).not.toBe(PORTAL_TOKEN_SENTINEL)
+    assertNoSecret(storeApi, BEARER_SENTINEL)
+    assertNoSecret(storeApi, PORTAL_TOKEN_SENTINEL)
+    assertNoSecret(controller.getActorScopeId(), BEARER_SENTINEL)
   })
 })

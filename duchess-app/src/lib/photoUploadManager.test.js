@@ -958,4 +958,315 @@ describe('photoUploadManager', () => {
     expect(stored.upload_attempt_count).toBe(4)
     expect(stored.db_attempt_count).toBe(3)
   })
+
+  test('future UPLOAD_RETRY_WAIT schedules one wake at next_retry_at and does not execute', async () => {
+    const db = handles.db(createPhotoUploadDb({ dbName }))
+    const clock = createClock(FIXED_NOW)
+    const started = []
+    const dueAt = FIXED_NOW + 5_000
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.UPLOAD_RETRY_WAIT,
+      next_retry_at: dueAt,
+      retry_phase: 'UPLOAD',
+    }))
+    const manager = handles.manager(createPhotoUploadManager(managerOptions({
+      db,
+      clock,
+      executeClaimedRecord: async (record) => {
+        started.push(record.queue_id)
+      },
+    })))
+    await manager.pump()
+    await flushMany()
+    expect(started).toEqual([])
+    expect(manager.getRetryWakeState()).toEqual({ pending: true, wakeAt: dueAt })
+    expect(clock.openTimerCount()).toBe(1)
+    const stored = await db.getRecord({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+    })
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.UPLOAD_RETRY_WAIT)
+    expect(stored.next_retry_at).toBe(dueAt)
+  })
+
+  test('future DB_RETRY_WAIT schedules one wake at next_retry_at and does not execute', async () => {
+    const db = handles.db(createPhotoUploadDb({ dbName }))
+    const clock = createClock(FIXED_NOW)
+    const started = []
+    const dueAt = FIXED_NOW + 8_000
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.DB_RETRY_WAIT,
+      next_retry_at: dueAt,
+      retry_phase: 'DB',
+      remote_public_url: 'https://example.test/photo.jpg',
+    }))
+    const manager = handles.manager(createPhotoUploadManager(managerOptions({
+      db,
+      clock,
+      executeClaimedRecord: async (record) => {
+        started.push(record.queue_id)
+      },
+    })))
+    await manager.pump()
+    await flushMany()
+    expect(started).toEqual([])
+    expect(manager.getRetryWakeState()).toEqual({ pending: true, wakeAt: dueAt })
+    expect(clock.openTimerCount()).toBe(1)
+  })
+
+  test('earliest future deadline across UPLOAD and DB retry wins with one timer', async () => {
+    const db = handles.db(createPhotoUploadDb({ dbName }))
+    const clock = createClock(FIXED_NOW)
+    const started = []
+    const uploadDue = FIXED_NOW + 12_000
+    const dbDue = FIXED_NOW + 4_000
+    await db.putRecord(makeRecord({
+      queue_id: 'q-upload-wait',
+      storage_path: 'job-1/delivery_q-upload-wait.jpg',
+      status: PHOTO_UPLOAD_STATUSES.UPLOAD_RETRY_WAIT,
+      next_retry_at: uploadDue,
+    }))
+    await db.putRecord(makeRecord({
+      queue_id: 'q-db-wait',
+      storage_path: 'job-1/delivery_q-db-wait.jpg',
+      status: PHOTO_UPLOAD_STATUSES.DB_RETRY_WAIT,
+      next_retry_at: dbDue,
+      remote_public_url: 'https://example.test/photo.jpg',
+    }))
+    const manager = handles.manager(createPhotoUploadManager(managerOptions({
+      db,
+      clock,
+      executeClaimedRecord: async (record) => {
+        started.push(record.queue_id)
+      },
+    })))
+    await manager.pump()
+    await flushMany()
+    expect(started).toEqual([])
+    expect(manager.getRetryWakeState()).toEqual({ pending: true, wakeAt: dbDue })
+    expect(clock.openTimerCount()).toBe(1)
+  })
+
+  test('a later deadline does not postpone an earlier retry wake', async () => {
+    const db = handles.db(createPhotoUploadDb({ dbName }))
+    const clock = createClock(FIXED_NOW)
+    const early = FIXED_NOW + 3_000
+    const late = FIXED_NOW + 30_000
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.UPLOAD_RETRY_WAIT,
+      next_retry_at: early,
+    }))
+    const manager = handles.manager(createPhotoUploadManager(managerOptions({
+      db,
+      clock,
+      executeClaimedRecord: async () => {},
+    })))
+    await manager.pump()
+    await flushMany()
+    expect(manager.getRetryWakeState().wakeAt).toBe(early)
+    await db.putRecord(makeRecord({
+      queue_id: 'q-later',
+      storage_path: 'job-1/delivery_q-later.jpg',
+      status: PHOTO_UPLOAD_STATUSES.DB_RETRY_WAIT,
+      next_retry_at: late,
+      remote_public_url: 'https://example.test/photo.jpg',
+    }))
+    await manager.pump()
+    await flushMany()
+    expect(manager.getRetryWakeState()).toEqual({ pending: true, wakeAt: early })
+    expect(clock.openTimerCount()).toBe(1)
+  })
+
+  test('a newly earlier deadline replaces the existing retry wake timer', async () => {
+    const db = handles.db(createPhotoUploadDb({ dbName }))
+    const clock = createClock(FIXED_NOW)
+    const late = FIXED_NOW + 20_000
+    const early = FIXED_NOW + 2_000
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.UPLOAD_RETRY_WAIT,
+      next_retry_at: late,
+    }))
+    const manager = handles.manager(createPhotoUploadManager(managerOptions({
+      db,
+      clock,
+      executeClaimedRecord: async () => {},
+    })))
+    await manager.pump()
+    await flushMany()
+    expect(manager.getRetryWakeState().wakeAt).toBe(late)
+    await db.putRecord(makeRecord({
+      queue_id: 'q-earlier',
+      storage_path: 'job-1/delivery_q-earlier.jpg',
+      status: PHOTO_UPLOAD_STATUSES.DB_RETRY_WAIT,
+      next_retry_at: early,
+      remote_public_url: 'https://example.test/photo.jpg',
+    }))
+    await manager.pump()
+    await flushMany()
+    expect(manager.getRetryWakeState()).toEqual({ pending: true, wakeAt: early })
+    expect(clock.openTimerCount()).toBe(1)
+  })
+
+  test('retry wake timer fires pump, clears ownership first, and re-arms remaining future waits', async () => {
+    const db = handles.db(createPhotoUploadDb({ dbName }))
+    const clock = createClock(FIXED_NOW)
+    const started = []
+    const firstDue = FIXED_NOW + 5_000
+    const secondDue = FIXED_NOW + 20_000
+    await db.putRecord(makeRecord({
+      queue_id: 'q-first',
+      storage_path: 'job-1/delivery_q-first.jpg',
+      status: PHOTO_UPLOAD_STATUSES.UPLOAD_RETRY_WAIT,
+      next_retry_at: firstDue,
+    }))
+    await db.putRecord(makeRecord({
+      queue_id: 'q-second',
+      storage_path: 'job-1/delivery_q-second.jpg',
+      status: PHOTO_UPLOAD_STATUSES.DB_RETRY_WAIT,
+      next_retry_at: secondDue,
+      remote_public_url: 'https://example.test/photo.jpg',
+    }))
+    const manager = handles.manager(createPhotoUploadManager(managerOptions({
+      db,
+      clock,
+      executeClaimedRecord: async (record) => {
+        started.push(record.queue_id)
+      },
+    })))
+    await manager.pump()
+    await flushMany()
+    expect(manager.getRetryWakeState().wakeAt).toBe(firstDue)
+    await clock.advance(5_000)
+    await waitFor(() => started.includes('q-first'))
+    await flushMany(12)
+    expect(started).toEqual(['q-first'])
+    await waitFor(() => manager.getRetryWakeState().wakeAt === secondDue)
+    const second = await db.getRecord({
+      queueId: 'q-second',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+    })
+    expect(second.status).toBe(PHOTO_UPLOAD_STATUSES.DB_RETRY_WAIT)
+    expect(second.next_retry_at).toBe(secondDue)
+  })
+
+  test('due retry processes immediately without scheduling a future timer', async () => {
+    const db = handles.db(createPhotoUploadDb({ dbName }))
+    const clock = createClock(FIXED_NOW)
+    const started = []
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.UPLOAD_RETRY_WAIT,
+      next_retry_at: FIXED_NOW,
+    }))
+    const manager = handles.manager(createPhotoUploadManager(managerOptions({
+      db,
+      clock,
+      executeClaimedRecord: async (record) => {
+        started.push(record.queue_id)
+      },
+    })))
+    await manager.pump()
+    await waitFor(() => started.length === 1)
+    expect(manager.getRetryWakeState()).toEqual({ pending: false, wakeAt: null })
+  })
+
+  test('no retry rows leaves the retry wake timer unscheduled', async () => {
+    const db = handles.db(createPhotoUploadDb({ dbName }))
+    const clock = createClock(FIXED_NOW)
+    const manager = handles.manager(createPhotoUploadManager(managerOptions({
+      db,
+      clock,
+      executeClaimedRecord: async () => {},
+    })))
+    await manager.pump()
+    await flushMany()
+    expect(manager.getRetryWakeState()).toEqual({ pending: false, wakeAt: null })
+    expect(clock.openTimerCount()).toBe(0)
+  })
+
+  test('removing retry-wait state clears an obsolete retry wake timer', async () => {
+    const db = handles.db(createPhotoUploadDb({ dbName }))
+    const clock = createClock(FIXED_NOW)
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.UPLOAD_RETRY_WAIT,
+      next_retry_at: FIXED_NOW + 9_000,
+    }))
+    const manager = handles.manager(createPhotoUploadManager(managerOptions({
+      db,
+      clock,
+      executeClaimedRecord: async () => {},
+    })))
+    await manager.pump()
+    await flushMany()
+    expect(manager.getRetryWakeState().pending).toBe(true)
+    const current = await db.getRecord({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+    })
+    await db.putRecord({
+      ...current,
+      status: PHOTO_UPLOAD_STATUSES.DONE,
+      next_retry_at: null,
+      retry_phase: null,
+      blob: null,
+      completed_at: FIXED_NOW,
+      updated_at: FIXED_NOW,
+    })
+    await manager.pump()
+    await flushMany()
+    expect(manager.getRetryWakeState()).toEqual({ pending: false, wakeAt: null })
+    expect(clock.openTimerCount()).toBe(0)
+  })
+
+  test('stop clears the retry wake timer and a stale fire cannot pump', async () => {
+    const db = handles.db(createPhotoUploadDb({ dbName }))
+    const clock = createClock(FIXED_NOW)
+    const started = []
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.UPLOAD_RETRY_WAIT,
+      next_retry_at: FIXED_NOW + 7_000,
+    }))
+    const manager = handles.manager(createPhotoUploadManager(managerOptions({
+      db,
+      clock,
+      executeClaimedRecord: async (record) => {
+        started.push(record.queue_id)
+      },
+    })))
+    await manager.pump()
+    await flushMany()
+    expect(clock.openTimerCount()).toBe(1)
+    await manager.stop()
+    expect(clock.openTimerCount()).toBe(0)
+    expect(manager.getRetryWakeState()).toEqual({ pending: false, wakeAt: null })
+    await clock.advance(7_000)
+    await flushMany()
+    expect(started).toEqual([])
+  })
+
+  test('future retry wait does not busy-loop pump before the deadline', async () => {
+    const db = handles.db(createPhotoUploadDb({ dbName }))
+    const clock = createClock(FIXED_NOW)
+    const started = []
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.UPLOAD_RETRY_WAIT,
+      next_retry_at: FIXED_NOW + 15_000,
+    }))
+    const manager = handles.manager(createPhotoUploadManager(managerOptions({
+      db,
+      clock,
+      executeClaimedRecord: async (record) => {
+        started.push(record.queue_id)
+      },
+    })))
+    await manager.pump()
+    await manager.pump()
+    await manager.pump()
+    await flushMany()
+    expect(started).toEqual([])
+    expect(clock.openTimerCount()).toBe(1)
+    expect(manager.getRetryWakeState().pending).toBe(true)
+  })
 })

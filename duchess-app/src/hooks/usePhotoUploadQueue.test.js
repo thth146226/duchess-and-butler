@@ -52,6 +52,7 @@ function assertNoToken(value) {
 }
 
 function createSessionClient({ userId = USER_ID, accessToken = SENTINEL_TOKEN } = {}) {
+  const unsubscribe = jest.fn()
   return {
     auth: {
       getSession: jest.fn(async () => ({
@@ -60,6 +61,9 @@ function createSessionClient({ userId = USER_ID, accessToken = SENTINEL_TOKEN } 
             ? { access_token: accessToken, refresh_token: 'refresh-SECRET', user: { id: userId } }
             : null,
         },
+      })),
+      onAuthStateChange: jest.fn(() => ({
+        data: { subscription: { unsubscribe } },
       })),
     },
     storage: {
@@ -70,6 +74,13 @@ function createSessionClient({ userId = USER_ID, accessToken = SENTINEL_TOKEN } 
     from: jest.fn(() => ({
       insert: jest.fn(),
     })),
+    _authUnsubscribe: unsubscribe,
+  }
+}
+
+async function flushWake(times = 40) {
+  for (let i = 0; i < times; i += 1) {
+    await Promise.resolve()
   }
 }
 
@@ -117,6 +128,7 @@ function createDeps(overrides = {}) {
       events.push('stop')
       stopCalls.push(true)
     }),
+    resumePausedUploads: jest.fn(async () => ({ resumed: 0 })),
   }
   let capturedGetAccessToken = null
   const db = {
@@ -826,5 +838,122 @@ describe('usePhotoUploadQueue hook lifecycle', () => {
     pending.status = PHOTO_UPLOAD_STATUSES.DONE
     await timers.flush()
     expect(callbacks).toHaveLength(0)
+  })
+})
+
+describe('usePhotoUploadQueue P11A environmental wake', () => {
+  afterEach(async () => {
+    while (liveControllers.length) {
+      const controller = liveControllers.pop()
+      await controller.dispose()
+    }
+  })
+
+  test('authoritative actor boot and enqueue remain unchanged while resume is additive', async () => {
+    const { controller, putRecords, storeApi } = createDeps()
+    await controller.boot()
+    expect(controller.getActorScopeId()).toBe(USER_ID)
+    expect(controller.getActorScopeId()).not.toBe(DIFFERENT_PROFILE_UUID)
+    expect(storeApi.start).toHaveBeenCalled()
+    expect(storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    const result = await controller.enqueueFiles({
+      files: [makeFile('a.jpg', 'image/jpeg')],
+      jobId: JOB_ID,
+      runType: 'after_del',
+      profile: { id: DIFFERENT_PROFILE_UUID, name: 'Alex' },
+    })
+    expect(result.accepted).toHaveLength(1)
+    expect(putRecords[0].actor_scope_id).toBe(USER_ID)
+    expect(putRecords[0].actor_scope_id).not.toBe(DIFFERENT_PROFILE_UUID)
+  })
+
+  test('online listener is registered and removed on cleanup', async () => {
+    const addSpy = jest.spyOn(window, 'addEventListener')
+    const removeSpy = jest.spyOn(window, 'removeEventListener')
+    const { controller } = createDeps()
+    await controller.boot()
+    expect(addSpy).toHaveBeenCalledWith('online', expect.any(Function))
+    await controller.dispose()
+    expect(removeSpy).toHaveBeenCalledWith('online', expect.any(Function))
+    addSpy.mockRestore()
+    removeSpy.mockRestore()
+  })
+
+  test('online event calls guarded resume', async () => {
+    const { controller, storeApi } = createDeps()
+    await controller.boot()
+    storeApi.resumePausedUploads.mockClear()
+    window.dispatchEvent(new Event('online'))
+    await flushWake()
+    expect(storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+  })
+
+  test('offline boot does not resume', async () => {
+    const { controller, storeApi } = createDeps({
+      controller: { isOnline: () => false },
+    })
+    await controller.boot()
+    expect(storeApi.start).toHaveBeenCalled()
+    expect(storeApi.resumePausedUploads).not.toHaveBeenCalled()
+  })
+
+  test('online boot resumes when credentials are ready', async () => {
+    const { controller, storeApi } = createDeps()
+    await controller.boot()
+    expect(storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+  })
+
+  test('credential readiness failure leaves paused state and does not reject', async () => {
+    const { controller, storeApi } = createDeps({
+      supabaseClient: createSessionClient({ userId: USER_ID, accessToken: null }),
+    })
+    await expect(controller.boot()).resolves.toBeUndefined()
+    expect(storeApi.resumePausedUploads).not.toHaveBeenCalled()
+  })
+
+  test('resume rejection does not become an unhandled rejection', async () => {
+    const { controller, storeApi } = createDeps()
+    storeApi.resumePausedUploads.mockImplementation(async () => {
+      throw new Error('resume failed')
+    })
+    await expect(controller.boot()).resolves.toBeUndefined()
+  })
+
+  test('auth-change wake is subscribed and cleaned up', async () => {
+    const { controller, storeApi, supabaseClient } = createDeps()
+    await controller.boot()
+    expect(supabaseClient.auth.onAuthStateChange).toHaveBeenCalled()
+    storeApi.resumePausedUploads.mockClear()
+    const onChange = supabaseClient.auth.onAuthStateChange.mock.calls[0][0]
+    onChange('SIGNED_IN')
+    await flushWake()
+    expect(storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    await controller.dispose()
+    expect(supabaseClient._authUnsubscribe).toHaveBeenCalled()
+  })
+
+  test('SESSION_USER_ID_CHANGED does not resume the old actor queue', async () => {
+    const { controller, storeApi, supabaseClient } = createDeps()
+    await controller.boot()
+    storeApi.resumePausedUploads.mockClear()
+    supabaseClient.auth.getSession.mockResolvedValue({
+      data: {
+        session: {
+          access_token: SENTINEL_TOKEN,
+          user: { id: 'other-office-user' },
+        },
+      },
+    })
+    window.dispatchEvent(new Event('online'))
+    await flushWake()
+    expect(storeApi.resumePausedUploads).not.toHaveBeenCalled()
+    expect(controller.getActorScopeId()).toBe(USER_ID)
+  })
+
+  test('no token is persisted by boot resume', async () => {
+    const { controller, storeApi } = createDeps()
+    await controller.boot()
+    assertNoToken(storeApi)
+    assertNoToken(controller.getActorScopeId())
   })
 })

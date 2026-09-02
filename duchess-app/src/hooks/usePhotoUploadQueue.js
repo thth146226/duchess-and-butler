@@ -173,6 +173,7 @@ export function createPhotoUploadQueueController(options = {}) {
   const notifiedDone = new Set()
   let pollTimer = null
   let inspectInFlight = false
+  let envWakeCleanup = null
 
   async function resolveActorId() {
     const { userId } = await readSessionUserAndToken(supabaseClient)
@@ -182,6 +183,95 @@ export function createPhotoUploadQueueController(options = {}) {
   async function getAccessToken() {
     const { accessToken } = await readSessionUserAndToken(supabaseClient)
     return accessToken
+  }
+
+  function environmentIsPlausiblyUsable() {
+    try {
+      if (typeof isOnline === 'function' && isOnline() === false) {
+        return false
+      }
+    } catch (_error) {
+      return false
+    }
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return false
+    }
+    return true
+  }
+
+  async function requestResumePausedUploads() {
+    if (stopped) {
+      return
+    }
+    try {
+      if (!environmentIsPlausiblyUsable()) {
+        return
+      }
+      if (!store || typeof store.resumePausedUploads !== 'function') {
+        return
+      }
+      const currentUserId = await resolveActorId()
+      if (!isNonEmptyString(currentUserId) || currentUserId !== actorScopeId) {
+        return
+      }
+      const token = await getAccessToken()
+      if (!isNonEmptyString(token)) {
+        return
+      }
+      await store.resumePausedUploads()
+    } catch (_error) {
+      return
+    }
+  }
+
+  function attachEnvironmentalWake() {
+    if (stopped || envWakeCleanup) {
+      return
+    }
+    const cleanups = []
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      const onOnline = () => {
+        void requestResumePausedUploads()
+      }
+      window.addEventListener('online', onOnline)
+      cleanups.push(() => {
+        if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+          window.removeEventListener('online', onOnline)
+        }
+      })
+    }
+    const auth = supabaseClient && supabaseClient.auth
+    if (auth && typeof auth.onAuthStateChange === 'function') {
+      try {
+        const result = auth.onAuthStateChange(() => {
+          void requestResumePausedUploads()
+        })
+        const subscription = result && result.data ? result.data.subscription : null
+        if (subscription && typeof subscription.unsubscribe === 'function') {
+          cleanups.push(() => {
+            subscription.unsubscribe()
+          })
+        }
+      } catch (_error) {
+        // existing client does not support auth wake
+      }
+    }
+    envWakeCleanup = () => {
+      for (const fn of cleanups) {
+        try {
+          fn()
+        } catch (_cleanupError) {
+          // ignore
+        }
+      }
+      envWakeCleanup = null
+    }
+  }
+
+  function detachEnvironmentalWake() {
+    if (typeof envWakeCleanup === 'function') {
+      envWakeCleanup()
+    }
   }
 
   function ensureDb() {
@@ -349,6 +439,8 @@ export function createPhotoUploadQueueController(options = {}) {
       return
     }
     await startRuntime(userId)
+    attachEnvironmentalWake()
+    await requestResumePausedUploads()
     await seedPendingFromExisting(userId)
     await inspectPending()
   }
@@ -463,6 +555,7 @@ export function createPhotoUploadQueueController(options = {}) {
 
   async function dispose() {
     stopped = true
+    detachEnvironmentalWake()
     cancelObserverTimer()
     pendingObservation.clear()
     if (store && typeof store.stop === 'function') {
