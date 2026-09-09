@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { OFFICE_REPORT_SOURCE_SURFACES, useOfficeReportPhotoUploadQueue } from '../hooks/useOfficeReportPhotoUploadQueue'
+import PhotoUploadQueueStatus from '../components/PhotoUploadQueueStatus'
 
 const STATUS_STYLE = {
   draft:     { bg: '#FEF3C7', color: '#854F0B' },
@@ -85,7 +86,13 @@ export default function Reports() {
     }
   }
 
-  const { enqueueFiles, busy } = useOfficeReportPhotoUploadQueue({
+  const {
+    enqueueFiles,
+    busy,
+    queueRecords,
+    manualUploadRetry,
+    manualDbRetry,
+  } = useOfficeReportPhotoUploadQueue({
     sourceSurface: OFFICE_REPORT_SOURCE_SURFACES.OFFICE_REPORTS,
     reportId: selected?.id || null,
     crmsRef: selected?.crms_ref || '',
@@ -568,6 +575,12 @@ export default function Reports() {
                   onChange={e => { uploadReportPhoto(e.target.files); e.target.value = '' }} />
                 {busy ? 'Queuing…' : '+ Add collection photos'}
               </label>
+              <PhotoUploadQueueStatus
+                records={queueRecords}
+                variant="report"
+                onUploadRetry={manualUploadRetry}
+                onDbRetry={manualDbRetry}
+              />
             </div>
 
             {reportItems.length === 0 && !selected.driver_notes && !selected.client_signature && reportPhotos.length === 0 && (

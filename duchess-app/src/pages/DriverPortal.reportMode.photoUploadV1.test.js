@@ -83,8 +83,11 @@ const mockEnqueueFiles = jest.fn()
 const mockProveReportId = jest.fn()
 const mockMarkAmbiguous = jest.fn()
 const mockDiscardNeverUploadedDrafts = jest.fn()
+const mockManualUploadRetry = jest.fn()
+const mockManualDbRetry = jest.fn()
 const fetchCalls = []
 let capturedQueueOptions = {}
+let mockQueueRecords = []
 
 function londonYmd(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-GB', {
@@ -160,6 +163,8 @@ describe('DriverPortal reportMode photo upload v1', () => {
     mockProveReportId.mockReset()
     mockMarkAmbiguous.mockReset()
     mockDiscardNeverUploadedDrafts.mockReset()
+    mockManualUploadRetry.mockReset()
+    mockManualDbRetry.mockReset()
     mockUpload.mockReset()
     mockInsert.mockReset()
     mockJobReportsInsert.mockReset()
@@ -167,6 +172,7 @@ describe('DriverPortal reportMode photo upload v1', () => {
     insertResult.error = null
     jobReportsControl.hangSingle = false
     capturedQueueOptions = {}
+    mockQueueRecords = []
     fetchCalls.length = 0
     mockEnqueueFiles.mockResolvedValue({ accepted: [], rejected: [] })
     mockProveReportId.mockResolvedValue({ linked: [], failed: [] })
@@ -197,6 +203,9 @@ describe('DriverPortal reportMode photo upload v1', () => {
         discardNeverUploadedDrafts: mockDiscardNeverUploadedDrafts,
         busy: false,
         lastResult: null,
+        queueRecords: mockQueueRecords,
+        manualUploadRetry: mockManualUploadRetry,
+        manualDbRetry: mockManualDbRetry,
       }
     })
   })
@@ -539,6 +548,140 @@ describe('DriverPortal reportMode photo upload v1', () => {
     await act(async () => { back.click() })
     await act(async () => { await Promise.resolve() })
     expect(mockDiscardNeverUploadedDrafts).toHaveBeenCalledTimes(1)
+    act(() => { root.unmount() })
+  })
+})
+
+describe('DriverPortal report mode P11D queue status integration', () => {
+  beforeEach(() => {
+    global.IS_REACT_ACT_ENVIRONMENT = true
+    mockEnqueueFiles.mockReset()
+    mockProveReportId.mockReset()
+    mockMarkAmbiguous.mockReset()
+    mockDiscardNeverUploadedDrafts.mockReset()
+    mockManualUploadRetry.mockReset()
+    mockManualDbRetry.mockReset()
+    mockUpload.mockReset()
+    mockInsert.mockReset()
+    mockJobReportsInsert.mockReset()
+    insertResult.data = { id: 'report-created-1' }
+    insertResult.error = null
+    jobReportsControl.hangSingle = false
+    capturedQueueOptions = {}
+    mockQueueRecords = []
+    fetchCalls.length = 0
+    mockEnqueueFiles.mockResolvedValue({ accepted: [], rejected: [] })
+    mockProveReportId.mockResolvedValue({ linked: [], failed: [] })
+    mockMarkAmbiguous.mockResolvedValue({ updated: [], failed: [] })
+    mockDiscardNeverUploadedDrafts.mockResolvedValue({ ok: true, deleted: [] })
+    global.fetch = jest.fn((...args) => {
+      fetchCalls.push(args)
+      const url = String(args[0] || '')
+      if (url.includes('/api/driver-portal-runs') && (!args[1] || args[1].method !== 'PATCH')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => portalPayload(),
+        })
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) })
+    })
+    useDriverPhotoUploadQueue.mockReturnValue({
+      enqueueFiles: jest.fn(),
+      busy: false,
+      lastResult: null,
+    })
+    useDriverReportPhotoUploadQueue.mockImplementation((options = {}) => {
+      capturedQueueOptions = options
+      return {
+        enqueueFiles: mockEnqueueFiles,
+        proveReportId: mockProveReportId,
+        markReportResultAmbiguous: mockMarkAmbiguous,
+        discardNeverUploadedDrafts: mockDiscardNeverUploadedDrafts,
+        busy: false,
+        lastResult: null,
+        queueRecords: mockQueueRecords,
+        manualUploadRetry: mockManualUploadRetry,
+        manualDbRetry: mockManualDbRetry,
+      }
+    })
+  })
+
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  function makeRecord(status, lastError = null) {
+    return {
+      queue_id: 'q1',
+      status,
+      progress_pct: 0,
+      source_surface: 'driver_report_mode',
+      entity_type: 'report',
+      entity_id: null,
+      provisional_id: 'prov-1',
+      created_at: Date.now(),
+      last_error: lastError,
+    }
+  }
+
+  test('renders DRAFT_QUEUED status from useDriverReportPhotoUploadQueue', async () => {
+    mockQueueRecords = [makeRecord('DRAFT_QUEUED')]
+    const { container, root } = await renderPortal()
+    await openReportMode(container)
+    expect(container.textContent).toContain('Queued')
+    expect(container.querySelector('[data-testid="queue-retry-upload"]')).toBeNull()
+    expect(container.querySelector('[data-testid="queue-retry-db"]')).toBeNull()
+    act(() => { root.unmount() })
+  })
+
+  test('REPORT_LINK_UNKNOWN shows no retry button', async () => {
+    mockQueueRecords = [makeRecord('REPORT_LINK_UNKNOWN')]
+    const { container, root } = await renderPortal()
+    await openReportMode(container)
+    expect(container.textContent).toContain('Waiting for report confirmation')
+    expect(container.querySelector('[data-testid="queue-retry-upload"]')).toBeNull()
+    expect(container.querySelector('[data-testid="queue-retry-db"]')).toBeNull()
+    act(() => { root.unmount() })
+  })
+
+  test('FAILED_UPLOAD shows upload retry button and calls manualUploadRetry', async () => {
+    mockQueueRecords = [makeRecord('FAILED_UPLOAD')]
+    const { container, root } = await renderPortal()
+    await openReportMode(container)
+    const btn = container.querySelector('[data-testid="queue-retry-upload"]')
+    expect(btn).toBeTruthy()
+    await act(async () => { btn.click() })
+    await act(async () => { await Promise.resolve() })
+    expect(mockManualUploadRetry).toHaveBeenCalledWith('q1')
+    act(() => { root.unmount() })
+  })
+
+  test('FAILED_DB shows DB retry button and calls manualDbRetry', async () => {
+    mockQueueRecords = [makeRecord('FAILED_DB')]
+    const { container, root } = await renderPortal()
+    await openReportMode(container)
+    const btn = container.querySelector('[data-testid="queue-retry-db"]')
+    expect(btn).toBeTruthy()
+    await act(async () => { btn.click() })
+    await act(async () => { await Promise.resolve() })
+    expect(mockManualDbRetry).toHaveBeenCalledWith('q1')
+    act(() => { root.unmount() })
+  })
+
+  test('DONE records are not persistently rendered', async () => {
+    mockQueueRecords = [makeRecord('DONE')]
+    const { container, root } = await renderPortal()
+    await openReportMode(container)
+    expect(container.querySelector('[data-testid="photo-upload-queue-status"]')).toBeNull()
+    act(() => { root.unmount() })
+  })
+
+  test('raw error is not exposed in status UI', async () => {
+    mockQueueRecords = [makeRecord('FAILED_UPLOAD', { code: 'HTTP_500', message: 'secret-leak' })]
+    const { container, root } = await renderPortal()
+    await openReportMode(container)
+    expect(container.textContent).not.toContain('secret-leak')
+    expect(container.textContent).not.toContain('HTTP_500')
     act(() => { root.unmount() })
   })
 })

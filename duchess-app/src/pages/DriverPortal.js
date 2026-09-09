@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useDriverPhotoUploadQueue } from '../hooks/useDriverPhotoUploadQueue'
 import { DRIVER_REPORT_SOURCE_SURFACES, useDriverReportPhotoUploadQueue } from '../hooks/useDriverReportPhotoUploadQueue'
+import PhotoUploadQueueStatus from '../components/PhotoUploadQueueStatus'
 
 const supabase = createClient(
   'https://ecosxamjvxveawaeluma.supabase.co',
@@ -163,7 +164,13 @@ export default function DriverPortal({ token }) {
     }
   }
 
-  const { enqueueFiles, busy } = useDriverPhotoUploadQueue({
+  const {
+    enqueueFiles,
+    busy,
+    queueRecords: evidenceQueueRecords,
+    manualUploadRetry: evidenceManualUploadRetry,
+    manualDbRetry: evidenceManualDbRetry,
+  } = useDriverPhotoUploadQueue({
     driverId: driver?.id || null,
     jobId: selectedJob?.id || null,
     jobTable: 'crms_jobs',
@@ -205,6 +212,9 @@ export default function DriverPortal({ token }) {
     markReportResultAmbiguous,
     discardNeverUploadedDrafts,
     busy: reportModeBusy,
+    queueRecords: reportModeQueueRecords,
+    manualUploadRetry: reportModeManualUploadRetry,
+    manualDbRetry: reportModeManualDbRetry,
   } = useDriverReportPhotoUploadQueue({
     sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_MODE,
     driverId: driver?.id || null,
@@ -497,6 +507,13 @@ export default function DriverPortal({ token }) {
               {reportModeBusy ? 'Queuing…' : '📷 Add collection photo'}
             </label>
           </div>
+
+          <PhotoUploadQueueStatus
+            records={reportModeQueueRecords}
+            variant="report"
+            onUploadRetry={reportModeManualUploadRetry}
+            onDbRetry={reportModeManualDbRetry}
+          />
 
           {/* Submit */}
           <button onClick={submitReport} disabled={savingReport}
@@ -803,6 +820,12 @@ export default function DriverPortal({ token }) {
                     {queueError && (
                       <div style={{ marginTop: '8px', fontSize: '12px', color: '#A32D2D' }}>{queueError}</div>
                     )}
+                    <PhotoUploadQueueStatus
+                      records={evidenceQueueRecords}
+                      variant="evidence"
+                      onUploadRetry={evidenceManualUploadRetry}
+                      onDbRetry={evidenceManualDbRetry}
+                    />
                   </div>
 
                   {photos.length === 0 ? (
@@ -990,7 +1013,13 @@ export function DriverReportTab({ job, driver, supabase }) {
     }
   }
 
-  const { enqueueFiles, busy: reportTabBusy } = useDriverReportPhotoUploadQueue({
+  const {
+    enqueueFiles,
+    busy: reportTabBusy,
+    queueRecords: reportTabQueueRecords,
+    manualUploadRetry: reportTabManualUploadRetry,
+    manualDbRetry: reportTabManualDbRetry,
+  } = useDriverReportPhotoUploadQueue({
     sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_TAB,
     driverId: driver?.id || null,
     reportId: report?.id || null,
@@ -1157,6 +1186,12 @@ export function DriverReportTab({ job, driver, supabase }) {
         {reportTabBusy ? 'Queuing…' : '+ Add photo'}
       </label>
       {toast && <div style={{ marginTop: '10px', background: '#1C1C1E', color: '#fff', padding: '10px 14px', borderRadius: '6px', fontSize: '12px', textAlign: 'center' }}>{toast.msg}</div>}
+      <PhotoUploadQueueStatus
+        records={reportTabQueueRecords}
+        variant="report"
+        onUploadRetry={reportTabManualUploadRetry}
+        onDbRetry={reportTabManualDbRetry}
+      />
     </div>
   )
 

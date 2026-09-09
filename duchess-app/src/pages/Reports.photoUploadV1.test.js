@@ -16,6 +16,7 @@ const mockJobReportsInsert = jest.fn()
 const galleryFetch = { count: 0 }
 const refreshProbe = { readToast: null, toastVisibleDuringRefresh: null }
 let capturedQueueOptions = {}
+let mockQueueRecords = []
 
 jest.mock('../lib/supabase', () => {
   const report = {
@@ -78,6 +79,8 @@ jest.mock('../lib/supabase', () => {
 })
 
 const mockEnqueueFiles = jest.fn()
+const mockManualUploadRetry = jest.fn()
+const mockManualDbRetry = jest.fn()
 
 async function renderReports() {
   const container = document.createElement('div')
@@ -108,14 +111,24 @@ describe('Reports photo upload v1', () => {
     mockInsert.mockReset()
     mockJobReportsInsert.mockReset()
     mockEnqueueFiles.mockReset()
+    mockManualUploadRetry.mockReset()
+    mockManualDbRetry.mockReset()
     galleryFetch.count = 0
     refreshProbe.readToast = null
     refreshProbe.toastVisibleDuringRefresh = null
     capturedQueueOptions = {}
+    mockQueueRecords = []
     mockEnqueueFiles.mockResolvedValue({ accepted: [], rejected: [] })
     useOfficeReportPhotoUploadQueue.mockImplementation((options) => {
       capturedQueueOptions = options
-      return { enqueueFiles: mockEnqueueFiles, busy: false, lastResult: null }
+      return {
+        enqueueFiles: mockEnqueueFiles,
+        busy: false,
+        lastResult: null,
+        queueRecords: mockQueueRecords,
+        manualUploadRetry: mockManualUploadRetry,
+        manualDbRetry: mockManualDbRetry,
+      }
     })
   })
 
@@ -279,6 +292,152 @@ describe('Reports photo upload v1', () => {
     const { container, root } = await renderReports()
     expect(container.textContent).toContain('1 report')
     expect(container.textContent).toContain('Pat')
+    act(() => { root.unmount() })
+  })
+})
+
+describe('Reports office reports P11D queue status integration', () => {
+  beforeEach(() => {
+    global.IS_REACT_ACT_ENVIRONMENT = true
+    mockUpload.mockReset()
+    mockInsert.mockReset()
+    mockJobReportsInsert.mockReset()
+    mockEnqueueFiles.mockReset()
+    mockManualUploadRetry.mockReset()
+    mockManualDbRetry.mockReset()
+    galleryFetch.count = 0
+    refreshProbe.readToast = null
+    refreshProbe.toastVisibleDuringRefresh = null
+    capturedQueueOptions = {}
+    mockQueueRecords = []
+    mockEnqueueFiles.mockResolvedValue({ accepted: [], rejected: [] })
+    useOfficeReportPhotoUploadQueue.mockImplementation((options) => {
+      capturedQueueOptions = options
+      return {
+        enqueueFiles: mockEnqueueFiles,
+        busy: false,
+        lastResult: null,
+        queueRecords: mockQueueRecords,
+        manualUploadRetry: mockManualUploadRetry,
+        manualDbRetry: mockManualDbRetry,
+      }
+    })
+  })
+
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  test('renders QUEUED status from useOfficeReportPhotoUploadQueue', async () => {
+    mockQueueRecords = [
+      {
+        queue_id: 'q1',
+        status: 'QUEUED',
+        progress_pct: 0,
+        source_surface: 'office_reports',
+        entity_type: 'report',
+        entity_id: 'report-44',
+        provisional_id: null,
+        created_at: Date.now(),
+        last_error: null,
+      },
+    ]
+    const { container, root } = await renderReports()
+    await openFirstReport(container)
+    expect(container.textContent).toContain('Queued')
+    expect(container.querySelector('[data-testid="queue-retry-upload"]')).not.toBeTruthy()
+    expect(container.querySelector('[data-testid="queue-retry-db"]')).not.toBeTruthy()
+    act(() => { root.unmount() })
+  })
+
+  test('FAILED_UPLOAD shows upload retry button and calls manualUploadRetry', async () => {
+    mockQueueRecords = [
+      {
+        queue_id: 'q1',
+        status: 'FAILED_UPLOAD',
+        progress_pct: 0,
+        source_surface: 'office_reports',
+        entity_type: 'report',
+        entity_id: 'report-44',
+        provisional_id: null,
+        created_at: Date.now(),
+        last_error: null,
+      },
+    ]
+    const { container, root } = await renderReports()
+    await openFirstReport(container)
+    const retryButton = container.querySelector('[data-testid="queue-retry-upload"]')
+    expect(retryButton).toBeTruthy()
+    await act(async () => {
+      retryButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(mockManualUploadRetry).toHaveBeenCalledWith('q1')
+    act(() => { root.unmount() })
+  })
+
+  test('FAILED_DB shows DB retry button and calls manualDbRetry', async () => {
+    mockQueueRecords = [
+      {
+        queue_id: 'q1',
+        status: 'FAILED_DB',
+        progress_pct: 0,
+        source_surface: 'office_reports',
+        entity_type: 'report',
+        entity_id: 'report-44',
+        provisional_id: null,
+        created_at: Date.now(),
+        last_error: null,
+      },
+    ]
+    const { container, root } = await renderReports()
+    await openFirstReport(container)
+    const retryButton = container.querySelector('[data-testid="queue-retry-db"]')
+    expect(retryButton).toBeTruthy()
+    await act(async () => {
+      retryButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(mockManualDbRetry).toHaveBeenCalledWith('q1')
+    act(() => { root.unmount() })
+  })
+
+  test('DONE records are not persistently rendered', async () => {
+    mockQueueRecords = [
+      {
+        queue_id: 'q1',
+        status: 'DONE',
+        progress_pct: 100,
+        source_surface: 'office_reports',
+        entity_type: 'report',
+        entity_id: 'report-44',
+        provisional_id: null,
+        created_at: Date.now(),
+        last_error: null,
+      },
+    ]
+    const { container, root } = await renderReports()
+    await openFirstReport(container)
+    expect(container.querySelector('[data-testid="photo-upload-queue-status"]')).not.toBeTruthy()
+    act(() => { root.unmount() })
+  })
+
+  test('raw error is not exposed in status UI', async () => {
+    mockQueueRecords = [
+      {
+        queue_id: 'q1',
+        status: 'FAILED_UPLOAD',
+        progress_pct: 0,
+        source_surface: 'office_reports',
+        entity_type: 'report',
+        entity_id: 'report-44',
+        provisional_id: null,
+        created_at: Date.now(),
+        last_error: { code: 'HTTP_500', message: 'secret-leak' },
+      },
+    ]
+    const { container, root } = await renderReports()
+    await openFirstReport(container)
+    expect(container.textContent).not.toContain('secret-leak')
+    expect(container.textContent).not.toContain('HTTP_500')
     act(() => { root.unmount() })
   })
 })

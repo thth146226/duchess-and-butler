@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase as applicationSupabase } from '../lib/supabase'
 import { PHOTO_UPLOAD_EVENTS, PHOTO_UPLOAD_STATUSES, transitionPhotoUpload } from '../lib/photoUploadDomain'
 import { PHOTO_UPLOAD_RECORD_SCHEMA_VERSION, createPhotoUploadDb } from '../lib/photoUploadDb'
@@ -36,6 +36,8 @@ export const DRIVER_REPORT_QUEUE_ERROR_CODES = Object.freeze({
 })
 
 export const DRIVER_REPORT_DONE_OBSERVER_POLL_MS = 1000
+
+const EMPTY_QUEUE_RECORDS = []
 
 const VALID_SOURCE_SURFACES = new Set(Object.values(DRIVER_REPORT_SOURCE_SURFACES))
 const LINKABLE_STATUSES = new Set([
@@ -956,6 +958,51 @@ export function createDriverReportPhotoUploadQueueController(options = {}) {
     return store.manualDbRetry({ queueId })
   }
 
+  async function getQueueSnapshot({ sourceSurface, entityType, entityId, provisionalId } = {}) {
+    if (!isNonEmptyString(actorScopeId)) {
+      return { records: EMPTY_QUEUE_RECORDS }
+    }
+    if (!db || typeof db.listRecordsForActor !== 'function') {
+      return { records: EMPTY_QUEUE_RECORDS }
+    }
+    let records
+    try {
+      records = await db.listRecordsForActor({
+        actorScopeType: DRIVER_REPORT_ACTOR_SCOPE_TYPE,
+        actorScopeId,
+      })
+    } catch (_error) {
+      return { records: EMPTY_QUEUE_RECORDS }
+    }
+    const filtered = (Array.isArray(records) ? records : []).filter((record) => (
+      record
+      && record.actor_scope_type === DRIVER_REPORT_ACTOR_SCOPE_TYPE
+      && record.actor_scope_id === actorScopeId
+      && record.status !== PHOTO_UPLOAD_STATUSES.DONE
+      && record.status !== PHOTO_UPLOAD_STATUSES.DISCARD_PENDING
+      && (!isNonEmptyString(sourceSurface) || record.source_surface === sourceSurface)
+      && (!isNonEmptyString(entityType) || record.entity_type === entityType)
+      && (!isNonEmptyString(entityId) || record.entity_id === entityId)
+      && (!isNonEmptyString(provisionalId) || record.provisional_id === provisionalId)
+    ))
+    return {
+      records: filtered.length > 0
+        ? filtered.map((record) => ({
+          queue_id: record.queue_id,
+          status: record.status,
+          progress_pct: record.status === PHOTO_UPLOAD_STATUSES.UPLOADING
+            ? (record.bytes_total > 0 ? Math.round((record.bytes_uploaded / record.bytes_total) * 100) : 0)
+            : 0,
+          source_surface: record.source_surface,
+          entity_type: record.entity_type,
+          entity_id: record.entity_id,
+          provisional_id: record.provisional_id,
+          created_at: record.created_at,
+        }))
+        : EMPTY_QUEUE_RECORDS,
+    }
+  }
+
   return {
     boot,
     enqueueFiles,
@@ -964,6 +1011,7 @@ export function createDriverReportPhotoUploadQueueController(options = {}) {
     discardNeverUploadedDrafts,
     manualUploadRetry,
     manualDbRetry,
+    getQueueSnapshot,
     dispose,
     inspectPending,
     getAccessToken,
@@ -996,16 +1044,34 @@ export function useDriverReportPhotoUploadQueue({
   clearTimeoutImpl,
 } = {}) {
   const controllerRef = useRef(null)
+  const bootPromiseRef = useRef(null)
+  const prevDriverIdRef = useRef(null)
   const onRemoteDoneRef = useRef(onRemoteDone)
   onRemoteDoneRef.current = onRemoteDone
   const [busy, setBusy] = useState(false)
   const [lastResult, setLastResult] = useState(null)
+  const [queueRecords, setQueueRecords] = useState(EMPTY_QUEUE_RECORDS)
+
+  const snapshotFilter = useMemo(() => ({
+    sourceSurface,
+    entityType: DRIVER_REPORT_ENTITY_TYPE,
+    entityId: reportId,
+    provisionalId,
+  }), [sourceSurface, reportId, provisionalId])
 
   useEffect(() => {
     if (!isNonEmptyString(driverId)) {
       controllerRef.current = null
-      return undefined
+      bootPromiseRef.current = null
+      prevDriverIdRef.current = null
+      return () => {
+        setQueueRecords(EMPTY_QUEUE_RECORDS)
+      }
     }
+    if (prevDriverIdRef.current !== driverId) {
+      setQueueRecords(EMPTY_QUEUE_RECORDS)
+    }
+    prevDriverIdRef.current = driverId
     const controller = createDriverReportPhotoUploadQueueController({
       sourceSurface,
       supabaseClient,
@@ -1026,10 +1092,11 @@ export function useDriverReportPhotoUploadQueue({
       },
     })
     controllerRef.current = controller
-    void controller.boot({ driverId }).catch(() => {})
+    bootPromiseRef.current = controller.boot({ driverId }).catch(() => {})
     return () => {
       void controller.dispose()
       controllerRef.current = null
+      bootPromiseRef.current = null
     }
   }, [
     driverId,
@@ -1046,6 +1113,48 @@ export function useDriverReportPhotoUploadQueue({
     setTimeoutImpl,
     clearTimeoutImpl,
   ])
+
+  useEffect(() => {
+    let cancelled = false
+    let timer = null
+    async function tick() {
+      if (cancelled) return
+      const controller = controllerRef.current
+      if (controller && typeof controller.getQueueSnapshot === 'function') {
+        const snapshot = await controller.getQueueSnapshot(snapshotFilter)
+        if (!cancelled) {
+          setQueueRecords(snapshot.records || EMPTY_QUEUE_RECORDS)
+        }
+      }
+      if (!cancelled) {
+        timer = setTimeout(tick, 1000)
+      }
+    }
+    async function start() {
+      const bootPromise = bootPromiseRef.current
+      if (!bootPromise) return
+      try {
+        await bootPromise
+      } catch (_error) {
+        return
+      }
+      if (cancelled) return
+      tick()
+    }
+    start()
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+      setQueueRecords(EMPTY_QUEUE_RECORDS)
+    }
+  }, [snapshotFilter, driverId])
+
+  const refreshSnapshot = useCallback(async () => {
+    const controller = controllerRef.current
+    if (!controller || typeof controller.getQueueSnapshot !== 'function') return
+    const snapshot = await controller.getQueueSnapshot(snapshotFilter)
+    setQueueRecords(snapshot.records || EMPTY_QUEUE_RECORDS)
+  }, [snapshotFilter])
 
   const enqueueFiles = useCallback(async (files) => {
     const controller = controllerRef.current
@@ -1072,34 +1181,39 @@ export function useDriverReportPhotoUploadQueue({
         driverName,
       })
       setLastResult(result)
+      await refreshSnapshot()
       return result
     } finally {
       setBusy(false)
     }
-  }, [driverId, reportId, provisionalId, crmsRef, eventName, driverName])
+  }, [driverId, reportId, provisionalId, crmsRef, eventName, driverName, refreshSnapshot])
 
   const proveReportId = useCallback(async (nextReportId) => {
     const controller = controllerRef.current
     if (!controller) {
       return { linked: [], failed: [], code: DRIVER_REPORT_QUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE }
     }
-    return controller.proveReportId({
+    const result = await controller.proveReportId({
       driverId,
       provisionalId,
       reportId: nextReportId,
     })
-  }, [driverId, provisionalId])
+    await refreshSnapshot()
+    return result
+  }, [driverId, provisionalId, refreshSnapshot])
 
   const markReportResultAmbiguous = useCallback(async () => {
     const controller = controllerRef.current
     if (!controller) {
       return { updated: [], failed: [], code: DRIVER_REPORT_QUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE }
     }
-    return controller.markReportResultAmbiguous({
+    const result = await controller.markReportResultAmbiguous({
       driverId,
       provisionalId,
     })
-  }, [driverId, provisionalId])
+    await refreshSnapshot()
+    return result
+  }, [driverId, provisionalId, refreshSnapshot])
 
   const discardNeverUploadedDrafts = useCallback(async ({ provisionalId: nextProvisionalId } = {}) => {
     if (!isNonEmptyString(driverId)) {
@@ -1117,10 +1231,12 @@ export function useDriverReportPhotoUploadQueue({
         code: DRIVER_REPORT_QUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE,
       }
     }
-    return controller.discardNeverUploadedDrafts({
+    const result = await controller.discardNeverUploadedDrafts({
       provisionalId: nextProvisionalId,
     })
-  }, [driverId])
+    await refreshSnapshot()
+    return result
+  }, [driverId, refreshSnapshot])
 
   const manualUploadRetry = useCallback(async (queueId) => {
     const controller = controllerRef.current
@@ -1130,8 +1246,10 @@ export function useDriverReportPhotoUploadQueue({
         code: DRIVER_REPORT_QUEUE_ERROR_CODES.DRIVER_ID_REQUIRED,
       }
     }
-    return controller.manualUploadRetry({ queueId })
-  }, [])
+    const result = await controller.manualUploadRetry({ queueId })
+    await refreshSnapshot()
+    return result
+  }, [refreshSnapshot])
 
   const manualDbRetry = useCallback(async (queueId) => {
     const controller = controllerRef.current
@@ -1141,8 +1259,10 @@ export function useDriverReportPhotoUploadQueue({
         code: DRIVER_REPORT_QUEUE_ERROR_CODES.DRIVER_ID_REQUIRED,
       }
     }
-    return controller.manualDbRetry({ queueId })
-  }, [])
+    const result = await controller.manualDbRetry({ queueId })
+    await refreshSnapshot()
+    return result
+  }, [refreshSnapshot])
 
   return {
     enqueueFiles,
@@ -1151,6 +1271,7 @@ export function useDriverReportPhotoUploadQueue({
     discardNeverUploadedDrafts,
     manualUploadRetry,
     manualDbRetry,
+    queueRecords,
     busy,
     lastResult,
   }

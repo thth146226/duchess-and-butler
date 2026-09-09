@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { usePhotoUploadQueue } from '../hooks/usePhotoUploadQueue'
+import PhotoUploadQueueStatus from './PhotoUploadQueueStatus'
 
 const RUN_TYPES = [
   { value: 'after_del', label: 'After DEL', bg: '#FCEBEB', color: '#A32D2D', border: '#FCA5A5' },
@@ -38,7 +39,13 @@ export default function EvidenceUpload({ jobId, jobTable = 'crms_jobs', crmsRef,
     }
   }
 
-  const { enqueueFiles, busy } = usePhotoUploadQueue({
+  const {
+    enqueueFiles,
+    busy,
+    queueRecords,
+    manualUploadRetry,
+    manualDbRetry,
+  } = usePhotoUploadQueue({
     jobId,
     jobTable,
     crmsRef,
@@ -157,6 +164,12 @@ export default function EvidenceUpload({ jobId, jobTable = 'crms_jobs', crmsRef,
         {queueError && (
           <div style={{ marginTop: '8px', fontSize: '12px', color: '#A32D2D' }}>{queueError}</div>
         )}
+        <PhotoUploadQueueStatus
+          records={queueRecords}
+          variant="evidence"
+          onUploadRetry={manualUploadRetry}
+          onDbRetry={manualDbRetry}
+        />
       </div>
 
       {/* Uploaded photos grouped by type */}

@@ -35,7 +35,10 @@ jest.mock('../lib/supabase', () => {
 
 const { mockUpload, mockInsert } = jest.requireMock('../lib/supabase')
 const mockEnqueueFiles = jest.fn()
+const mockManualUploadRetry = jest.fn()
+const mockManualDbRetry = jest.fn()
 let capturedQueueOptions = {}
+let mockQueueRecords = []
 let galleryFetchCount = 0
 
 function renderComponent(props = {}) {
@@ -60,14 +63,20 @@ describe('EvidenceUpload photo upload v1', () => {
   beforeEach(() => {
     global.IS_REACT_ACT_ENVIRONMENT = true
     mockEnqueueFiles.mockReset()
+    mockManualUploadRetry.mockReset()
+    mockManualDbRetry.mockReset()
     mockUpload.mockReset()
     mockInsert.mockReset()
     capturedQueueOptions = {}
+    mockQueueRecords = []
     galleryFetchCount = 0
     usePhotoUploadQueue.mockImplementation((options = {}) => {
       capturedQueueOptions = options
       return {
         enqueueFiles: mockEnqueueFiles,
+        queueRecords: mockQueueRecords,
+        manualUploadRetry: mockManualUploadRetry,
+        manualDbRetry: mockManualDbRetry,
         busy: false,
         lastResult: null,
       }
@@ -277,6 +286,123 @@ describe('EvidenceUpload photo upload v1', () => {
     expect(galleryFetchCount).toBe(afterMount + 1)
     expect(mockUpload).not.toHaveBeenCalled()
     expect(mockInsert).not.toHaveBeenCalled()
+    act(() => { root.unmount() })
+  })
+})
+
+describe('EvidenceUpload P11D queue status integration', () => {
+  beforeEach(() => {
+    global.IS_REACT_ACT_ENVIRONMENT = true
+    mockEnqueueFiles.mockReset()
+    mockManualUploadRetry.mockReset()
+    mockManualDbRetry.mockReset()
+    mockUpload.mockReset()
+    mockInsert.mockReset()
+    capturedQueueOptions = {}
+    mockQueueRecords = []
+    galleryFetchCount = 0
+    usePhotoUploadQueue.mockImplementation((options = {}) => {
+      capturedQueueOptions = options
+      return {
+        enqueueFiles: mockEnqueueFiles,
+        queueRecords: mockQueueRecords,
+        manualUploadRetry: mockManualUploadRetry,
+        manualDbRetry: mockManualDbRetry,
+        busy: false,
+        lastResult: null,
+      }
+    })
+    const chain = {
+      select: jest.fn(() => chain),
+      eq: jest.fn(() => chain),
+      order: jest.fn(() => {
+        galleryFetchCount += 1
+        return Promise.resolve({ data: [] })
+      }),
+      insert: mockInsert,
+      delete: jest.fn(() => chain),
+    }
+    if (jest.isMockFunction(supabase.from)) {
+      supabase.from.mockReturnValue(chain)
+    } else {
+      jest.spyOn(supabase, 'from').mockReturnValue(chain)
+    }
+  })
+
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  function makeRecord({ queueId, status, extra = {} }) {
+    return {
+      queue_id: queueId,
+      status,
+      progress_pct: 0,
+      source_surface: 'office_evidence',
+      entity_type: 'job',
+      entity_id: 'job-77',
+      provisional_id: null,
+      created_at: Date.now(),
+      last_error: { code: 'HTTP_500', message: 'secret-leak' },
+      ...extra,
+    }
+  }
+
+  test('renders QUEUED status from usePhotoUploadQueue', () => {
+    mockQueueRecords = [makeRecord({ queueId: 'q1', status: 'QUEUED' })]
+    const { container, root } = renderComponent()
+    expect(container.textContent).toContain('Queued')
+    expect(container.querySelector('[data-testid="photo-upload-queue-status"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="queue-retry-upload"]')).toBeFalsy()
+    expect(container.querySelector('[data-testid="queue-retry-db"]')).toBeFalsy()
+    act(() => { root.unmount() })
+  })
+
+  test('FAILED_UPLOAD shows upload retry button and calls manualUploadRetry', async () => {
+    mockQueueRecords = [makeRecord({ queueId: 'q1', status: 'FAILED_UPLOAD' })]
+    const { container, root } = renderComponent()
+    expect(container.textContent).toContain('Upload failed')
+    const retryButton = container.querySelector('[data-testid="queue-retry-upload"]')
+    expect(retryButton).toBeTruthy()
+    await act(async () => { retryButton.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(mockManualUploadRetry).toHaveBeenCalledWith('q1')
+    expect(mockManualDbRetry).not.toHaveBeenCalled()
+    act(() => { root.unmount() })
+  })
+
+  test('FAILED_DB shows DB retry button and calls manualDbRetry', async () => {
+    mockQueueRecords = [makeRecord({ queueId: 'q1', status: 'FAILED_DB' })]
+    const { container, root } = renderComponent()
+    expect(container.textContent).toContain('Photo uploaded, but saving failed')
+    const retryButton = container.querySelector('[data-testid="queue-retry-db"]')
+    expect(retryButton).toBeTruthy()
+    await act(async () => { retryButton.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(mockManualDbRetry).toHaveBeenCalledWith('q1')
+    expect(mockManualUploadRetry).not.toHaveBeenCalled()
+    act(() => { root.unmount() })
+  })
+
+  test('REPORT_LINK_UNKNOWN shows no retry button', () => {
+    mockQueueRecords = [makeRecord({ queueId: 'q1', status: 'REPORT_LINK_UNKNOWN' })]
+    const { container, root } = renderComponent()
+    expect(container.textContent).toContain('Waiting for report confirmation')
+    expect(container.querySelector('[data-testid="queue-retry-upload"]')).toBeFalsy()
+    expect(container.querySelector('[data-testid="queue-retry-db"]')).toBeFalsy()
+    act(() => { root.unmount() })
+  })
+
+  test('DONE records are not persistently rendered', () => {
+    mockQueueRecords = [makeRecord({ queueId: 'q1', status: 'DONE' })]
+    const { container, root } = renderComponent()
+    expect(container.querySelector('[data-testid="photo-upload-queue-status"]')).toBeFalsy()
+    act(() => { root.unmount() })
+  })
+
+  test('raw error is not exposed in status UI', () => {
+    mockQueueRecords = [makeRecord({ queueId: 'q1', status: 'FAILED_UPLOAD' })]
+    const { container, root } = renderComponent()
+    expect(container.textContent).not.toContain('secret-leak')
+    expect(container.textContent).not.toContain('HTTP_500')
     act(() => { root.unmount() })
   })
 })

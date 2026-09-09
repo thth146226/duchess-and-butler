@@ -695,3 +695,313 @@ describe('useOfficeReportPhotoUploadQueue P11B manual retry', () => {
     container.remove()
   })
 })
+
+describe('useOfficeReportPhotoUploadQueue P11D observation', () => {
+  beforeEach(() => {
+    global.IS_REACT_ACT_ENVIRONMENT = true
+  })
+
+  async function flushMicrotasks(n = 5) {
+    for (let i = 0; i < n; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await Promise.resolve()
+    }
+  }
+
+  async function waitForPolling(ms = 1100) {
+    await act(async () => { await new Promise((r) => { setTimeout(r, ms) }) })
+  }
+
+  function createRecord({
+    queueId,
+    status,
+    actorScopeId = USER_ID,
+    entityId = REPORT_ID,
+    sourceSurface = OFFICE_REPORT_SOURCE_SURFACES.OFFICE_REPORTS,
+    extra = {},
+  }) {
+    return {
+      queue_id: queueId,
+      status,
+      actor_scope_type: OFFICE_REPORT_ACTOR_SCOPE_TYPE,
+      actor_scope_id: actorScopeId,
+      source_surface: sourceSurface,
+      entity_type: OFFICE_REPORT_ENTITY_TYPE,
+      entity_id: entityId,
+      provisional_id: null,
+      bytes_uploaded: 50,
+      bytes_total: 100,
+      blob: new Blob(['x']),
+      tus_upload_url: 'https://tus.example.com/secret',
+      remote_public_url: 'https://storage.example.com/photo.jpg',
+      metadata_payload: { secret: 'x' },
+      last_error: { code: 'HTTP_500', message: 'leak' },
+      created_at: FIXED_NOW,
+      ...extra,
+    }
+  }
+
+  test('queueRecords filters actor, source surface, and entity', async () => {
+    const recordsById = new Map()
+    recordsById.set('q-current', createRecord({ queueId: 'q-current', status: PHOTO_UPLOAD_STATUSES.QUEUED }))
+    recordsById.set('q-wrong-actor', createRecord({ queueId: 'q-wrong-actor', status: PHOTO_UPLOAD_STATUSES.QUEUED, actorScopeId: 'other-user' }))
+    recordsById.set('q-wrong-entity', createRecord({ queueId: 'q-wrong-entity', status: PHOTO_UPLOAD_STATUSES.QUEUED, entityId: 'report-99' }))
+    recordsById.set('q-wrong-source', createRecord({ queueId: 'q-wrong-source', status: PHOTO_UPLOAD_STATUSES.QUEUED, sourceSurface: 'other_surface' }))
+    recordsById.set('q-done', createRecord({ queueId: 'q-done', status: PHOTO_UPLOAD_STATUSES.DONE }))
+    let listCallCount = 0
+    const db = {
+      putRecord: jest.fn(),
+      getRecord: jest.fn(async () => null),
+      listRecordsForActor: jest.fn(async () => {
+        listCallCount += 1
+        return Array.from(recordsById.values())
+      }),
+      close: jest.fn(),
+    }
+    const supabaseClient = createSessionClient()
+    const createDb = () => db
+    const createTransport = () => ({ startUpload: jest.fn() })
+    const createReconciler = () => ({})
+    const createStore = () => ({ start: jest.fn(), stop: jest.fn(async () => {}), resumePausedUploads: jest.fn(async () => ({ resumed: 0 })) })
+    const apiRef = { current: null }
+    function Probe() {
+      apiRef.current = useOfficeReportPhotoUploadQueue({
+        sourceSurface: OFFICE_REPORT_SOURCE_SURFACES.OFFICE_REPORTS,
+        reportId: REPORT_ID,
+        crmsRef: 'CRMS-9',
+        eventName: 'Gala',
+        profile: { id: DIFFERENT_PROFILE_UUID, name: 'Admin Ada' },
+        supabaseClient,
+        createDb,
+        createTransport,
+        createReconciler,
+        createStore,
+        now: () => FIXED_NOW,
+        randomUUID: () => 'qid-hook',
+        createLeaseOwner: () => 'lease-hook',
+      })
+      return null
+    }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    await act(async () => { root.render(<Probe />) })
+    await act(async () => { await flushMicrotasks() })
+    expect(apiRef.current.queueRecords.map((r) => r.queue_id)).toEqual(['q-current'])
+    expect(listCallCount).toBeGreaterThanOrEqual(1)
+    await act(async () => { root.unmount() })
+    container.remove()
+  })
+
+  test('queueRecords DTO excludes blob, URLs, metadata, and raw error', async () => {
+    const recordsById = new Map()
+    recordsById.set('q-1', createRecord({ queueId: 'q-1', status: PHOTO_UPLOAD_STATUSES.FAILED_UPLOAD }))
+    const db = {
+      putRecord: jest.fn(),
+      getRecord: jest.fn(async () => null),
+      listRecordsForActor: jest.fn(async () => Array.from(recordsById.values())),
+      close: jest.fn(),
+    }
+    const supabaseClient = createSessionClient()
+    const createDb = () => db
+    const createTransport = () => ({ startUpload: jest.fn() })
+    const createReconciler = () => ({})
+    const createStore = () => ({ start: jest.fn(), stop: jest.fn(async () => {}), resumePausedUploads: jest.fn(async () => ({ resumed: 0 })) })
+    const apiRef = { current: null }
+    function Probe() {
+      apiRef.current = useOfficeReportPhotoUploadQueue({
+        sourceSurface: OFFICE_REPORT_SOURCE_SURFACES.OFFICE_REPORTS,
+        reportId: REPORT_ID,
+        crmsRef: 'CRMS-9',
+        eventName: 'Gala',
+        profile: { id: DIFFERENT_PROFILE_UUID, name: 'Admin Ada' },
+        supabaseClient,
+        createDb,
+        createTransport,
+        createReconciler,
+        createStore,
+        now: () => FIXED_NOW,
+        randomUUID: () => 'qid-hook',
+        createLeaseOwner: () => 'lease-hook',
+      })
+      return null
+    }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    await act(async () => { root.render(<Probe />) })
+    await act(async () => { await flushMicrotasks() })
+    const dto = apiRef.current.queueRecords[0]
+    expect(dto.queue_id).toBe('q-1')
+    expect(dto.status).toBe(PHOTO_UPLOAD_STATUSES.FAILED_UPLOAD)
+    expect(dto.source_surface).toBe(OFFICE_REPORT_SOURCE_SURFACES.OFFICE_REPORTS)
+    expect(dto.entity_type).toBe(OFFICE_REPORT_ENTITY_TYPE)
+    expect(dto.entity_id).toBe(REPORT_ID)
+    expect(dto.blob).toBeUndefined()
+    expect(dto.tus_upload_url).toBeUndefined()
+    expect(dto.remote_public_url).toBeUndefined()
+    expect(dto.metadata_payload).toBeUndefined()
+    expect(dto.last_error).toBeUndefined()
+    const json = JSON.stringify(dto)
+    expect(json).not.toContain('tus.example')
+    expect(json).not.toContain('storage.example')
+    expect(json).not.toContain('HTTP_500')
+    expect(json).not.toContain('leak')
+    await act(async () => { root.unmount() })
+    container.remove()
+  })
+
+  test('queueRecords refreshes periodically and after enqueue', async () => {
+    const recordsById = new Map()
+    const db = {
+      putRecord: jest.fn(async (record) => { recordsById.set(record.queue_id, record) }),
+      getRecord: jest.fn(async () => null),
+      listRecordsForActor: jest.fn(async () => Array.from(recordsById.values())),
+      close: jest.fn(),
+    }
+    const supabaseClient = createSessionClient()
+    const createDb = () => db
+    const createTransport = () => ({ startUpload: jest.fn() })
+    const createReconciler = () => ({})
+    const createStore = () => ({ start: jest.fn(), stop: jest.fn(async () => {}), resumePausedUploads: jest.fn(async () => ({ resumed: 0 })) })
+    const apiRef = { current: null }
+    function Probe() {
+      apiRef.current = useOfficeReportPhotoUploadQueue({
+        sourceSurface: OFFICE_REPORT_SOURCE_SURFACES.OFFICE_REPORTS,
+        reportId: REPORT_ID,
+        crmsRef: 'CRMS-9',
+        eventName: 'Gala',
+        profile: { id: DIFFERENT_PROFILE_UUID, name: 'Admin Ada' },
+        supabaseClient,
+        createDb,
+        createTransport,
+        createReconciler,
+        createStore,
+        now: () => FIXED_NOW,
+        randomUUID: () => 'qid-obs',
+        createLeaseOwner: () => 'lease-obs',
+      })
+      return null
+    }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    await act(async () => { root.render(<Probe />) })
+    await act(async () => { await flushMicrotasks() })
+    expect(apiRef.current.queueRecords).toEqual([])
+
+    await act(async () => { await apiRef.current.enqueueFiles([makeFile('a.jpg', 'image/jpeg')]) })
+    await act(async () => { await flushMicrotasks() })
+    expect(apiRef.current.queueRecords.map((r) => r.queue_id)).toContain('qid-obs')
+    expect(apiRef.current.queueRecords[0].status).toBe(PHOTO_UPLOAD_STATUSES.QUEUED)
+
+    recordsById.set('qid-obs', createRecord({ queueId: 'qid-obs', status: PHOTO_UPLOAD_STATUSES.UPLOADING }))
+    await waitForPolling(1100)
+    expect(apiRef.current.queueRecords.map((r) => r.queue_id)).toContain('qid-obs')
+    expect(apiRef.current.queueRecords.find((r) => r.queue_id === 'qid-obs').status).toBe(PHOTO_UPLOAD_STATUSES.UPLOADING)
+    expect(apiRef.current.queueRecords.find((r) => r.queue_id === 'qid-obs').progress_pct).toBe(50)
+
+    await act(async () => { root.unmount() })
+    container.remove()
+  })
+
+  test('queueRecords refreshes after manual retry and timers stop on unmount', async () => {
+    const recordsById = new Map()
+    recordsById.set('q-1', createRecord({ queueId: 'q-1', status: PHOTO_UPLOAD_STATUSES.FAILED_UPLOAD }))
+    const db = {
+      putRecord: jest.fn(),
+      getRecord: jest.fn(async () => null),
+      listRecordsForActor: jest.fn(async () => Array.from(recordsById.values())),
+      close: jest.fn(),
+    }
+    const storeApi = {
+      start: jest.fn(),
+      stop: jest.fn(async () => {}),
+      resumePausedUploads: jest.fn(async () => ({ resumed: 0 })),
+      manualUploadRetry: jest.fn(async () => ({ ok: true, status: PHOTO_UPLOAD_STATUSES.QUEUED })),
+    }
+    const supabaseClient = createSessionClient()
+    const createDb = () => db
+    const createTransport = () => ({ startUpload: jest.fn() })
+    const createReconciler = () => ({})
+    const createStore = () => storeApi
+    const apiRef = { current: null }
+    function Probe() {
+      apiRef.current = useOfficeReportPhotoUploadQueue({
+        sourceSurface: OFFICE_REPORT_SOURCE_SURFACES.OFFICE_REPORTS,
+        reportId: REPORT_ID,
+        crmsRef: 'CRMS-9',
+        eventName: 'Gala',
+        profile: { id: DIFFERENT_PROFILE_UUID, name: 'Admin Ada' },
+        supabaseClient,
+        createDb,
+        createTransport,
+        createReconciler,
+        createStore,
+        now: () => FIXED_NOW,
+        randomUUID: () => 'qid-obs',
+        createLeaseOwner: () => 'lease-obs',
+      })
+      return null
+    }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    await act(async () => { root.render(<Probe />) })
+    await act(async () => { await flushMicrotasks() })
+    expect(apiRef.current.queueRecords[0].status).toBe(PHOTO_UPLOAD_STATUSES.FAILED_UPLOAD)
+
+    recordsById.set('q-1', createRecord({ queueId: 'q-1', status: PHOTO_UPLOAD_STATUSES.QUEUED }))
+    await act(async () => { await apiRef.current.manualUploadRetry('q-1') })
+    await act(async () => { await flushMicrotasks() })
+    expect(apiRef.current.queueRecords[0].status).toBe(PHOTO_UPLOAD_STATUSES.QUEUED)
+    expect(storeApi.manualUploadRetry).toHaveBeenCalledWith({ queueId: 'q-1' })
+
+    await act(async () => { root.unmount() })
+    container.remove()
+  })
+
+  test('observation does not write to the queue or emit domain events', async () => {
+    const recordsById = new Map()
+    recordsById.set('q-1', createRecord({ queueId: 'q-1', status: PHOTO_UPLOAD_STATUSES.QUEUED }))
+    const db = {
+      putRecord: jest.fn(),
+      getRecord: jest.fn(async () => null),
+      listRecordsForActor: jest.fn(async () => Array.from(recordsById.values())),
+      close: jest.fn(),
+    }
+    const supabaseClient = createSessionClient()
+    const createDb = () => db
+    const createTransport = () => ({ startUpload: jest.fn() })
+    const createReconciler = () => ({})
+    const createStore = () => ({ start: jest.fn(), stop: jest.fn(async () => {}), resumePausedUploads: jest.fn(async () => ({ resumed: 0 })) })
+    const apiRef = { current: null }
+    function Probe() {
+      apiRef.current = useOfficeReportPhotoUploadQueue({
+        sourceSurface: OFFICE_REPORT_SOURCE_SURFACES.OFFICE_REPORTS,
+        reportId: REPORT_ID,
+        crmsRef: 'CRMS-9',
+        eventName: 'Gala',
+        profile: { id: DIFFERENT_PROFILE_UUID, name: 'Admin Ada' },
+        supabaseClient,
+        createDb,
+        createTransport,
+        createReconciler,
+        createStore,
+        now: () => FIXED_NOW,
+        randomUUID: () => 'qid-obs',
+        createLeaseOwner: () => 'lease-obs',
+      })
+      return null
+    }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    await act(async () => { root.render(<Probe />) })
+    await act(async () => { await waitForPolling(1100) })
+    await act(async () => { await flushMicrotasks() })
+    expect(db.putRecord).not.toHaveBeenCalled()
+    await act(async () => { root.unmount() })
+    container.remove()
+  })
+})

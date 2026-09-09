@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext'
 import JobNotes from '../components/JobNotes'
 import EvidenceUpload from '../components/EvidenceUpload'
 import { OFFICE_REPORT_SOURCE_SURFACES, useOfficeReportPhotoUploadQueue } from '../hooks/useOfficeReportPhotoUploadQueue'
+import PhotoUploadQueueStatus from '../components/PhotoUploadQueueStatus'
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
 const today    = new Date().toLocaleDateString('en-CA')
@@ -2675,7 +2676,13 @@ export function ReportTab({ job, runType, profile, supabase, showToast }) {
     }
   }
 
-  const { enqueueFiles, busy } = useOfficeReportPhotoUploadQueue({
+  const {
+    enqueueFiles,
+    busy,
+    queueRecords,
+    manualUploadRetry,
+    manualDbRetry,
+  } = useOfficeReportPhotoUploadQueue({
     sourceSurface: OFFICE_REPORT_SOURCE_SURFACES.OFFICE_SCHEDULE_REPORT,
     reportId: report?.id || null,
     crmsRef: job?.crms_ref || '',
@@ -2865,6 +2872,12 @@ export function ReportTab({ job, runType, profile, supabase, showToast }) {
             onChange={e => e.target.files[0] && uploadPhoto(e.target.files[0])} />
           {busy ? 'Queuing…' : '+ Add photo'}
         </label>
+        <PhotoUploadQueueStatus
+          records={queueRecords}
+          variant="report"
+          onUploadRetry={manualUploadRetry}
+          onDbRetry={manualDbRetry}
+        />
       </div>
     </div>
   )

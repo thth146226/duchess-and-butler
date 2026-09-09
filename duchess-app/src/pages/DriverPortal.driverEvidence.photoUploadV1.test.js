@@ -59,8 +59,11 @@ jest.mock('@supabase/supabase-js', () => {
 
 const { mockUpload, mockInsert, galleryFetch } = jest.requireMock('@supabase/supabase-js')
 const mockEnqueueFiles = jest.fn()
+const mockManualUploadRetry = jest.fn()
+const mockManualDbRetry = jest.fn()
 const fetchCalls = []
 let capturedQueueOptions = {}
+let mockQueueRecords = []
 
 function londonYmd(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-GB', {
@@ -121,7 +124,10 @@ describe('DriverPortal driver evidence photo upload v1', () => {
     mockEnqueueFiles.mockReset()
     mockUpload.mockReset()
     mockInsert.mockReset()
+    mockManualUploadRetry.mockReset()
+    mockManualDbRetry.mockReset()
     capturedQueueOptions = {}
+    mockQueueRecords = []
     galleryFetch.count = 0
     fetchCalls.length = 0
     global.fetch = jest.fn((...args) => {
@@ -141,6 +147,9 @@ describe('DriverPortal driver evidence photo upload v1', () => {
         enqueueFiles: mockEnqueueFiles,
         busy: false,
         lastResult: null,
+        queueRecords: mockQueueRecords,
+        manualUploadRetry: mockManualUploadRetry,
+        manualDbRetry: mockManualDbRetry,
       }
     })
   })
@@ -277,6 +286,114 @@ describe('DriverPortal driver evidence photo upload v1', () => {
     expect(addPhoto).not.toBe(evidenceCamera)
     expect(addPhoto.getAttribute('data-testid')).not.toBe('driver-evidence-gallery-input')
     expect(addPhoto.getAttribute('data-testid')).not.toBe('driver-evidence-camera-input')
+    act(() => { root.unmount() })
+  })
+})
+
+describe('DriverPortal driver evidence P11D queue status integration', () => {
+  beforeEach(() => {
+    global.IS_REACT_ACT_ENVIRONMENT = true
+    mockEnqueueFiles.mockReset()
+    mockUpload.mockReset()
+    mockInsert.mockReset()
+    mockManualUploadRetry.mockReset()
+    mockManualDbRetry.mockReset()
+    capturedQueueOptions = {}
+    mockQueueRecords = []
+    galleryFetch.count = 0
+    fetchCalls.length = 0
+    global.fetch = jest.fn((...args) => {
+      fetchCalls.push(args)
+      const url = String(args[0] || '')
+      if (url.includes('/api/driver-portal-runs') && (!args[1] || args[1].method !== 'PATCH')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => portalPayload(),
+        })
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) })
+    })
+    useDriverPhotoUploadQueue.mockImplementation((options = {}) => {
+      capturedQueueOptions = options
+      return {
+        enqueueFiles: mockEnqueueFiles,
+        busy: false,
+        lastResult: null,
+        queueRecords: mockQueueRecords,
+        manualUploadRetry: mockManualUploadRetry,
+        manualDbRetry: mockManualDbRetry,
+      }
+    })
+  })
+
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  function makeQueueRecord(status, lastError = null) {
+    return {
+      queue_id: 'q1',
+      status,
+      progress_pct: 0,
+      source_surface: 'driver_evidence',
+      entity_type: 'job',
+      entity_id: 'job-88',
+      provisional_id: null,
+      created_at: Date.now(),
+      last_error: lastError,
+    }
+  }
+
+  test('renders QUEUED status from useDriverPhotoUploadQueue', async () => {
+    mockQueueRecords = [makeQueueRecord('QUEUED')]
+    const { container, root } = await renderPortal()
+    await openEvidenceTab(container)
+    expect(container.textContent).toContain('Queued')
+    expect(container.querySelector('[data-testid="queue-retry-upload"]')).toBeNull()
+    expect(container.querySelector('[data-testid="queue-retry-db"]')).toBeNull()
+    act(() => { root.unmount() })
+  })
+
+  test('FAILED_UPLOAD shows upload retry button and calls manualUploadRetry', async () => {
+    mockQueueRecords = [makeQueueRecord('FAILED_UPLOAD')]
+    const { container, root } = await renderPortal()
+    await openEvidenceTab(container)
+    const button = container.querySelector('[data-testid="queue-retry-upload"]')
+    expect(button).toBeTruthy()
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(mockManualUploadRetry).toHaveBeenCalledWith('q1')
+    act(() => { root.unmount() })
+  })
+
+  test('FAILED_DB shows DB retry button and calls manualDbRetry', async () => {
+    mockQueueRecords = [makeQueueRecord('FAILED_DB')]
+    const { container, root } = await renderPortal()
+    await openEvidenceTab(container)
+    const button = container.querySelector('[data-testid="queue-retry-db"]')
+    expect(button).toBeTruthy()
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(mockManualDbRetry).toHaveBeenCalledWith('q1')
+    act(() => { root.unmount() })
+  })
+
+  test('DONE records are not persistently rendered', async () => {
+    mockQueueRecords = [makeQueueRecord('DONE')]
+    const { container, root } = await renderPortal()
+    await openEvidenceTab(container)
+    expect(container.querySelector('[data-testid="photo-upload-queue-status"]')).toBeNull()
+    act(() => { root.unmount() })
+  })
+
+  test('raw error is not exposed in status UI', async () => {
+    mockQueueRecords = [makeQueueRecord('FAILED_UPLOAD', { code: 'HTTP_500', message: 'secret-leak' })]
+    const { container, root } = await renderPortal()
+    await openEvidenceTab(container)
+    expect(container.textContent).not.toContain('secret-leak')
+    expect(container.textContent).not.toContain('HTTP_500')
     act(() => { root.unmount() })
   })
 })

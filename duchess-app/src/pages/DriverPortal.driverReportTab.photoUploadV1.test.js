@@ -72,7 +72,10 @@ jest.mock('@supabase/supabase-js', () => {
 
 const { mockUpload, mockInsert, galleryFetch } = jest.requireMock('@supabase/supabase-js')
 const mockEnqueueFiles = jest.fn()
+const mockManualUploadRetry = jest.fn()
+const mockManualDbRetry = jest.fn()
 let capturedQueueOptions = {}
+let mockQueueRecords = []
 
 function londonYmd(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-GB', {
@@ -132,6 +135,9 @@ describe('DriverPortal DriverReportTab photo upload v1', () => {
   beforeEach(() => {
     global.IS_REACT_ACT_ENVIRONMENT = true
     mockEnqueueFiles.mockReset()
+    mockManualUploadRetry.mockReset()
+    mockManualDbRetry.mockReset()
+    mockQueueRecords = []
     mockUpload.mockReset()
     mockInsert.mockReset()
     galleryFetch.count = 0
@@ -160,6 +166,10 @@ describe('DriverPortal DriverReportTab photo upload v1', () => {
         enqueueFiles: mockEnqueueFiles,
         proveReportId: jest.fn(),
         markReportResultAmbiguous: jest.fn(),
+        discardNeverUploadedDrafts: jest.fn(),
+        manualUploadRetry: mockManualUploadRetry,
+        manualDbRetry: mockManualDbRetry,
+        queueRecords: mockQueueRecords,
         busy: false,
         lastResult: null,
       }
@@ -246,6 +256,119 @@ describe('DriverPortal DriverReportTab photo upload v1', () => {
     const { container, root } = await renderPortal()
     await openReportTab(container)
     expect(JSON.stringify(capturedQueueOptions)).not.toContain('p10-portal-token-SECRET')
+    act(() => { root.unmount() })
+  })
+})
+
+describe('DriverPortal driver report tab P11D queue status integration', () => {
+  beforeEach(() => {
+    global.IS_REACT_ACT_ENVIRONMENT = true
+    mockEnqueueFiles.mockReset()
+    mockManualUploadRetry.mockReset()
+    mockManualDbRetry.mockReset()
+    mockQueueRecords = []
+    mockUpload.mockReset()
+    mockInsert.mockReset()
+    galleryFetch.count = 0
+    capturedQueueOptions = {}
+    mockEnqueueFiles.mockResolvedValue({ accepted: [], rejected: [] })
+    global.fetch = jest.fn((...args) => {
+      const url = String(args[0] || '')
+      if (url.includes('/api/driver-portal-runs') && (!args[1] || args[1].method !== 'PATCH')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => portalPayload(),
+        })
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) })
+    })
+    useDriverPhotoUploadQueue.mockReturnValue({
+      enqueueFiles: jest.fn(),
+      busy: false,
+      lastResult: null,
+    })
+    useDriverReportPhotoUploadQueue.mockImplementation((options = {}) => {
+      if (options.sourceSurface === 'driver_report_tab') {
+        capturedQueueOptions = options
+      }
+      return {
+        enqueueFiles: mockEnqueueFiles,
+        proveReportId: jest.fn(),
+        markReportResultAmbiguous: jest.fn(),
+        discardNeverUploadedDrafts: jest.fn(),
+        manualUploadRetry: mockManualUploadRetry,
+        manualDbRetry: mockManualDbRetry,
+        queueRecords: mockQueueRecords,
+        busy: false,
+        lastResult: null,
+      }
+    })
+  })
+
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  function makeRecord(status, lastError = null) {
+    return {
+      queue_id: 'q1',
+      status,
+      progress_pct: 0,
+      source_surface: 'driver_report_tab',
+      entity_type: 'report',
+      entity_id: 'report-77',
+      provisional_id: null,
+      created_at: Date.now(),
+      last_error: lastError,
+    }
+  }
+
+  test('renders QUEUED status from useDriverReportPhotoUploadQueue', async () => {
+    mockQueueRecords = [makeRecord('QUEUED')]
+    const { container, root } = await renderPortal()
+    await openReportTab(container)
+    expect(container.textContent).toContain('Queued')
+    expect(container.querySelector('[data-testid="queue-retry-upload"]')).toBeFalsy()
+    expect(container.querySelector('[data-testid="queue-retry-db"]')).toBeFalsy()
+    act(() => { root.unmount() })
+  })
+
+  test('FAILED_UPLOAD shows upload retry button and calls manualUploadRetry', async () => {
+    mockQueueRecords = [makeRecord('FAILED_UPLOAD')]
+    const { container, root } = await renderPortal()
+    await openReportTab(container)
+    const button = container.querySelector('[data-testid="queue-retry-upload"]')
+    expect(button).toBeTruthy()
+    await act(async () => { button.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(mockManualUploadRetry).toHaveBeenCalledWith('q1')
+    act(() => { root.unmount() })
+  })
+
+  test('FAILED_DB shows DB retry button and calls manualDbRetry', async () => {
+    mockQueueRecords = [makeRecord('FAILED_DB')]
+    const { container, root } = await renderPortal()
+    await openReportTab(container)
+    const button = container.querySelector('[data-testid="queue-retry-db"]')
+    expect(button).toBeTruthy()
+    await act(async () => { button.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(mockManualDbRetry).toHaveBeenCalledWith('q1')
+    act(() => { root.unmount() })
+  })
+
+  test('DONE records are not persistently rendered', async () => {
+    mockQueueRecords = [makeRecord('DONE')]
+    const { container, root } = await renderPortal()
+    await openReportTab(container)
+    expect(container.querySelector('[data-testid="photo-upload-queue-status"]')).toBeFalsy()
+    act(() => { root.unmount() })
+  })
+
+  test('raw error is not exposed in status UI', async () => {
+    mockQueueRecords = [makeRecord('FAILED_UPLOAD', { code: 'HTTP_500', message: 'secret-leak' })]
+    const { container, root } = await renderPortal()
+    await openReportTab(container)
+    expect(container.textContent).not.toContain('secret-leak')
+    expect(container.textContent).not.toContain('HTTP_500')
     act(() => { root.unmount() })
   })
 })

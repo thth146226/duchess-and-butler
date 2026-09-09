@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase as applicationSupabase } from '../lib/supabase'
 import { PHOTO_UPLOAD_STATUSES } from '../lib/photoUploadDomain'
 import { PHOTO_UPLOAD_RECORD_SCHEMA_VERSION, createPhotoUploadDb } from '../lib/photoUploadDb'
@@ -32,6 +32,8 @@ export const OFFICE_REPORT_QUEUE_ERROR_CODES = Object.freeze({
 })
 
 export const OFFICE_REPORT_DONE_OBSERVER_POLL_MS = 1000
+
+const EMPTY_QUEUE_RECORDS = []
 
 const VALID_SOURCE_SURFACES = new Set(Object.values(OFFICE_REPORT_SOURCE_SURFACES))
 
@@ -634,6 +636,50 @@ export function createOfficeReportPhotoUploadQueueController(options = {}) {
     return store.manualDbRetry({ queueId })
   }
 
+  async function getQueueSnapshot({ sourceSurface, entityType, entityId } = {}) {
+    if (!isNonEmptyString(actorScopeId)) {
+      return { records: EMPTY_QUEUE_RECORDS }
+    }
+    if (!db || typeof db.listRecordsForActor !== 'function') {
+      return { records: EMPTY_QUEUE_RECORDS }
+    }
+    let records
+    try {
+      records = await db.listRecordsForActor({
+        actorScopeType: OFFICE_REPORT_ACTOR_SCOPE_TYPE,
+        actorScopeId,
+      })
+    } catch (_error) {
+      return { records: EMPTY_QUEUE_RECORDS }
+    }
+    const filtered = (Array.isArray(records) ? records : []).filter((record) => (
+      record
+      && record.actor_scope_type === OFFICE_REPORT_ACTOR_SCOPE_TYPE
+      && record.actor_scope_id === actorScopeId
+      && record.status !== PHOTO_UPLOAD_STATUSES.DONE
+      && record.status !== PHOTO_UPLOAD_STATUSES.DISCARD_PENDING
+      && (!isNonEmptyString(sourceSurface) || record.source_surface === sourceSurface)
+      && (!isNonEmptyString(entityType) || record.entity_type === entityType)
+      && (!isNonEmptyString(entityId) || record.entity_id === entityId)
+    ))
+    return {
+      records: filtered.length > 0
+        ? filtered.map((record) => ({
+          queue_id: record.queue_id,
+          status: record.status,
+          progress_pct: record.status === PHOTO_UPLOAD_STATUSES.UPLOADING
+            ? (record.bytes_total > 0 ? Math.round((record.bytes_uploaded / record.bytes_total) * 100) : 0)
+            : 0,
+          source_surface: record.source_surface,
+          entity_type: record.entity_type,
+          entity_id: record.entity_id,
+          provisional_id: record.provisional_id,
+          created_at: record.created_at,
+        }))
+        : EMPTY_QUEUE_RECORDS,
+    }
+  }
+
   return {
     boot,
     enqueueFiles,
@@ -641,6 +687,7 @@ export function createOfficeReportPhotoUploadQueueController(options = {}) {
     inspectPending,
     manualUploadRetry,
     manualDbRetry,
+    getQueueSnapshot,
     getAccessToken,
     getLeaseOwner: () => leaseOwner,
     getActorScopeId: () => actorScopeId,
@@ -669,10 +716,18 @@ export function useOfficeReportPhotoUploadQueue({
   clearTimeoutImpl,
 } = {}) {
   const controllerRef = useRef(null)
+  const bootPromiseRef = useRef(null)
   const onRemoteDoneRef = useRef(onRemoteDone)
   onRemoteDoneRef.current = onRemoteDone
   const [busy, setBusy] = useState(false)
   const [lastResult, setLastResult] = useState(null)
+  const [queueRecords, setQueueRecords] = useState(EMPTY_QUEUE_RECORDS)
+
+  const snapshotFilter = useMemo(() => ({
+    sourceSurface,
+    entityType: OFFICE_REPORT_ENTITY_TYPE,
+    entityId: reportId,
+  }), [sourceSurface, reportId])
 
   useEffect(() => {
     const controller = createOfficeReportPhotoUploadQueueController({
@@ -695,10 +750,11 @@ export function useOfficeReportPhotoUploadQueue({
       },
     })
     controllerRef.current = controller
-    void controller.boot()
+    bootPromiseRef.current = controller.boot()
     return () => {
       void controller.dispose()
       controllerRef.current = null
+      bootPromiseRef.current = null
     }
   }, [
     sourceSurface,
@@ -714,6 +770,41 @@ export function useOfficeReportPhotoUploadQueue({
     setTimeoutImpl,
     clearTimeoutImpl,
   ])
+
+  useEffect(() => {
+    let cancelled = false
+    let timer = null
+    async function tick() {
+      if (cancelled) return
+      const controller = controllerRef.current
+      if (controller && typeof controller.getQueueSnapshot === 'function') {
+        const snapshot = await controller.getQueueSnapshot(snapshotFilter)
+        if (!cancelled) {
+          setQueueRecords(snapshot.records || EMPTY_QUEUE_RECORDS)
+        }
+      }
+      if (!cancelled) {
+        timer = setTimeout(tick, 1000)
+      }
+    }
+    async function start() {
+      const bootPromise = bootPromiseRef.current
+      if (!bootPromise) return
+      try {
+        await bootPromise
+      } catch (_error) {
+        return
+      }
+      if (cancelled) return
+      tick()
+    }
+    start()
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+      setQueueRecords(EMPTY_QUEUE_RECORDS)
+    }
+  }, [snapshotFilter])
 
   const enqueueFiles = useCallback(async (files) => {
     const controller = controllerRef.current
@@ -736,11 +827,13 @@ export function useOfficeReportPhotoUploadQueue({
         profile,
       })
       setLastResult(result)
+      const snapshot = await controller.getQueueSnapshot(snapshotFilter)
+      setQueueRecords(snapshot.records || EMPTY_QUEUE_RECORDS)
       return result
     } finally {
       setBusy(false)
     }
-  }, [reportId, crmsRef, eventName, profile])
+  }, [reportId, crmsRef, eventName, profile, snapshotFilter])
 
   const manualUploadRetry = useCallback(async (queueId) => {
     const controller = controllerRef.current
@@ -750,8 +843,11 @@ export function useOfficeReportPhotoUploadQueue({
         code: OFFICE_REPORT_QUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE,
       }
     }
-    return controller.manualUploadRetry({ queueId })
-  }, [])
+    const result = await controller.manualUploadRetry({ queueId })
+    const snapshot = await controller.getQueueSnapshot(snapshotFilter)
+    setQueueRecords(snapshot.records || EMPTY_QUEUE_RECORDS)
+    return result
+  }, [snapshotFilter])
 
   const manualDbRetry = useCallback(async (queueId) => {
     const controller = controllerRef.current
@@ -761,13 +857,17 @@ export function useOfficeReportPhotoUploadQueue({
         code: OFFICE_REPORT_QUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE,
       }
     }
-    return controller.manualDbRetry({ queueId })
-  }, [])
+    const result = await controller.manualDbRetry({ queueId })
+    const snapshot = await controller.getQueueSnapshot(snapshotFilter)
+    setQueueRecords(snapshot.records || EMPTY_QUEUE_RECORDS)
+    return result
+  }, [snapshotFilter])
 
   return {
     enqueueFiles,
     manualUploadRetry,
     manualDbRetry,
+    queueRecords,
     busy,
     lastResult,
   }
