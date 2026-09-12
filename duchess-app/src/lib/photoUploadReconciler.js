@@ -153,6 +153,11 @@ function dbError(error, storagePath, options = {}) {
   let code
   if (options.ambiguous) {
     code = PHOTO_UPLOAD_RECONCILER_ERROR_CODES.DB_INSERT_AMBIGUOUS
+  } else if (options.insertAttempt && postgresCode === '23505') {
+    // PostgreSQL unique violation on the deterministic file_path means another worker committed
+    // the same Storage path. Treat as ambiguous so the existing query-before-insert path can
+    // reconcile the row on the next DB phase without re-uploading.
+    code = PHOTO_UPLOAD_RECONCILER_ERROR_CODES.DB_INSERT_AMBIGUOUS
   } else {
     code = classifyStatus(
       httpStatus,

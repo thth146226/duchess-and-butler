@@ -514,6 +514,59 @@ describe('photoUploadReconciler', () => {
     ])
   })
 
+  test('PostgreSQL 23505 unique violation is classified as ambiguous insert and reconciles on next query', async () => {
+    let selectData = []
+    let insertCalls = 0
+    const supabaseClient = createFakeSupabase({
+      selectResult: () => ({ data: selectData, error: null }),
+      insertResult: () => {
+        insertCalls += 1
+        return { data: null, error: { status: 409, code: '23505' } }
+      },
+    })
+    const reconciler = createTransport({ supabaseClient, fetchImpl: jest.fn() })
+    await expect(reconciler.reconcileEvidencePhotoRow({
+      storagePath: STORAGE_PATH,
+      publicUrl: PUBLIC_URL,
+      metadataPayload: {},
+    })).rejects.toMatchObject({
+      code: PHOTO_UPLOAD_RECONCILER_ERROR_CODES.DB_INSERT_AMBIGUOUS,
+      httpStatus: 409,
+      postgresCode: '23505',
+      outcomeMayHaveCommitted: true,
+    })
+    expect(insertCalls).toBe(1)
+
+    selectData = [{ id: 'row-1', file_path: STORAGE_PATH, photo_url: PUBLIC_URL }]
+    const second = await reconciler.reconcileEvidencePhotoRow({
+      storagePath: STORAGE_PATH,
+      publicUrl: PUBLIC_URL,
+      metadataPayload: {},
+    })
+    expect(second.kind).toBe(PHOTO_UPLOAD_RECONCILER_RESULT_KINDS.DB_ROW_FOUND)
+    expect(insertCalls).toBe(1)
+    expect(supabaseClient.calls.eqs).toEqual([
+      { column: 'file_path', value: STORAGE_PATH },
+      { column: 'file_path', value: STORAGE_PATH },
+    ])
+  })
+
+  test('generic HTTP 409 without PostgreSQL 23505 remains a permanent DB failure', async () => {
+    const supabaseClient = createFakeSupabase({
+      selectResult: { data: [], error: null },
+      insertResult: { data: null, error: { status: 409 } },
+    })
+    await expect(createTransport({ supabaseClient, fetchImpl: jest.fn() }).reconcileEvidencePhotoRow({
+      storagePath: STORAGE_PATH,
+      publicUrl: PUBLIC_URL,
+      metadataPayload: {},
+    })).rejects.toMatchObject({
+      code: PHOTO_UPLOAD_RECONCILER_ERROR_CODES.DB_PERMANENT,
+      httpStatus: 409,
+      postgresCode: null,
+    })
+  })
+
   test('invalid inspect and row inputs reject before remote or DB calls', async () => {
     const supabaseClient = createFakeSupabase({})
     const fetchImpl = jest.fn()
