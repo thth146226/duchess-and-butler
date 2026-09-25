@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase as applicationSupabase } from '../lib/supabase'
 import { PHOTO_UPLOAD_STATUSES } from '../lib/photoUploadDomain'
 import { PHOTO_UPLOAD_RECORD_SCHEMA_VERSION, createPhotoUploadDb } from '../lib/photoUploadDb'
-import { createPhotoUploadTransport } from '../lib/photoUploadTransport'
-import { createPhotoUploadReconciler } from '../lib/photoUploadReconciler'
-import { createPhotoUploadStore } from '../lib/photoUploadStore'
+import {
+  getPhotoUploadRuntimeStore,
+  wakePhotoUploadRuntime,
+} from '../lib/photoUploadRuntime'
 
 export const DRIVER_EVIDENCE_SOURCE_SURFACE = 'driver_evidence'
 export const DRIVER_EVIDENCE_ENTITY_TYPE = 'job'
@@ -146,9 +147,7 @@ function toRemoteDoneNotification(record) {
 export function createDriverPhotoUploadQueueController(options = {}) {
   const supabaseClient = options.supabaseClient || applicationSupabase
   const createDb = options.createDb || createPhotoUploadDb
-  const createTransport = options.createTransport || createPhotoUploadTransport
-  const createReconciler = options.createReconciler || createPhotoUploadReconciler
-  const createStore = options.createStore || createPhotoUploadStore
+  const getRuntime = options.getRuntime
   const now = typeof options.now === 'function' ? options.now : Date.now
   const randomUUID = typeof options.randomUUID === 'function'
     ? options.randomUUID
@@ -156,9 +155,6 @@ export function createDriverPhotoUploadQueueController(options = {}) {
   const createLeaseOwner = typeof options.createLeaseOwner === 'function'
     ? options.createLeaseOwner
     : () => crypto.randomUUID()
-  const isOnline = typeof options.isOnline === 'function'
-    ? options.isOnline
-    : () => (typeof navigator === 'undefined' || navigator.onLine !== false)
   const setTimeoutImpl = typeof options.setTimeoutImpl === 'function'
     ? options.setTimeoutImpl
     : setTimeout
@@ -170,7 +166,6 @@ export function createDriverPhotoUploadQueueController(options = {}) {
     : null
 
   let db = null
-  let store = null
   let stopped = false
   let constructionError = null
   const leaseOwner = createLeaseOwner()
@@ -179,98 +174,17 @@ export function createDriverPhotoUploadQueueController(options = {}) {
   const notifiedDone = new Set()
   let pollTimer = null
   let inspectInFlight = false
-  let envWakeCleanup = null
+
+  function sharedStore() {
+    return getPhotoUploadRuntimeStore(
+      DRIVER_EVIDENCE_ACTOR_SCOPE_TYPE,
+      actorScopeId,
+      getRuntime,
+    )
+  }
 
   async function getAccessToken() {
     return resolveDriverSupabaseBearer(supabaseClient)
-  }
-
-  function environmentIsPlausiblyUsable() {
-    try {
-      if (typeof isOnline === 'function' && isOnline() === false) {
-        return false
-      }
-    } catch (_error) {
-      return false
-    }
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-      return false
-    }
-    return true
-  }
-
-  async function requestResumePausedUploads() {
-    if (stopped) {
-      return
-    }
-    try {
-      if (!environmentIsPlausiblyUsable()) {
-        return
-      }
-      if (!store || typeof store.resumePausedUploads !== 'function') {
-        return
-      }
-      if (!isNonEmptyString(actorScopeId)) {
-        return
-      }
-      const token = await getAccessToken()
-      if (!isNonEmptyString(token)) {
-        return
-      }
-      await store.resumePausedUploads()
-    } catch (_error) {
-      return
-    }
-  }
-
-  function attachEnvironmentalWake() {
-    if (stopped || envWakeCleanup) {
-      return
-    }
-    const cleanups = []
-    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-      const onOnline = () => {
-        void requestResumePausedUploads()
-      }
-      window.addEventListener('online', onOnline)
-      cleanups.push(() => {
-        if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
-          window.removeEventListener('online', onOnline)
-        }
-      })
-    }
-    const auth = supabaseClient && supabaseClient.auth
-    if (auth && typeof auth.onAuthStateChange === 'function') {
-      try {
-        const result = auth.onAuthStateChange(() => {
-          void requestResumePausedUploads()
-        })
-        const subscription = result && result.data ? result.data.subscription : null
-        if (subscription && typeof subscription.unsubscribe === 'function') {
-          cleanups.push(() => {
-            subscription.unsubscribe()
-          })
-        }
-      } catch (_error) {
-        // existing client does not support auth wake
-      }
-    }
-    envWakeCleanup = () => {
-      for (const fn of cleanups) {
-        try {
-          fn()
-        } catch (_cleanupError) {
-          // ignore
-        }
-      }
-      envWakeCleanup = null
-    }
-  }
-
-  function detachEnvironmentalWake() {
-    if (typeof envWakeCleanup === 'function') {
-      envWakeCleanup()
-    }
   }
 
   function ensureDb() {
@@ -400,48 +314,6 @@ export function createDriverPhotoUploadQueueController(options = {}) {
     }
   }
 
-  async function startRuntime(nextDriverId) {
-    if (stopped) {
-      return
-    }
-    if (!isNonEmptyString(nextDriverId)) {
-      return
-    }
-    ensureDb()
-    if (store && actorScopeId && actorScopeId !== nextDriverId) {
-      if (typeof store.stop === 'function') {
-        await store.stop()
-      }
-      store = null
-      actorScopeId = null
-      pendingObservation.clear()
-      notifiedDone.clear()
-      cancelObserverTimer()
-    }
-    if (!store) {
-      try {
-        const transport = createTransport()
-        const reconciler = createReconciler({ supabaseClient })
-        store = createStore({
-          db,
-          transport,
-          reconciler,
-          actorScopeType: DRIVER_EVIDENCE_ACTOR_SCOPE_TYPE,
-          actorScopeId: nextDriverId,
-          leaseOwner,
-          getAccessToken,
-          isOnline,
-          now,
-        })
-        actorScopeId = nextDriverId
-      } catch (error) {
-        constructionError = error
-        throw error
-      }
-    }
-    return store.start()
-  }
-
   async function boot({ driverId } = {}) {
     if (stopped) {
       return
@@ -449,9 +321,13 @@ export function createDriverPhotoUploadQueueController(options = {}) {
     if (!isNonEmptyString(driverId)) {
       return
     }
-    await startRuntime(driverId)
-    attachEnvironmentalWake()
-    await requestResumePausedUploads()
+    if (actorScopeId && actorScopeId !== driverId) {
+      pendingObservation.clear()
+      notifiedDone.clear()
+      cancelObserverTimer()
+    }
+    actorScopeId = driverId
+    ensureDb()
     await seedPendingFromExisting(driverId)
     await inspectPending()
   }
@@ -552,12 +428,12 @@ export function createDriverPhotoUploadQueueController(options = {}) {
     }
 
     if (accepted.length > 0) {
-      try {
-        await startRuntime(driverId)
-      } catch (_error) {
-        await inspectPending()
-        return { accepted, rejected }
-      }
+      actorScopeId = driverId
+      await wakePhotoUploadRuntime(
+        DRIVER_EVIDENCE_ACTOR_SCOPE_TYPE,
+        driverId,
+        getRuntime,
+      )
       await inspectPending()
     }
 
@@ -566,13 +442,8 @@ export function createDriverPhotoUploadQueueController(options = {}) {
 
   async function dispose() {
     stopped = true
-    detachEnvironmentalWake()
     cancelObserverTimer()
     pendingObservation.clear()
-    if (store && typeof store.stop === 'function') {
-      await store.stop()
-    }
-    store = null
     actorScopeId = null
     if (db && typeof db.close === 'function') {
       await db.close()
@@ -593,13 +464,14 @@ export function createDriverPhotoUploadQueueController(options = {}) {
         code: DRIVER_EVIDENCE_QUEUE_ERROR_CODES.QUEUE_ID_REQUIRED,
       }
     }
-    if (!store || typeof store.manualUploadRetry !== 'function') {
+    const shared = sharedStore()
+    if (!shared || typeof shared.manualUploadRetry !== 'function') {
       return {
         ok: false,
         code: DRIVER_EVIDENCE_QUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE,
       }
     }
-    return store.manualUploadRetry({ queueId })
+    return shared.manualUploadRetry({ queueId })
   }
 
   async function manualDbRetry({ queueId } = {}) {
@@ -615,13 +487,14 @@ export function createDriverPhotoUploadQueueController(options = {}) {
         code: DRIVER_EVIDENCE_QUEUE_ERROR_CODES.QUEUE_ID_REQUIRED,
       }
     }
-    if (!store || typeof store.manualDbRetry !== 'function') {
+    const shared = sharedStore()
+    if (!shared || typeof shared.manualDbRetry !== 'function') {
       return {
         ok: false,
         code: DRIVER_EVIDENCE_QUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE,
       }
     }
-    return store.manualDbRetry({ queueId })
+    return shared.manualDbRetry({ queueId })
   }
 
   async function getQueueSnapshot({ sourceSurface, entityType, entityId } = {}) {
@@ -697,7 +570,7 @@ export function useDriverPhotoUploadQueue({
   createDb,
   createTransport,
   createReconciler,
-  createStore,
+  createStore, getRuntime,
   now,
   randomUUID,
   createLeaseOwner,
@@ -738,7 +611,7 @@ export function useDriverPhotoUploadQueue({
       createDb,
       createTransport,
       createReconciler,
-      createStore,
+      createStore, getRuntime,
       now,
       randomUUID,
       createLeaseOwner,
@@ -764,7 +637,7 @@ export function useDriverPhotoUploadQueue({
     createDb,
     createTransport,
     createReconciler,
-    createStore,
+    createStore, getRuntime,
     now,
     randomUUID,
     createLeaseOwner,

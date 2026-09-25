@@ -184,6 +184,12 @@ function createDeps(overrides = {}) {
     setTimeoutImpl: timers.setTimeoutImpl,
     clearTimeoutImpl: timers.clearTimeoutImpl,
     onRemoteDone: (payload) => { remoteDone.push(payload) },
+    getRuntime: () => ({
+      wake: async () => {
+        events.push('wake')
+      },
+      getStore: () => storeApi,
+    }),
   })
   liveControllers.push(controller)
   return {
@@ -321,7 +327,7 @@ describe('useDriverReportPhotoUploadQueue', () => {
     await enqueueTab(deps)
     assertNoSecret(deps.putRecords[0])
     assertNoSecret(deps.putRecords[0].metadata_payload)
-    const token = await deps.getAccessToken()()
+    const token = await deps.controller.getAccessToken()
     expect(token).toBe(SENTINEL_TOKEN)
   })
 
@@ -354,7 +360,7 @@ describe('useDriverReportPhotoUploadQueue', () => {
     const deps = createDeps()
     await enqueueTab(deps)
     expect(deps.events[0]).toBe('put')
-    expect(deps.events[1]).toBe('start')
+    expect(deps.events[1]).toBe('wake')
   })
 
   test('DONE observer is read-only and emits exactly once per queue id', async () => {
@@ -380,7 +386,8 @@ describe('useDriverReportPhotoUploadQueue', () => {
     await enqueueTab(deps)
     expect(deps.timers.scheduled.some((row) => row.ms === DRIVER_REPORT_DONE_OBSERVER_POLL_MS)).toBe(true)
     await deps.controller.dispose()
-    expect(deps.stopCalls).toHaveLength(1)
+    expect(deps.stopCalls).toHaveLength(0)
+    expect(deps.storeApi.stop).not.toHaveBeenCalled()
     expect(deps.closeCalls).toHaveLength(1)
     expect(deps.timers.scheduled).toHaveLength(0)
   })
@@ -453,11 +460,11 @@ describe('useDriverReportPhotoUploadQueue', () => {
       queueId: 'qid-2',
       mimeType: 'image/png',
     })).toBe(`reports/${REPORT_ID}/qid-2.png`)
-    const startIndex = deps.events.indexOf('start')
+    const wakeIndex = deps.events.indexOf('wake')
     const lastPutIndex = deps.events.lastIndexOf('put')
-    expect(startIndex).toBeGreaterThan(lastPutIndex - 2)
+    expect(wakeIndex).toBeGreaterThan(lastPutIndex - 2)
     expect(deps.events.filter((row) => row === 'put').length).toBeGreaterThan(0)
-    expect(deps.events.indexOf('start')).toBeGreaterThan(deps.events.indexOf('put'))
+    expect(deps.events.indexOf('wake')).toBeGreaterThan(deps.events.indexOf('put'))
     expect(deps.transportUploads).toHaveLength(0)
   })
 
@@ -540,97 +547,77 @@ describe('useDriverReportPhotoUploadQueue', () => {
     expect(deps.supabaseClient.from).not.toHaveBeenCalled()
   })
 
-  test('P11A actor is driver.id and resume is additive', async () => {
+  test('P11A actor is driver.id and the surface does not own transport', async () => {
     const deps = createDeps()
     await deps.controller.boot({ driverId: DRIVER_ID })
     expect(deps.controller.getActorScopeId()).toBe(DRIVER_ID)
-    expect(deps.storeApi.start).toHaveBeenCalled()
-    expect(deps.storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    expect(deps.storeApi.start).not.toHaveBeenCalled()
+    expect(deps.storeApi.resumePausedUploads).not.toHaveBeenCalled()
     const result = await enqueueTab(deps)
     expect(result.accepted).toHaveLength(1)
+    expect(deps.events).toContain('wake')
     expect(deps.putRecords[0].actor_scope_id).toBe(DRIVER_ID)
   })
 
-  test('P11A online listener is registered and removed on cleanup', async () => {
+  test('P11A surface boot does not register an online listener', async () => {
     const addSpy = jest.spyOn(window, 'addEventListener')
-    const removeSpy = jest.spyOn(window, 'removeEventListener')
     const deps = createDeps()
     await deps.controller.boot({ driverId: DRIVER_ID })
-    expect(addSpy).toHaveBeenCalledWith('online', expect.any(Function))
+    expect(addSpy).not.toHaveBeenCalledWith('online', expect.any(Function))
     await deps.controller.dispose()
-    expect(removeSpy).toHaveBeenCalledWith('online', expect.any(Function))
     addSpy.mockRestore()
-    removeSpy.mockRestore()
   })
 
-  test('P11A online event calls guarded resume', async () => {
+  test('P11A surface does not resume when the window goes online', async () => {
     const deps = createDeps()
     await deps.controller.boot({ driverId: DRIVER_ID })
-    deps.storeApi.resumePausedUploads.mockClear()
     window.dispatchEvent(new Event('online'))
     await flushWake()
-    expect(deps.storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    expect(deps.storeApi.resumePausedUploads).not.toHaveBeenCalled()
+    expect(deps.storeApi.start).not.toHaveBeenCalled()
   })
 
-  test('P11A offline boot does not resume', async () => {
+  test('P11A offline boot does not start a private runtime', async () => {
     const deps = createDeps({ isOnline: () => false })
     await deps.controller.boot({ driverId: DRIVER_ID })
-    expect(deps.storeApi.start).toHaveBeenCalled()
+    expect(deps.storeApi.start).not.toHaveBeenCalled()
     expect(deps.storeApi.resumePausedUploads).not.toHaveBeenCalled()
   })
 
-  test('P11A online boot resumes when credentials are ready', async () => {
-    const deps = createDeps()
-    await deps.controller.boot({ driverId: DRIVER_ID })
-    expect(deps.storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
-  })
-
-  test('P11A credential failure leaves paused state and does not reject', async () => {
+  test('P11A credential failure does not reject boot', async () => {
     const supabaseClient = createSessionClient({ accessToken: null })
     supabaseClient.supabaseKey = ''
     const deps = createDeps({ supabaseClient })
     await expect(deps.controller.boot({ driverId: DRIVER_ID })).resolves.toBeUndefined()
     expect(deps.storeApi.resumePausedUploads).not.toHaveBeenCalled()
+    expect(deps.storeApi.start).not.toHaveBeenCalled()
   })
 
-  test('P11A resume rejection does not become an unhandled rejection', async () => {
-    const deps = createDeps()
-    deps.storeApi.resumePausedUploads.mockImplementation(async () => {
-      throw new Error('resume failed')
-    })
-    await expect(deps.controller.boot({ driverId: DRIVER_ID })).resolves.toBeUndefined()
-  })
-
-  test('P11A auth-change wake is subscribed and cleaned up', async () => {
+  test('P11A surface boot does not subscribe to auth changes', async () => {
     const deps = createDeps()
     await deps.controller.boot({ driverId: DRIVER_ID })
-    expect(deps.supabaseClient.auth.onAuthStateChange).toHaveBeenCalled()
-    deps.storeApi.resumePausedUploads.mockClear()
-    const onChange = deps.supabaseClient.auth.onAuthStateChange.mock.calls[0][0]
-    onChange('SIGNED_IN')
-    await flushWake()
-    expect(deps.storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    expect(deps.supabaseClient.auth.onAuthStateChange).not.toHaveBeenCalled()
     await deps.controller.dispose()
-    expect(deps.supabaseClient._authUnsubscribe).toHaveBeenCalled()
+    expect(deps.supabaseClient._authUnsubscribe).not.toHaveBeenCalled()
   })
 
-  test('P11A old driver actor is not resumed after identity change', async () => {
+  test('P11A old driver actor is not stopped by a surface identity change', async () => {
     const deps = createDeps()
     await deps.controller.boot({ driverId: DRIVER_ID })
     await deps.controller.boot({ driverId: 'driver-id-bbb' })
     expect(deps.controller.getActorScopeId()).toBe('driver-id-bbb')
-    expect(deps.storeApi.stop).toHaveBeenCalled()
-    deps.storeApi.resumePausedUploads.mockClear()
+    expect(deps.storeApi.stop).not.toHaveBeenCalled()
+    expect(deps.storeApi.start).not.toHaveBeenCalled()
     window.dispatchEvent(new Event('online'))
     await flushWake()
-    expect(deps.storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    expect(deps.storeApi.resumePausedUploads).not.toHaveBeenCalled()
     expect(deps.controller.getActorScopeId()).not.toBe(DRIVER_ID)
   })
 
   test('P11A portal token is not TUS bearer and no token is persisted', async () => {
     const deps = createDeps()
     await deps.controller.boot({ driverId: DRIVER_ID })
-    const token = await deps.getAccessToken()()
+    const token = await deps.controller.getAccessToken()
     expect(token).toBe(SENTINEL_TOKEN)
     expect(token).not.toBe(PORTAL_TOKEN)
     assertNoSecret(deps.storeApi)
@@ -1375,6 +1362,10 @@ describe('useDriverReportPhotoUploadQueue P11D observation', () => {
     const createTransport = () => ({ startUpload: jest.fn() })
     const createReconciler = () => ({})
     const createStore = () => storeApi
+    const getRuntime = () => ({
+      wake: async () => {},
+      getStore: () => storeApi,
+    })
     const apiRef = { current: null }
     function Probe() {
       apiRef.current = useDriverReportPhotoUploadQueue({
@@ -1389,6 +1380,7 @@ describe('useDriverReportPhotoUploadQueue P11D observation', () => {
         createTransport,
         createReconciler,
         createStore,
+        getRuntime,
         now: () => FIXED_NOW,
         randomUUID: () => 'qid-obs',
         createLeaseOwner: () => 'lease-obs',

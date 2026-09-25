@@ -1,6 +1,8 @@
 import { useEffect, useState, useRef } from 'react'
 import { createClient } from '@supabase/supabase-js'
-import { useDriverPhotoUploadQueue } from '../hooks/useDriverPhotoUploadQueue'
+import { resolveDriverSupabaseBearer, useDriverPhotoUploadQueue } from '../hooks/useDriverPhotoUploadQueue'
+import { PHOTO_UPLOAD_ACTOR_SCOPE_TYPES } from '../lib/photoUploadDb'
+import { acquirePhotoUploadRuntime, releasePhotoUploadRuntime } from '../lib/photoUploadRuntime'
 import { DRIVER_REPORT_SOURCE_SURFACES, useDriverReportPhotoUploadQueue } from '../hooks/useDriverReportPhotoUploadQueue'
 import PhotoUploadQueueStatus from '../components/PhotoUploadQueueStatus'
 
@@ -90,6 +92,21 @@ export default function DriverPortal({ token }) {
   const [deletedItems, setDeletedItems] = useState({})
   const [sigCanvas, setSigCanvas]       = useState(null)
   const [isDrawing, setIsDrawing]       = useState(false)
+
+  const driverId = driver?.id || null
+
+  useEffect(() => {
+    if (!driverId) return undefined
+    acquirePhotoUploadRuntime({
+      actorScopeType: PHOTO_UPLOAD_ACTOR_SCOPE_TYPES.DRIVER_PORTAL,
+      actorScopeId: driverId,
+      supabaseClient: supabase,
+      getAccessToken: () => resolveDriverSupabaseBearer(supabase),
+    })
+    return () => {
+      releasePhotoUploadRuntime(PHOTO_UPLOAD_ACTOR_SCOPE_TYPES.DRIVER_PORTAL, driverId)
+    }
+  }, [driverId])
 
   useEffect(() => { if (token) loadPortal() }, [token])
 

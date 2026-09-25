@@ -178,6 +178,12 @@ function createDeps(overrides = {}) {
     setTimeoutImpl: timers.setTimeoutImpl,
     clearTimeoutImpl: timers.clearTimeoutImpl,
     onRemoteDone: (payload) => { remoteDone.push(payload) },
+    getRuntime: () => ({
+      wake: async () => {
+        events.push('wake')
+      },
+      getStore: () => storeApi,
+    }),
   })
   liveControllers.push(controller)
   return {
@@ -309,8 +315,8 @@ describe('useOfficeReportPhotoUploadQueue', () => {
     const deps = createDeps()
     await enqueueModeA(deps)
     expect(deps.events[0]).toBe('put')
-    expect(deps.events[1]).toBe('start')
-    expect(deps.startCalls).toHaveLength(1)
+    expect(deps.events[1]).toBe('wake')
+    expect(deps.startCalls).toHaveLength(0)
   })
 
   test('JPEG PNG and WebP are accepted', async () => {
@@ -352,7 +358,7 @@ describe('useOfficeReportPhotoUploadQueue', () => {
     await enqueueModeA(deps)
     assertNoToken(deps.putRecords[0])
     assertNoToken(deps.putRecords[0].metadata_payload)
-    const token = await deps.getAccessToken()()
+    const token = await deps.controller.getAccessToken()
     expect(token).toBe(SENTINEL_TOKEN)
   })
 
@@ -439,92 +445,72 @@ describe('useOfficeReportPhotoUploadQueue', () => {
     await enqueueModeA(deps)
     expect(deps.timers.scheduled.some((row) => row.ms === OFFICE_REPORT_DONE_OBSERVER_POLL_MS)).toBe(true)
     await deps.controller.dispose()
-    expect(deps.stopCalls).toHaveLength(1)
+    expect(deps.stopCalls).toHaveLength(0)
+    expect(deps.storeApi.stop).not.toHaveBeenCalled()
     expect(deps.closeCalls).toHaveLength(1)
     expect(deps.timers.scheduled).toHaveLength(0)
     expect(deps.controller.getObserverTimerPending()).toBe(false)
   })
 
-  test('P11A actor is session.user.id not profile.id and resume is additive', async () => {
+  test('P11A actor is session.user.id not profile.id and the surface does not own transport', async () => {
     const deps = createDeps()
     await deps.controller.boot()
     expect(deps.controller.getActorScopeId()).toBe(USER_ID)
     expect(deps.controller.getActorScopeId()).not.toBe(DIFFERENT_PROFILE_UUID)
-    expect(deps.storeApi.start).toHaveBeenCalled()
-    expect(deps.storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    expect(deps.storeApi.start).not.toHaveBeenCalled()
+    expect(deps.storeApi.resumePausedUploads).not.toHaveBeenCalled()
     const result = await enqueueModeA(deps)
     expect(result.accepted).toHaveLength(1)
+    expect(deps.events).toContain('wake')
     expect(deps.putRecords[0].actor_scope_id).toBe(USER_ID)
     expect(deps.putRecords[0].actor_scope_id).not.toBe(DIFFERENT_PROFILE_UUID)
   })
 
-  test('P11A online listener is registered and removed on cleanup', async () => {
+  test('P11A surface boot does not register an online listener', async () => {
     const addSpy = jest.spyOn(window, 'addEventListener')
-    const removeSpy = jest.spyOn(window, 'removeEventListener')
     const deps = createDeps()
     await deps.controller.boot()
-    expect(addSpy).toHaveBeenCalledWith('online', expect.any(Function))
+    expect(addSpy).not.toHaveBeenCalledWith('online', expect.any(Function))
     await deps.controller.dispose()
-    expect(removeSpy).toHaveBeenCalledWith('online', expect.any(Function))
     addSpy.mockRestore()
-    removeSpy.mockRestore()
   })
 
-  test('P11A online event calls guarded resume', async () => {
+  test('P11A surface does not resume when the window goes online', async () => {
     const deps = createDeps()
     await deps.controller.boot()
-    deps.storeApi.resumePausedUploads.mockClear()
     window.dispatchEvent(new Event('online'))
     await flushWake()
-    expect(deps.storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    expect(deps.storeApi.resumePausedUploads).not.toHaveBeenCalled()
+    expect(deps.storeApi.start).not.toHaveBeenCalled()
   })
 
-  test('P11A offline boot does not resume', async () => {
+  test('P11A offline boot does not start a private runtime', async () => {
     const deps = createDeps({ isOnline: () => false })
     await deps.controller.boot()
-    expect(deps.storeApi.start).toHaveBeenCalled()
+    expect(deps.storeApi.start).not.toHaveBeenCalled()
     expect(deps.storeApi.resumePausedUploads).not.toHaveBeenCalled()
   })
 
-  test('P11A online boot resumes when credentials are ready', async () => {
-    const deps = createDeps()
-    await deps.controller.boot()
-    expect(deps.storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
-  })
-
-  test('P11A credential failure leaves paused state and does not reject', async () => {
+  test('P11A credential failure does not reject boot', async () => {
     const deps = createDeps({
       supabaseClient: createSessionClient({ userId: USER_ID, accessToken: null }),
     })
     await expect(deps.controller.boot()).resolves.toBeUndefined()
     expect(deps.storeApi.resumePausedUploads).not.toHaveBeenCalled()
+    expect(deps.storeApi.start).not.toHaveBeenCalled()
   })
 
-  test('P11A resume rejection does not become an unhandled rejection', async () => {
-    const deps = createDeps()
-    deps.storeApi.resumePausedUploads.mockImplementation(async () => {
-      throw new Error('resume failed')
-    })
-    await expect(deps.controller.boot()).resolves.toBeUndefined()
-  })
-
-  test('P11A auth-change wake is subscribed and cleaned up', async () => {
+  test('P11A surface boot does not subscribe to auth changes', async () => {
     const deps = createDeps()
     await deps.controller.boot()
-    expect(deps.supabaseClient.auth.onAuthStateChange).toHaveBeenCalled()
-    deps.storeApi.resumePausedUploads.mockClear()
-    const onChange = deps.supabaseClient.auth.onAuthStateChange.mock.calls[0][0]
-    onChange('SIGNED_IN')
-    await flushWake()
-    expect(deps.storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    expect(deps.supabaseClient.auth.onAuthStateChange).not.toHaveBeenCalled()
     await deps.controller.dispose()
-    expect(deps.supabaseClient._authUnsubscribe).toHaveBeenCalled()
+    expect(deps.supabaseClient._authUnsubscribe).not.toHaveBeenCalled()
   })
 
   test('P11A SESSION_USER_ID_CHANGED does not resume the old actor queue', async () => {
     const deps = createDeps()
     await deps.controller.boot()
-    deps.storeApi.resumePausedUploads.mockClear()
     deps.supabaseClient.auth.getSession.mockResolvedValue({
       data: {
         session: {
@@ -536,6 +522,7 @@ describe('useOfficeReportPhotoUploadQueue', () => {
     window.dispatchEvent(new Event('online'))
     await flushWake()
     expect(deps.storeApi.resumePausedUploads).not.toHaveBeenCalled()
+    expect(deps.storeApi.stop).not.toHaveBeenCalled()
     expect(deps.controller.getActorScopeId()).toBe(USER_ID)
   })
 
@@ -925,6 +912,10 @@ describe('useOfficeReportPhotoUploadQueue P11D observation', () => {
     const createTransport = () => ({ startUpload: jest.fn() })
     const createReconciler = () => ({})
     const createStore = () => storeApi
+    const getRuntime = () => ({
+      wake: async () => {},
+      getStore: () => storeApi,
+    })
     const apiRef = { current: null }
     function Probe() {
       apiRef.current = useOfficeReportPhotoUploadQueue({
@@ -938,6 +929,7 @@ describe('useOfficeReportPhotoUploadQueue P11D observation', () => {
         createTransport,
         createReconciler,
         createStore,
+        getRuntime,
         now: () => FIXED_NOW,
         randomUUID: () => 'qid-obs',
         createLeaseOwner: () => 'lease-obs',

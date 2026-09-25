@@ -11,6 +11,15 @@ import {
   usePhotoUploadQueue,
 } from './usePhotoUploadQueue'
 import { PHOTO_UPLOAD_STATUSES } from '../lib/photoUploadDomain'
+import {
+  acquirePhotoUploadRuntime,
+  releasePhotoUploadRuntime,
+  resetPhotoUploadRuntimeRegistryForTests,
+} from '../lib/photoUploadRuntime'
+import {
+  OFFICE_REPORT_SOURCE_SURFACES,
+  useOfficeReportPhotoUploadQueue,
+} from './useOfficeReportPhotoUploadQueue'
 
 const SENTINEL_TOKEN = 'p7-sentinel-token-SECRET-never-persist'
 const USER_ID = 'office-user-uuid-1'
@@ -182,6 +191,12 @@ function createDeps(overrides = {}) {
     clearTimeoutImpl: timers.clearTimeoutImpl,
     onRemoteDone: overrides.onRemoteDone || ((payload) => { remoteDone.push(payload) }),
     ...overrides.controller,
+    getRuntime: () => ({
+      wake: async () => {
+        events.push('wake')
+      },
+      getStore: () => storeApi,
+    }),
   })
   liveControllers.push(controller)
   return {
@@ -358,7 +373,7 @@ describe('usePhotoUploadQueue / office evidence queue controller', () => {
       jobId: JOB_ID,
       runType: 'after_del',
     })
-    expect(events).toEqual(['put', 'start'])
+    expect(events).toEqual(['put', 'wake'])
     expect(result.accepted[0].queueId).toBe(putRecords[0].queue_id)
   })
 
@@ -395,7 +410,7 @@ describe('usePhotoUploadQueue / office evidence queue controller', () => {
   test('partial batch failure preserves already accepted records', async () => {
     let calls = 0
     const kept = []
-    const { controller, storeApi } = createDeps({
+    const { controller, storeApi, events } = createDeps({
       putRecord: async (record) => {
         calls += 1
         if (calls === 3) {
@@ -416,7 +431,8 @@ describe('usePhotoUploadQueue / office evidence queue controller', () => {
     expect(result.accepted).toHaveLength(2)
     expect(result.rejected).toHaveLength(1)
     expect(kept).toEqual(result.accepted.map((row) => row.queueId))
-    expect(storeApi.start).toHaveBeenCalled()
+    expect(storeApi.start).not.toHaveBeenCalled()
+    expect(events).toContain('wake')
   })
 
   test('queue write failure does not fall back to legacy upload', async () => {
@@ -456,28 +472,31 @@ describe('usePhotoUploadQueue / office evidence queue controller', () => {
   })
 
   test('getAccessToken reads the current session just in time', async () => {
-    const { controller, supabaseClient, getCapturedGetAccessToken } = createDeps()
+    const { controller, supabaseClient } = createDeps()
     await controller.enqueueFiles({
       files: [makeFile('a.jpg', 'image/jpeg')],
       jobId: JOB_ID,
       runType: 'after_del',
     })
-    const token = await getCapturedGetAccessToken()()
+    const token = await controller.getAccessToken()
     expect(token).toBe(SENTINEL_TOKEN)
     expect(supabaseClient.auth.getSession).toHaveBeenCalled()
   })
 
-  test('boot starts recovery runtime for the office actor', async () => {
+  test('boot resolves the office actor without owning transport', async () => {
     const { controller, storeApi } = createDeps()
     await controller.boot()
-    expect(storeApi.start).toHaveBeenCalled()
+    expect(storeApi.start).not.toHaveBeenCalled()
+    expect(storeApi.resumePausedUploads).not.toHaveBeenCalled()
+    expect(controller.getActorScopeId()).toBe(USER_ID)
   })
 
-  test('dispose stops runtime then closes DB', async () => {
-    const { controller, events } = createDeps()
+  test('dispose closes the surface DB and does not stop shared transport', async () => {
+    const { controller, events, storeApi } = createDeps()
     await controller.boot()
     await controller.dispose()
-    expect(events).toEqual(['start', 'stop', 'close'])
+    expect(events).toEqual(['close'])
+    expect(storeApi.stop).not.toHaveBeenCalled()
   })
 
   test('profile null preserves legacy uploaded_by while actor remains session UUID', async () => {
@@ -734,7 +753,7 @@ describe('usePhotoUploadQueue hook lifecycle', () => {
     container.remove()
   })
 
-  test('mount starts runtime and unmount stops then closes DB', async () => {
+  test('SURFACE_UNMOUNT closes the surface DB and does not stop transport', async () => {
     const events = []
     const storeApi = {
       start: jest.fn(() => { events.push('start') }),
@@ -770,16 +789,15 @@ describe('usePhotoUploadQueue hook lifecycle', () => {
     await act(async () => {
       await Promise.resolve()
     })
-    expect(storeApi.start).toHaveBeenCalled()
+    expect(storeApi.start).not.toHaveBeenCalled()
     await act(async () => {
       root.unmount()
     })
     await act(async () => {
       await Promise.resolve()
     })
-    expect(events.indexOf('start')).toBeGreaterThanOrEqual(0)
-    expect(events.indexOf('stop')).toBeGreaterThan(events.indexOf('start'))
-    expect(events.indexOf('close')).toBeGreaterThan(events.indexOf('stop'))
+    expect(storeApi.stop).not.toHaveBeenCalled()
+    expect(events).toEqual(['close'])
   })
 
   test('hook unmount clears observer timer and stops DONE callbacks', async () => {
@@ -843,7 +861,7 @@ describe('usePhotoUploadQueue hook lifecycle', () => {
   })
 })
 
-describe('usePhotoUploadQueue P11A environmental wake', () => {
+describe('usePhotoUploadQueue surface does not own transport', () => {
   afterEach(async () => {
     while (liveControllers.length) {
       const controller = liveControllers.pop()
@@ -851,13 +869,13 @@ describe('usePhotoUploadQueue P11A environmental wake', () => {
     }
   })
 
-  test('authoritative actor boot and enqueue remain unchanged while resume is additive', async () => {
-    const { controller, putRecords, storeApi } = createDeps()
+  test('authoritative actor boot and enqueue remain unchanged without a private runtime', async () => {
+    const { controller, putRecords, storeApi, events } = createDeps()
     await controller.boot()
     expect(controller.getActorScopeId()).toBe(USER_ID)
     expect(controller.getActorScopeId()).not.toBe(DIFFERENT_PROFILE_UUID)
-    expect(storeApi.start).toHaveBeenCalled()
-    expect(storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    expect(storeApi.start).not.toHaveBeenCalled()
+    expect(storeApi.resumePausedUploads).not.toHaveBeenCalled()
     const result = await controller.enqueueFiles({
       files: [makeFile('a.jpg', 'image/jpeg')],
       jobId: JOB_ID,
@@ -865,79 +883,58 @@ describe('usePhotoUploadQueue P11A environmental wake', () => {
       profile: { id: DIFFERENT_PROFILE_UUID, name: 'Alex' },
     })
     expect(result.accepted).toHaveLength(1)
+    expect(events).toContain('wake')
     expect(putRecords[0].actor_scope_id).toBe(USER_ID)
     expect(putRecords[0].actor_scope_id).not.toBe(DIFFERENT_PROFILE_UUID)
   })
 
-  test('online listener is registered and removed on cleanup', async () => {
+  test('surface boot does not register an online listener', async () => {
     const addSpy = jest.spyOn(window, 'addEventListener')
-    const removeSpy = jest.spyOn(window, 'removeEventListener')
     const { controller } = createDeps()
     await controller.boot()
-    expect(addSpy).toHaveBeenCalledWith('online', expect.any(Function))
+    expect(addSpy).not.toHaveBeenCalledWith('online', expect.any(Function))
     await controller.dispose()
-    expect(removeSpy).toHaveBeenCalledWith('online', expect.any(Function))
     addSpy.mockRestore()
-    removeSpy.mockRestore()
   })
 
-  test('online event calls guarded resume', async () => {
+  test('surface does not resume when the window goes online', async () => {
     const { controller, storeApi } = createDeps()
     await controller.boot()
-    storeApi.resumePausedUploads.mockClear()
     window.dispatchEvent(new Event('online'))
     await flushWake()
-    expect(storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    expect(storeApi.resumePausedUploads).not.toHaveBeenCalled()
+    expect(storeApi.start).not.toHaveBeenCalled()
   })
 
-  test('offline boot does not resume', async () => {
+  test('offline boot does not start a private runtime', async () => {
     const { controller, storeApi } = createDeps({
       controller: { isOnline: () => false },
     })
     await controller.boot()
-    expect(storeApi.start).toHaveBeenCalled()
+    expect(storeApi.start).not.toHaveBeenCalled()
     expect(storeApi.resumePausedUploads).not.toHaveBeenCalled()
   })
 
-  test('online boot resumes when credentials are ready', async () => {
-    const { controller, storeApi } = createDeps()
-    await controller.boot()
-    expect(storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
-  })
-
-  test('credential readiness failure leaves paused state and does not reject', async () => {
+  test('missing access token does not reject boot', async () => {
     const { controller, storeApi } = createDeps({
       supabaseClient: createSessionClient({ userId: USER_ID, accessToken: null }),
     })
     await expect(controller.boot()).resolves.toBeUndefined()
     expect(storeApi.resumePausedUploads).not.toHaveBeenCalled()
+    expect(storeApi.start).not.toHaveBeenCalled()
   })
 
-  test('resume rejection does not become an unhandled rejection', async () => {
-    const { controller, storeApi } = createDeps()
-    storeApi.resumePausedUploads.mockImplementation(async () => {
-      throw new Error('resume failed')
-    })
-    await expect(controller.boot()).resolves.toBeUndefined()
-  })
-
-  test('auth-change wake is subscribed and cleaned up', async () => {
-    const { controller, storeApi, supabaseClient } = createDeps()
+  test('surface boot does not subscribe to auth changes', async () => {
+    const { controller, supabaseClient } = createDeps()
     await controller.boot()
-    expect(supabaseClient.auth.onAuthStateChange).toHaveBeenCalled()
-    storeApi.resumePausedUploads.mockClear()
-    const onChange = supabaseClient.auth.onAuthStateChange.mock.calls[0][0]
-    onChange('SIGNED_IN')
-    await flushWake()
-    expect(storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    expect(supabaseClient.auth.onAuthStateChange).not.toHaveBeenCalled()
     await controller.dispose()
-    expect(supabaseClient._authUnsubscribe).toHaveBeenCalled()
+    expect(supabaseClient._authUnsubscribe).not.toHaveBeenCalled()
   })
 
-  test('SESSION_USER_ID_CHANGED does not resume the old actor queue', async () => {
+  test('session user change after boot does not move the surface actor or resume', async () => {
     const { controller, storeApi, supabaseClient } = createDeps()
     await controller.boot()
-    storeApi.resumePausedUploads.mockClear()
     supabaseClient.auth.getSession.mockResolvedValue({
       data: {
         session: {
@@ -949,10 +946,11 @@ describe('usePhotoUploadQueue P11A environmental wake', () => {
     window.dispatchEvent(new Event('online'))
     await flushWake()
     expect(storeApi.resumePausedUploads).not.toHaveBeenCalled()
+    expect(storeApi.stop).not.toHaveBeenCalled()
     expect(controller.getActorScopeId()).toBe(USER_ID)
   })
 
-  test('no token is persisted by boot resume', async () => {
+  test('no token is persisted by surface boot', async () => {
     const { controller, storeApi } = createDeps()
     await controller.boot()
     assertNoToken(storeApi)
@@ -1083,6 +1081,10 @@ describe('usePhotoUploadQueue P11B manual retry', () => {
           stop: jest.fn(async () => {}),
           manualUploadRetry,
           manualDbRetry,
+        }),
+        getRuntime: () => ({
+          wake: async () => {},
+          getStore: () => ({ manualUploadRetry, manualDbRetry }),
         }),
         now: () => FIXED_NOW,
         randomUUID: () => 'qid-hook',
@@ -1320,6 +1322,10 @@ describe('usePhotoUploadQueue P11D observation', () => {
     const createTransport = () => ({ startUpload: jest.fn() })
     const createReconciler = () => ({})
     const createStore = () => storeApi
+    const getRuntime = () => ({
+      wake: async () => {},
+      getStore: () => storeApi,
+    })
     const apiRef = { current: null }
     function Probe() {
       apiRef.current = usePhotoUploadQueue({
@@ -1330,6 +1336,7 @@ describe('usePhotoUploadQueue P11D observation', () => {
         createTransport,
         createReconciler,
         createStore,
+        getRuntime,
         now: () => FIXED_NOW,
         randomUUID: () => 'qid-obs',
         createLeaseOwner: () => 'lease-obs',
@@ -1391,6 +1398,97 @@ describe('usePhotoUploadQueue P11D observation', () => {
     await act(async () => { await flushMicrotasks() })
     expect(db.putRecord).not.toHaveBeenCalled()
     await act(async () => { root.unmount() })
+    container.remove()
+  })
+})
+
+describe('office app-wide foreground recovery host', () => {
+  afterEach(async () => {
+    await resetPhotoUploadRuntimeRegistryForTests()
+  })
+
+  test('SURFACE_UNMOUNT_DOES_NOT_STOP_GLOBAL_TRANSPORT and office surfaces share one runtime', async () => {
+    const stop = jest.fn(async () => {})
+    const runtimeStores = []
+    const hookStores = []
+    const runtime = acquirePhotoUploadRuntime({
+      actorScopeType: OFFICE_EVIDENCE_ACTOR_SCOPE_TYPE,
+      actorScopeId: USER_ID,
+      supabaseClient: createSessionClient(),
+      createDb: () => ({
+        putRecord: jest.fn(),
+        getRecord: jest.fn(async () => null),
+        listRecordsForActor: jest.fn(async () => []),
+        close: jest.fn(async () => {}),
+      }),
+      createTransport: () => ({ startUpload: jest.fn() }),
+      createReconciler: () => ({}),
+      createStore: () => {
+        runtimeStores.push('runtime')
+        return {
+          start: jest.fn(),
+          stop,
+          wake: jest.fn(async () => ({ woke: true, resumed: 0 })),
+          resumePausedUploads: jest.fn(async () => ({ resumed: 0 })),
+        }
+      },
+      getAccessToken: async () => SENTINEL_TOKEN,
+      now: () => FIXED_NOW,
+    })
+    await runtime.ready
+    const hookDb = {
+      putRecord: jest.fn(),
+      getRecord: jest.fn(async () => null),
+      listRecordsForActor: jest.fn(async () => []),
+      close: jest.fn(async () => {}),
+    }
+    function EvidenceProbe() {
+      usePhotoUploadQueue({
+        jobId: JOB_ID,
+        runType: 'after_del',
+        supabaseClient: createSessionClient(),
+        createDb: () => hookDb,
+        createStore: () => {
+          hookStores.push('evidence')
+          return { start: jest.fn(), stop: jest.fn(async () => {}) }
+        },
+        now: () => FIXED_NOW,
+        randomUUID: () => 'qid-evidence',
+        createLeaseOwner: () => 'lease-evidence',
+      })
+      return null
+    }
+    function ReportProbe() {
+      useOfficeReportPhotoUploadQueue({
+        sourceSurface: OFFICE_REPORT_SOURCE_SURFACES.OFFICE_REPORTS,
+        reportId: 'report-9',
+        supabaseClient: createSessionClient(),
+        createDb: () => hookDb,
+        createStore: () => {
+          hookStores.push('report')
+          return { start: jest.fn(), stop: jest.fn(async () => {}) }
+        },
+        now: () => FIXED_NOW,
+        randomUUID: () => 'qid-report',
+        createLeaseOwner: () => 'lease-report',
+      })
+      return null
+    }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    await act(async () => { root.render(<EvidenceProbe />) })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { root.render(<ReportProbe />) })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { root.unmount() })
+    await act(async () => { await Promise.resolve() })
+    expect(runtimeStores).toEqual(['runtime'])
+    expect(hookStores).toEqual([])
+    expect(stop).not.toHaveBeenCalled()
+    expect(hookDb.close).toHaveBeenCalled()
+    await releasePhotoUploadRuntime(OFFICE_EVIDENCE_ACTOR_SCOPE_TYPE, USER_ID)
+    expect(stop).toHaveBeenCalledTimes(1)
     container.remove()
   })
 })

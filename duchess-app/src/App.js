@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { supabase } from './lib/supabase'
 import Login from './pages/Login'
 import DriverAccess from './pages/DriverAccess'
+import OfficePhotoUploadRuntime from './components/OfficePhotoUploadRuntime'
 import Sidebar from './components/Sidebar'
 import Dashboard from './pages/Dashboard'
 import Notifications from './pages/Notifications'
@@ -133,6 +134,7 @@ function AppInner() {
 
   return (
     <>
+      <OfficePhotoUploadRuntime />
       <style>{`
         @media (max-width: 768px) {
           .sidebar-desktop { transform: translateX(-260px) !important; }

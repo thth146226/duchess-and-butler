@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase as applicationSupabase } from '../lib/supabase'
 import { PHOTO_UPLOAD_STATUSES } from '../lib/photoUploadDomain'
 import { PHOTO_UPLOAD_RECORD_SCHEMA_VERSION, createPhotoUploadDb } from '../lib/photoUploadDb'
-import { createPhotoUploadTransport } from '../lib/photoUploadTransport'
-import { createPhotoUploadReconciler } from '../lib/photoUploadReconciler'
-import { createPhotoUploadStore } from '../lib/photoUploadStore'
+import {
+  getPhotoUploadRuntimeStore,
+  wakePhotoUploadRuntime,
+} from '../lib/photoUploadRuntime'
 
 export const OFFICE_EVIDENCE_SOURCE_SURFACE = 'office_evidence'
 export const OFFICE_EVIDENCE_ENTITY_TYPE = 'job'
@@ -143,9 +144,7 @@ function toRemoteDoneNotification(record) {
 export function createPhotoUploadQueueController(options = {}) {
   const supabaseClient = options.supabaseClient || applicationSupabase
   const createDb = options.createDb || createPhotoUploadDb
-  const createTransport = options.createTransport || createPhotoUploadTransport
-  const createReconciler = options.createReconciler || createPhotoUploadReconciler
-  const createStore = options.createStore || createPhotoUploadStore
+  const getRuntime = options.getRuntime
   const now = typeof options.now === 'function' ? options.now : Date.now
   const randomUUID = typeof options.randomUUID === 'function'
     ? options.randomUUID
@@ -153,9 +152,6 @@ export function createPhotoUploadQueueController(options = {}) {
   const createLeaseOwner = typeof options.createLeaseOwner === 'function'
     ? options.createLeaseOwner
     : () => crypto.randomUUID()
-  const isOnline = typeof options.isOnline === 'function'
-    ? options.isOnline
-    : () => (typeof navigator === 'undefined' || navigator.onLine !== false)
   const setTimeoutImpl = typeof options.setTimeoutImpl === 'function'
     ? options.setTimeoutImpl
     : setTimeout
@@ -167,7 +163,6 @@ export function createPhotoUploadQueueController(options = {}) {
     : null
 
   let db = null
-  let store = null
   let stopped = false
   let constructionError = null
   const leaseOwner = createLeaseOwner()
@@ -176,7 +171,14 @@ export function createPhotoUploadQueueController(options = {}) {
   const notifiedDone = new Set()
   let pollTimer = null
   let inspectInFlight = false
-  let envWakeCleanup = null
+
+  function sharedStore() {
+    return getPhotoUploadRuntimeStore(
+      OFFICE_EVIDENCE_ACTOR_SCOPE_TYPE,
+      actorScopeId,
+      getRuntime,
+    )
+  }
 
   async function resolveActorId() {
     const { userId } = await readSessionUserAndToken(supabaseClient)
@@ -186,95 +188,6 @@ export function createPhotoUploadQueueController(options = {}) {
   async function getAccessToken() {
     const { accessToken } = await readSessionUserAndToken(supabaseClient)
     return accessToken
-  }
-
-  function environmentIsPlausiblyUsable() {
-    try {
-      if (typeof isOnline === 'function' && isOnline() === false) {
-        return false
-      }
-    } catch (_error) {
-      return false
-    }
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-      return false
-    }
-    return true
-  }
-
-  async function requestResumePausedUploads() {
-    if (stopped) {
-      return
-    }
-    try {
-      if (!environmentIsPlausiblyUsable()) {
-        return
-      }
-      if (!store || typeof store.resumePausedUploads !== 'function') {
-        return
-      }
-      const currentUserId = await resolveActorId()
-      if (!isNonEmptyString(currentUserId) || currentUserId !== actorScopeId) {
-        return
-      }
-      const token = await getAccessToken()
-      if (!isNonEmptyString(token)) {
-        return
-      }
-      await store.resumePausedUploads()
-    } catch (_error) {
-      return
-    }
-  }
-
-  function attachEnvironmentalWake() {
-    if (stopped || envWakeCleanup) {
-      return
-    }
-    const cleanups = []
-    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-      const onOnline = () => {
-        void requestResumePausedUploads()
-      }
-      window.addEventListener('online', onOnline)
-      cleanups.push(() => {
-        if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
-          window.removeEventListener('online', onOnline)
-        }
-      })
-    }
-    const auth = supabaseClient && supabaseClient.auth
-    if (auth && typeof auth.onAuthStateChange === 'function') {
-      try {
-        const result = auth.onAuthStateChange(() => {
-          void requestResumePausedUploads()
-        })
-        const subscription = result && result.data ? result.data.subscription : null
-        if (subscription && typeof subscription.unsubscribe === 'function') {
-          cleanups.push(() => {
-            subscription.unsubscribe()
-          })
-        }
-      } catch (_error) {
-        // existing client does not support auth wake
-      }
-    }
-    envWakeCleanup = () => {
-      for (const fn of cleanups) {
-        try {
-          fn()
-        } catch (_cleanupError) {
-          // ignore
-        }
-      }
-      envWakeCleanup = null
-    }
-  }
-
-  function detachEnvironmentalWake() {
-    if (typeof envWakeCleanup === 'function') {
-      envWakeCleanup()
-    }
   }
 
   function ensureDb() {
@@ -404,35 +317,6 @@ export function createPhotoUploadQueueController(options = {}) {
     }
   }
 
-  async function startRuntime(nextActorId) {
-    if (stopped) {
-      return
-    }
-    ensureDb()
-    if (!store) {
-      try {
-        const transport = createTransport()
-        const reconciler = createReconciler({ supabaseClient })
-        store = createStore({
-          db,
-          transport,
-          reconciler,
-          actorScopeType: OFFICE_EVIDENCE_ACTOR_SCOPE_TYPE,
-          actorScopeId: nextActorId,
-          leaseOwner,
-          getAccessToken,
-          isOnline,
-          now,
-        })
-        actorScopeId = nextActorId
-      } catch (error) {
-        constructionError = error
-        throw error
-      }
-    }
-    return store.start()
-  }
-
   async function boot() {
     if (stopped) {
       return
@@ -441,9 +325,8 @@ export function createPhotoUploadQueueController(options = {}) {
     if (!userId) {
       return
     }
-    await startRuntime(userId)
-    attachEnvironmentalWake()
-    await requestResumePausedUploads()
+    actorScopeId = userId
+    ensureDb()
     await seedPendingFromExisting(userId)
     await inspectPending()
   }
@@ -544,12 +427,12 @@ export function createPhotoUploadQueueController(options = {}) {
     }
 
     if (accepted.length > 0) {
-      try {
-        await startRuntime(userId)
-      } catch (_error) {
-        await inspectPending()
-        return { accepted, rejected }
-      }
+      actorScopeId = userId
+      await wakePhotoUploadRuntime(
+        OFFICE_EVIDENCE_ACTOR_SCOPE_TYPE,
+        userId,
+        getRuntime,
+      )
       await inspectPending()
     }
 
@@ -558,13 +441,8 @@ export function createPhotoUploadQueueController(options = {}) {
 
   async function dispose() {
     stopped = true
-    detachEnvironmentalWake()
     cancelObserverTimer()
     pendingObservation.clear()
-    if (store && typeof store.stop === 'function') {
-      await store.stop()
-    }
-    store = null
     if (db && typeof db.close === 'function') {
       await db.close()
     }
@@ -584,13 +462,14 @@ export function createPhotoUploadQueueController(options = {}) {
         code: OFFICE_EVIDENCE_QUEUE_ERROR_CODES.QUEUE_ID_REQUIRED,
       }
     }
-    if (!store || typeof store.manualUploadRetry !== 'function') {
+    const shared = sharedStore()
+    if (!shared || typeof shared.manualUploadRetry !== 'function') {
       return {
         ok: false,
         code: OFFICE_EVIDENCE_QUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE,
       }
     }
-    return store.manualUploadRetry({ queueId })
+    return shared.manualUploadRetry({ queueId })
   }
 
   async function manualDbRetry({ queueId } = {}) {
@@ -606,13 +485,14 @@ export function createPhotoUploadQueueController(options = {}) {
         code: OFFICE_EVIDENCE_QUEUE_ERROR_CODES.QUEUE_ID_REQUIRED,
       }
     }
-    if (!store || typeof store.manualDbRetry !== 'function') {
+    const shared = sharedStore()
+    if (!shared || typeof shared.manualDbRetry !== 'function') {
       return {
         ok: false,
         code: OFFICE_EVIDENCE_QUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE,
       }
     }
-    return store.manualDbRetry({ queueId })
+    return shared.manualDbRetry({ queueId })
   }
 
   async function getQueueSnapshot({ sourceSurface, entityType, entityId } = {}) {
@@ -687,7 +567,7 @@ export function usePhotoUploadQueue({
   createDb,
   createTransport,
   createReconciler,
-  createStore,
+  createStore, getRuntime,
   now,
   randomUUID,
   createLeaseOwner,
@@ -725,7 +605,7 @@ export function usePhotoUploadQueue({
       createDb,
       createTransport,
       createReconciler,
-      createStore,
+      createStore, getRuntime,
       now,
       randomUUID,
       createLeaseOwner,
@@ -750,7 +630,7 @@ export function usePhotoUploadQueue({
     createDb,
     createTransport,
     createReconciler,
-    createStore,
+    createStore, getRuntime,
     now,
     randomUUID,
     createLeaseOwner,

@@ -12,6 +12,15 @@ import {
   useDriverPhotoUploadQueue,
 } from './useDriverPhotoUploadQueue'
 import { PHOTO_UPLOAD_STATUSES } from '../lib/photoUploadDomain'
+import {
+  acquirePhotoUploadRuntime,
+  releasePhotoUploadRuntime,
+  resetPhotoUploadRuntimeRegistryForTests,
+} from '../lib/photoUploadRuntime'
+import {
+  DRIVER_REPORT_SOURCE_SURFACES,
+  useDriverReportPhotoUploadQueue,
+} from './useDriverReportPhotoUploadQueue'
 
 const BEARER_SENTINEL = 'DRIVER_SUPABASE_BEARER_SENTINEL'
 const PORTAL_TOKEN_SENTINEL = 'p8-portal-token-SECRET-never-persist'
@@ -191,6 +200,12 @@ function createDeps(overrides = {}) {
     clearTimeoutImpl: timers.clearTimeoutImpl,
     onRemoteDone: overrides.onRemoteDone || ((payload) => { remoteDone.push(payload) }),
     ...overrides.controller,
+    getRuntime: () => ({
+      wake: async () => {
+        events.push('wake')
+      },
+      getStore: () => storeApi,
+    }),
   })
   liveControllers.push(controller)
   return {
@@ -228,7 +243,7 @@ describe('useDriverPhotoUploadQueue / driver evidence queue controller', () => {
   })
 
   test('actor_scope_type is driver_portal and actor_scope_id is driver.id', async () => {
-    const { controller, putRecords, getCapturedStoreActor } = createDeps()
+    const { controller, putRecords } = createDeps()
     await controller.enqueueFiles({
       files: [makeFile('a.jpg', 'image/jpeg')],
       driverId: DRIVER_ID,
@@ -240,10 +255,6 @@ describe('useDriverPhotoUploadQueue / driver evidence queue controller', () => {
     expect(putRecords[0].actor_scope_id).toBe(DRIVER_ID)
     expect(putRecords[0].entity_id).toBe(JOB_ID)
     expect(putRecords[0].entity_id).not.toBe(DRIVER_ID)
-    expect(getCapturedStoreActor()).toEqual({
-      actorScopeType: DRIVER_EVIDENCE_ACTOR_SCOPE_TYPE,
-      actorScopeId: DRIVER_ID,
-    })
   })
 
   test('missing driver.id rejects before DB write', async () => {
@@ -395,7 +406,7 @@ describe('useDriverPhotoUploadQueue / driver evidence queue controller', () => {
       jobId: JOB_ID,
       runType: 'after_del',
     })
-    expect(events).toEqual(['put', 'start'])
+    expect(events).toEqual(['put', 'wake'])
     expect(result.accepted[0].queueId).toBe(putRecords[0].queue_id)
   })
 
@@ -419,7 +430,7 @@ describe('useDriverPhotoUploadQueue / driver evidence queue controller', () => {
   test('partial batch failure preserves already accepted records', async () => {
     let calls = 0
     const kept = []
-    const { controller, storeApi } = createDeps({
+    const { controller, storeApi, events } = createDeps({
       putRecord: async (record) => {
         calls += 1
         if (calls === 3) {
@@ -441,7 +452,8 @@ describe('useDriverPhotoUploadQueue / driver evidence queue controller', () => {
     expect(result.accepted).toHaveLength(2)
     expect(result.rejected).toHaveLength(1)
     expect(kept).toEqual(result.accepted.map((row) => row.queueId))
-    expect(storeApi.start).toHaveBeenCalled()
+    expect(storeApi.start).not.toHaveBeenCalled()
+    expect(events).toContain('wake')
   })
 
   test('queue write failure does not fall back to legacy upload or report flows', async () => {
@@ -467,12 +479,13 @@ describe('useDriverPhotoUploadQueue / driver evidence queue controller', () => {
     expect(transport.startUpload).not.toHaveBeenCalled()
   })
 
-  test('runtime starts only after driver identity is proven', async () => {
+  test('actor scope is set only after driver identity is proven', async () => {
     const { controller, storeApi } = createDeps()
     await controller.boot({ driverId: null })
     expect(storeApi.start).not.toHaveBeenCalled()
+    expect(controller.getActorScopeId()).toBeNull()
     await controller.boot({ driverId: DRIVER_ID })
-    expect(storeApi.start).toHaveBeenCalled()
+    expect(storeApi.start).not.toHaveBeenCalled()
     expect(controller.getActorScopeId()).toBe(DRIVER_ID)
   })
 
@@ -490,19 +503,20 @@ describe('useDriverPhotoUploadQueue / driver evidence queue controller', () => {
       getRecord: async ({ queueId }) => (queueId === preexisting.queue_id ? preexisting : null),
     })
     await controller.boot({ driverId: DRIVER_ID })
-    expect(storeApi.start).toHaveBeenCalled()
+    expect(storeApi.start).not.toHaveBeenCalled()
     expect(controller.getPendingObservationQueueIds()).toEqual(['pre-driver'])
   })
 
-  test('old driver runtime stops on dispose', async () => {
-    const { controller, events } = createDeps()
+  test('dispose closes the surface DB and does not stop shared transport', async () => {
+    const { controller, events, storeApi } = createDeps()
     await controller.boot({ driverId: DRIVER_ID })
     await controller.dispose()
-    expect(events).toEqual(['start', 'stop', 'close'])
+    expect(events).toEqual(['close'])
+    expect(storeApi.stop).not.toHaveBeenCalled()
   })
 
   test('getAccessToken uses session bearer just in time and does not persist it', async () => {
-    const { controller, putRecords, getCapturedGetAccessToken, supabaseClient } = createDeps()
+    const { controller, putRecords, supabaseClient } = createDeps()
     await controller.enqueueFiles({
       files: [makeFile('a.jpg', 'image/jpeg')],
       driverId: DRIVER_ID,
@@ -510,7 +524,7 @@ describe('useDriverPhotoUploadQueue / driver evidence queue controller', () => {
       runType: 'after_del',
       driverName: 'Pat',
     })
-    const token = await getCapturedGetAccessToken()()
+    const token = await controller.getAccessToken()
     expect(token).toBe(BEARER_SENTINEL)
     expect(supabaseClient.auth.getSession).toHaveBeenCalled()
     assertNoSecret(putRecords[0], BEARER_SENTINEL)
@@ -711,7 +725,7 @@ describe('useDriverPhotoUploadQueue hook lifecycle', () => {
       root.render(<Probe driverId={DRIVER_ID} />)
     })
     await act(async () => { await Promise.resolve() })
-    expect(storeApi.start).toHaveBeenCalled()
+    expect(storeApi.start).not.toHaveBeenCalled()
     await act(async () => {
       root.render(<Probe driverId={OTHER_DRIVER_ID} />)
     })
@@ -720,12 +734,14 @@ describe('useDriverPhotoUploadQueue hook lifecycle', () => {
       root.unmount()
     })
     await act(async () => { await Promise.resolve() })
-    expect(events.indexOf('stop')).toBeGreaterThan(events.indexOf('start'))
-    expect(events.indexOf('close')).toBeGreaterThan(events.indexOf('stop'))
+    expect(storeApi.stop).not.toHaveBeenCalled()
+    expect(events.filter((event) => event === 'close').length).toBeGreaterThanOrEqual(1)
+    expect(events).not.toContain('start')
+    expect(events).not.toContain('stop')
   })
 })
 
-describe('useDriverPhotoUploadQueue P11A environmental wake', () => {
+describe('useDriverPhotoUploadQueue surface does not own transport', () => {
   afterEach(async () => {
     while (liveControllers.length) {
       const controller = liveControllers.pop()
@@ -733,16 +749,12 @@ describe('useDriverPhotoUploadQueue P11A environmental wake', () => {
     }
   })
 
-  test('authoritative driver actor boot and enqueue remain unchanged while resume is additive', async () => {
-    const { controller, putRecords, storeApi, getCapturedStoreActor } = createDeps()
+  test('authoritative driver actor boot and enqueue remain unchanged without a private runtime', async () => {
+    const { controller, putRecords, storeApi, events } = createDeps()
     await controller.boot({ driverId: DRIVER_ID })
     expect(controller.getActorScopeId()).toBe(DRIVER_ID)
-    expect(getCapturedStoreActor()).toEqual({
-      actorScopeType: DRIVER_EVIDENCE_ACTOR_SCOPE_TYPE,
-      actorScopeId: DRIVER_ID,
-    })
-    expect(storeApi.start).toHaveBeenCalled()
-    expect(storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    expect(storeApi.start).not.toHaveBeenCalled()
+    expect(storeApi.resumePausedUploads).not.toHaveBeenCalled()
     const result = await controller.enqueueFiles({
       files: [makeFile('a.jpg', 'image/jpeg')],
       driverId: DRIVER_ID,
@@ -750,93 +762,72 @@ describe('useDriverPhotoUploadQueue P11A environmental wake', () => {
       runType: 'after_del',
     })
     expect(result.accepted).toHaveLength(1)
+    expect(events).toContain('wake')
     expect(putRecords[0].actor_scope_id).toBe(DRIVER_ID)
   })
 
-  test('online listener is registered and removed on cleanup', async () => {
+  test('surface boot does not register an online listener', async () => {
     const addSpy = jest.spyOn(window, 'addEventListener')
-    const removeSpy = jest.spyOn(window, 'removeEventListener')
     const { controller } = createDeps()
     await controller.boot({ driverId: DRIVER_ID })
-    expect(addSpy).toHaveBeenCalledWith('online', expect.any(Function))
+    expect(addSpy).not.toHaveBeenCalledWith('online', expect.any(Function))
     await controller.dispose()
-    expect(removeSpy).toHaveBeenCalledWith('online', expect.any(Function))
     addSpy.mockRestore()
-    removeSpy.mockRestore()
   })
 
-  test('online event calls guarded resume', async () => {
+  test('surface does not resume when the window goes online', async () => {
     const { controller, storeApi } = createDeps()
     await controller.boot({ driverId: DRIVER_ID })
-    storeApi.resumePausedUploads.mockClear()
     window.dispatchEvent(new Event('online'))
     await flushWake()
-    expect(storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    expect(storeApi.resumePausedUploads).not.toHaveBeenCalled()
+    expect(storeApi.start).not.toHaveBeenCalled()
   })
 
-  test('offline boot does not resume', async () => {
+  test('offline boot does not start a private runtime', async () => {
     const { controller, storeApi } = createDeps({
       controller: { isOnline: () => false },
     })
     await controller.boot({ driverId: DRIVER_ID })
-    expect(storeApi.start).toHaveBeenCalled()
+    expect(storeApi.start).not.toHaveBeenCalled()
     expect(storeApi.resumePausedUploads).not.toHaveBeenCalled()
   })
 
-  test('online boot resumes when credentials are ready', async () => {
-    const { controller, storeApi } = createDeps()
-    await controller.boot({ driverId: DRIVER_ID })
-    expect(storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
-  })
-
-  test('credential readiness failure leaves paused state and does not reject', async () => {
+  test('credential readiness failure does not reject boot', async () => {
     const { controller, storeApi } = createDeps({
       supabaseClient: createSessionClient({ session: false, supabaseKey: '' }),
     })
     await expect(controller.boot({ driverId: DRIVER_ID })).resolves.toBeUndefined()
     expect(storeApi.resumePausedUploads).not.toHaveBeenCalled()
+    expect(storeApi.start).not.toHaveBeenCalled()
   })
 
-  test('resume rejection does not become an unhandled rejection', async () => {
-    const { controller, storeApi } = createDeps()
-    storeApi.resumePausedUploads.mockImplementation(async () => {
-      throw new Error('resume failed')
-    })
-    await expect(controller.boot({ driverId: DRIVER_ID })).resolves.toBeUndefined()
-  })
-
-  test('auth-change wake is subscribed and cleaned up', async () => {
-    const { controller, storeApi, supabaseClient } = createDeps()
+  test('surface boot does not subscribe to auth changes', async () => {
+    const { controller, supabaseClient } = createDeps()
     await controller.boot({ driverId: DRIVER_ID })
-    expect(supabaseClient.auth.onAuthStateChange).toHaveBeenCalled()
-    storeApi.resumePausedUploads.mockClear()
-    const onChange = supabaseClient.auth.onAuthStateChange.mock.calls[0][0]
-    onChange('SIGNED_IN')
-    await flushWake()
-    expect(storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
+    expect(supabaseClient.auth.onAuthStateChange).not.toHaveBeenCalled()
     await controller.dispose()
-    expect(supabaseClient._authUnsubscribe).toHaveBeenCalled()
+    expect(supabaseClient._authUnsubscribe).not.toHaveBeenCalled()
   })
 
-  test('old driver actor is not resumed after identity change', async () => {
+  test('driver identity change updates the surface actor and does not stop shared transport', async () => {
     const { controller, storeApi } = createDeps()
     await controller.boot({ driverId: DRIVER_ID })
     expect(controller.getActorScopeId()).toBe(DRIVER_ID)
     await controller.boot({ driverId: OTHER_DRIVER_ID })
     expect(controller.getActorScopeId()).toBe(OTHER_DRIVER_ID)
-    expect(storeApi.stop).toHaveBeenCalled()
-    storeApi.resumePausedUploads.mockClear()
+    expect(storeApi.stop).not.toHaveBeenCalled()
+    expect(storeApi.start).not.toHaveBeenCalled()
     window.dispatchEvent(new Event('online'))
     await flushWake()
-    expect(storeApi.resumePausedUploads).toHaveBeenCalledTimes(1)
-    expect(controller.getActorScopeId()).toBe(OTHER_DRIVER_ID)
+    expect(storeApi.resumePausedUploads).not.toHaveBeenCalled()
     expect(controller.getActorScopeId()).not.toBe(DRIVER_ID)
   })
 
   test('portal token is not used as TUS bearer and no token is persisted', async () => {
-    const { controller, storeApi, getCapturedGetAccessToken } = createDeps()
+    const { controller, storeApi } = createDeps()
     await controller.boot({ driverId: DRIVER_ID })
-    const token = await getCapturedGetAccessToken()()
+    const token = await controller.getAccessToken()
     expect(token).toBe(BEARER_SENTINEL)
     expect(token).not.toBe(PORTAL_TOKEN_SENTINEL)
     assertNoSecret(storeApi, BEARER_SENTINEL)
@@ -1158,6 +1149,10 @@ describe('useDriverPhotoUploadQueue P11D observation', () => {
     const createTransport = () => ({ startUpload: jest.fn() })
     const createReconciler = () => ({})
     const createStore = () => storeApi
+    const getRuntime = () => ({
+      wake: async () => {},
+      getStore: () => storeApi,
+    })
     const apiRef = { current: null }
     function Probe() {
       apiRef.current = useDriverPhotoUploadQueue({
@@ -1169,6 +1164,7 @@ describe('useDriverPhotoUploadQueue P11D observation', () => {
         createTransport,
         createReconciler,
         createStore,
+        getRuntime,
         now: () => FIXED_NOW,
         randomUUID: () => 'qid-obs',
         createLeaseOwner: () => 'lease-obs',
@@ -1231,6 +1227,99 @@ describe('useDriverPhotoUploadQueue P11D observation', () => {
     await act(async () => { await flushMicrotasks() })
     expect(db.putRecord).not.toHaveBeenCalled()
     await act(async () => { root.unmount() })
+    container.remove()
+  })
+})
+
+describe('driver app-wide foreground recovery host', () => {
+  afterEach(async () => {
+    await resetPhotoUploadRuntimeRegistryForTests()
+  })
+
+  test('SURFACE_UNMOUNT_DOES_NOT_STOP_GLOBAL_TRANSPORT and driver surfaces share one runtime', async () => {
+    const stop = jest.fn(async () => {})
+    const runtimeStores = []
+    const hookStores = []
+    const runtime = acquirePhotoUploadRuntime({
+      actorScopeType: DRIVER_EVIDENCE_ACTOR_SCOPE_TYPE,
+      actorScopeId: DRIVER_ID,
+      supabaseClient: createSessionClient(),
+      createDb: () => ({
+        putRecord: jest.fn(),
+        getRecord: jest.fn(async () => null),
+        listRecordsForActor: jest.fn(async () => []),
+        close: jest.fn(async () => {}),
+      }),
+      createTransport: () => ({ startUpload: jest.fn() }),
+      createReconciler: () => ({}),
+      createStore: () => {
+        runtimeStores.push('runtime')
+        return {
+          start: jest.fn(),
+          stop,
+          wake: jest.fn(async () => ({ woke: true, resumed: 0 })),
+          resumePausedUploads: jest.fn(async () => ({ resumed: 0 })),
+        }
+      },
+      getAccessToken: async () => BEARER_SENTINEL,
+      now: () => FIXED_NOW,
+    })
+    await runtime.ready
+    const hookDb = {
+      putRecord: jest.fn(),
+      getRecord: jest.fn(async () => null),
+      listRecordsForActor: jest.fn(async () => []),
+      close: jest.fn(async () => {}),
+    }
+    function EvidenceProbe() {
+      useDriverPhotoUploadQueue({
+        driverId: DRIVER_ID,
+        jobId: JOB_ID,
+        runType: 'after_del',
+        supabaseClient: createSessionClient(),
+        createDb: () => hookDb,
+        createStore: () => {
+          hookStores.push('evidence')
+          return { start: jest.fn(), stop: jest.fn(async () => {}) }
+        },
+        now: () => FIXED_NOW,
+        randomUUID: () => 'qid-evidence',
+        createLeaseOwner: () => 'lease-evidence',
+      })
+      return null
+    }
+    function ReportProbe() {
+      useDriverReportPhotoUploadQueue({
+        sourceSurface: DRIVER_REPORT_SOURCE_SURFACES.DRIVER_REPORT_TAB,
+        driverId: DRIVER_ID,
+        reportId: 'report-9',
+        supabaseClient: createSessionClient(),
+        createDb: () => hookDb,
+        createStore: () => {
+          hookStores.push('report')
+          return { start: jest.fn(), stop: jest.fn(async () => {}) }
+        },
+        now: () => FIXED_NOW,
+        randomUUID: () => 'qid-report',
+        createLeaseOwner: () => 'lease-report',
+      })
+      return null
+    }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    await act(async () => { root.render(<><EvidenceProbe /><ReportProbe /></>) })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { root.render(<ReportProbe />) })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { root.unmount() })
+    await act(async () => { await Promise.resolve() })
+    expect(runtimeStores).toEqual(['runtime'])
+    expect(hookStores).toEqual([])
+    expect(stop).not.toHaveBeenCalled()
+    expect(hookDb.close).toHaveBeenCalled()
+    await releasePhotoUploadRuntime(DRIVER_EVIDENCE_ACTOR_SCOPE_TYPE, DRIVER_ID)
+    expect(stop).toHaveBeenCalledTimes(1)
     container.remove()
   })
 })

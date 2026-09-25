@@ -120,6 +120,7 @@ export function createPhotoUploadManager(options = {}) {
   const actorScopeId = options.actorScopeId
   const leaseOwner = options.leaseOwner
   const executeClaimedRecord = options.executeClaimedRecord
+  const abortLocalUpload = options.abortLocalUpload
   const now = typeof options.now === 'function' ? options.now : Date.now
   const setTimeoutImpl = options.setTimeoutImpl || setTimeout
   const clearTimeoutImpl = options.clearTimeoutImpl || clearTimeout
@@ -327,6 +328,11 @@ export function createPhotoUploadManager(options = {}) {
               actorScopeId,
             })
             if (
+              slot.lifecycleRetire
+              && (!durable || durable.status === PHOTO_UPLOAD_STATUSES.UPLOADING)
+            ) {
+              locallyExecuted.delete(slot.queueId)
+            } else if (
               durable
               && durable.status === PHOTO_UPLOAD_STATUSES.UPLOAD_PAUSED
             ) {
@@ -342,13 +348,37 @@ export function createPhotoUploadManager(options = {}) {
             ) {
               locallyExecuted.delete(slot.queueId)
             }
+          } else if (slot.lifecycleRetire) {
+            locallyExecuted.delete(slot.queueId)
           }
         } catch (_readError) {
-          // keep locallyExecuted
+          if (slot.lifecycleRetire) {
+            locallyExecuted.delete(slot.queueId)
+          }
         }
         await pump()
       }
     }
+  }
+
+  async function retireLifecycleStaleSlots() {
+    const slots = [...activeSlots.values()]
+    if (slots.length === 0) {
+      return
+    }
+    for (const slot of slots) {
+      slot.lifecycleRetire = true
+    }
+    if (typeof abortLocalUpload === 'function') {
+      for (const slot of slots) {
+        try {
+          abortLocalUpload(slot.queueId)
+        } catch (_error) {
+          // The slot finally still clears bookkeeping if the handle cannot abort.
+        }
+      }
+    }
+    await Promise.all(slots.map((slot) => slot.settled))
   }
 
   async function claimAndStart(candidate) {
@@ -407,15 +437,21 @@ export function createPhotoUploadManager(options = {}) {
       return false
     }
 
+    let resolveSettled = () => {}
+    const settled = new Promise((resolve) => {
+      resolveSettled = resolve
+    })
     const slot = {
       queueId: claimed.queue_id,
       generation,
       stale: false,
       heartbeatTimer: null,
+      lifecycleRetire: false,
+      settled,
     }
     activeSlots.set(slot.queueId, slot)
     startHeartbeat(slot)
-    void runSlot(slot, workRecord)
+    void runSlot(slot, workRecord).finally(resolveSettled)
     return true
   }
 
@@ -504,6 +540,7 @@ export function createPhotoUploadManager(options = {}) {
   return {
     pump,
     stop,
+    retireLifecycleStaleSlots,
     getRetryWakeState,
   }
 }

@@ -176,7 +176,9 @@ function createPhotoUploadStore(options = {}) {
   let stopped = false
   let manager = null
   let lastWorkerOutcome = null
+  let wakeChain = Promise.resolve()
   const activeUploads = new Map()
+  const pendingRetire = new Set()
 
   function runtimeStatus() {
     return {
@@ -200,6 +202,34 @@ function createPhotoUploadStore(options = {}) {
     for (const handle of handles) {
       abortHandle(handle)
     }
+  }
+
+  function abortLocalUpload(queueId) {
+    pendingRetire.add(queueId)
+    const handle = activeUploads.get(queueId)
+    if (handle) {
+      pendingRetire.delete(queueId)
+      abortHandle(handle)
+    }
+  }
+
+  function installManager() {
+    if (manager) {
+      return manager
+    }
+    manager = managerFactory({
+      db,
+      actorScopeType,
+      actorScopeId,
+      leaseOwner,
+      executeClaimedRecord,
+      abortLocalUpload,
+      now,
+      setTimeoutImpl,
+      clearTimeoutImpl,
+    })
+    started = true
+    return manager
   }
 
   function createSession(record, fence) {
@@ -712,6 +742,9 @@ function createPhotoUploadStore(options = {}) {
     })
 
     activeUploads.set(session.record.queue_id, handle)
+    if (pendingRetire.delete(session.record.queue_id)) {
+      abortHandle(handle)
+    }
 
     let transportResult = null
     let transportError = null
@@ -839,19 +872,7 @@ function createPhotoUploadStore(options = {}) {
     if (stopped) {
       return
     }
-    if (!manager) {
-      manager = managerFactory({
-        db,
-        actorScopeType,
-        actorScopeId,
-        leaseOwner,
-        executeClaimedRecord,
-        now,
-        setTimeoutImpl,
-        clearTimeoutImpl,
-      })
-    }
-    started = true
+    installManager()
     return manager.pump()
   }
 
@@ -878,20 +899,10 @@ function createPhotoUploadStore(options = {}) {
   }
 
   async function ensureManagerForPump() {
-    if (manager) {
+    if (stopped) {
       return
     }
-    manager = managerFactory({
-      db,
-      actorScopeType,
-      actorScopeId,
-      leaseOwner,
-      executeClaimedRecord,
-      now,
-      setTimeoutImpl,
-      clearTimeoutImpl,
-    })
-    started = true
+    installManager()
   }
 
   async function claimManualRetry(queueId) {
@@ -1019,7 +1030,8 @@ function createPhotoUploadStore(options = {}) {
     return { ok: true, status: PHOTO_UPLOAD_STATUSES.DB_PENDING }
   }
 
-  async function resumePausedUploads() {
+  async function resumePausedUploads(context = {}) {
+    const deferPump = Boolean(context && context.deferPump)
     if (stopped) {
       return { resumed: 0 }
     }
@@ -1094,28 +1106,43 @@ function createPhotoUploadStore(options = {}) {
       await safeReleaseResumeLease(claimed.queue_id, generation)
       resumed += 1
     }
-    if (resumed > 0 && !stopped) {
-      if (!manager) {
-        manager = managerFactory({
-          db,
-          actorScopeType,
-          actorScopeId,
-          leaseOwner,
-          executeClaimedRecord,
-          now,
-          setTimeoutImpl,
-          clearTimeoutImpl,
-        })
-        started = true
-      }
+    if (!deferPump && resumed > 0 && !stopped) {
+      installManager()
       await manager.pump()
     }
     return { resumed }
   }
 
+  async function wakeNow(context = {}) {
+    if (stopped) {
+      return { woke: false, resumed: 0 }
+    }
+    const hiddenDuration = Number.isInteger(context.hiddenDuration) ? context.hiddenDuration : 0
+    if (hiddenDuration >= LEASE_TTL_MS) {
+      installManager()
+      if (manager && typeof manager.retireLifecycleStaleSlots === 'function') {
+        await manager.retireLifecycleStaleSlots()
+      }
+    }
+    const paused = await resumePausedUploads({ deferPump: true })
+    if (stopped) {
+      return { woke: false, resumed: paused.resumed }
+    }
+    installManager()
+    await manager.pump()
+    return { woke: true, resumed: paused.resumed }
+  }
+
+  function wake(context = {}) {
+    const run = wakeChain.then(() => wakeNow(context), () => wakeNow(context))
+    wakeChain = run.then(() => undefined, () => undefined)
+    return run
+  }
+
   return {
     start,
     stop,
+    wake,
     resumePausedUploads,
     manualUploadRetry,
     manualDbRetry,
