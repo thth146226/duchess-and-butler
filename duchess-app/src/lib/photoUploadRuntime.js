@@ -1,6 +1,15 @@
 import { PHOTO_UPLOAD_ACTOR_SCOPE_TYPES, createPhotoUploadDb } from './photoUploadDb'
+import { recordPhotoUploadDiagnostic } from './photoUploadDiagnostics'
 import { createPhotoUploadStore } from './photoUploadStore'
 import { createPhotoUploadTransport } from './photoUploadTransport'
+
+function trace(event, data) {
+  try {
+    recordPhotoUploadDiagnostic(event, data)
+  } catch (_error) {
+    return
+  }
+}
 
 function createDefaultReconciler(options) {
   // Loaded on demand so node-environment tests that inject a reconciler
@@ -44,12 +53,17 @@ export function resolvePhotoUploadRuntime(actorScopeType, actorScopeId, getRunti
 
 export async function wakePhotoUploadRuntime(actorScopeType, actorScopeId, getRuntime) {
   const runtime = resolvePhotoUploadRuntime(actorScopeType, actorScopeId, getRuntime)
-  if (!runtime || typeof runtime.wake !== 'function') {
+  const found = Boolean(runtime && typeof runtime.wake === 'function')
+  trace('WAKE_LOOKUP', { actor_scope_type: actorScopeType, runtime_found: found })
+  trace('RUNTIME_LOOKUP', { actor_scope_type: actorScopeType, found })
+  if (!found) {
+    trace('RUNTIME_LOOKUP_MISS', { actor_scope_type: actorScopeType, found: false })
     return null
   }
   try {
     return await runtime.wake({ hiddenDuration: 0 })
-  } catch (_error) {
+  } catch (error) {
+    trace('WAKE_ERROR', { error_class: error && error.name ? error.name : 'Error' })
     return null
   }
 }
@@ -107,12 +121,36 @@ function createRuntimeEntry(options) {
     clearTimeoutImpl: options.clearTimeoutImpl,
   })
 
+  trace('RUNTIME_CREATE', { actor_scope_type: actorScopeType })
+
   const publicApi = {
     actorScopeType,
     actorScopeId,
     ready: Promise.resolve(),
     wake(context) {
-      return store.wake(context)
+      const started = Date.now()
+      const hiddenDuration = context && Number.isInteger(context.hiddenDuration) ? context.hiddenDuration : 0
+      trace('WAKE_BEGIN', {
+        actor_scope_type: actorScopeType,
+        hidden_duration: hiddenDuration,
+        persisted: context && Object.prototype.hasOwnProperty.call(context, 'persisted') ? Boolean(context.persisted) : undefined,
+        source: context && typeof context.source === 'string' ? context.source : undefined,
+      })
+      const pending = store.wake(context)
+      if (!pending || typeof pending.then !== 'function') {
+        trace('WAKE_END', { woke: pending && pending.woke, resumed_count: pending && pending.resumed, duration_ms: Date.now() - started })
+        return pending
+      }
+      pending.then((result) => {
+        trace('WAKE_END', {
+          woke: result && result.woke,
+          resumed_count: result && result.resumed,
+          duration_ms: Date.now() - started,
+        })
+      }, (error) => {
+        trace('WAKE_ERROR', { error_class: error && error.name ? error.name : 'Error' })
+      })
+      return pending
     },
     getStore() {
       return store
@@ -135,26 +173,42 @@ function createRuntimeEntry(options) {
     }
     if (documentTarget.visibilityState === 'hidden') {
       hiddenSince = now()
+      trace('VISIBILITY_HIDDEN', { timestamp: hiddenSince, hidden_since: hiddenSince })
       return
     }
     if (documentTarget.visibilityState === 'visible') {
       const hiddenDuration = hiddenDurationNow()
+      const since = hiddenSince
+      trace('VISIBILITY_VISIBLE', {
+        hidden_since: since,
+        now: now(),
+        computed_hidden_duration: hiddenDuration,
+      })
       hiddenSince = null
-      void publicApi.wake({ hiddenDuration })
+      void publicApi.wake({ hiddenDuration, source: 'visibility' })
     }
   }
 
   function onPageShow(event) {
     const hiddenDuration = hiddenDurationNow()
+    const since = hiddenSince
+    const persisted = Boolean(event && event.persisted)
+    trace('PAGESHOW', {
+      persisted,
+      hidden_since: since,
+      computed_hidden_duration: hiddenDuration,
+    })
     hiddenSince = null
     void publicApi.wake({
       hiddenDuration,
-      persisted: Boolean(event && event.persisted),
+      persisted,
+      source: 'pageshow',
     })
   }
 
   function onOnline() {
-    void publicApi.wake({ hiddenDuration: 0 })
+    trace('ONLINE', {})
+    void publicApi.wake({ hiddenDuration: 0, source: 'online' })
   }
 
   if (documentTarget && typeof documentTarget.addEventListener === 'function') {
@@ -182,7 +236,8 @@ function createRuntimeEntry(options) {
             return
           }
         }
-        void publicApi.wake({ hiddenDuration: 0 })
+        trace('AUTH_WAKE_REQUESTED', { actor_scope_type: actorScopeType })
+        void publicApi.wake({ hiddenDuration: 0, source: 'auth' })
       })
       const subscription = result && result.data ? result.data.subscription : null
       if (subscription && typeof subscription.unsubscribe === 'function') {
@@ -195,7 +250,7 @@ function createRuntimeEntry(options) {
     }
   }
 
-  publicApi.ready = publicApi.wake({ hiddenDuration: 0 })
+  publicApi.ready = publicApi.wake({ hiddenDuration: 0, source: 'bootstrap' })
 
   return {
     refs: 1,
@@ -211,6 +266,7 @@ function createRuntimeEntry(options) {
       detachFns.length = 0
     },
     async stop() {
+      trace('RUNTIME_STOP', { actor_scope_type: actorScopeType })
       if (store && typeof store.stop === 'function') {
         await store.stop()
       }
@@ -231,10 +287,12 @@ export function acquirePhotoUploadRuntime(options = {}) {
   const existing = registry.get(key)
   if (existing) {
     existing.refs += 1
+    trace('RUNTIME_ACQUIRE', { actor_scope_type: actorScopeType, refs_after: existing.refs })
     return existing.publicApi
   }
   const entry = createRuntimeEntry(options)
   registry.set(key, entry)
+  trace('RUNTIME_ACQUIRE', { actor_scope_type: actorScopeType, refs_after: entry.refs })
   return entry.publicApi
 }
 
@@ -247,7 +305,13 @@ export function releasePhotoUploadRuntime(actorScopeType, actorScopeId) {
   if (!entry) {
     return Promise.resolve()
   }
+  const refsBefore = entry.refs
   entry.refs -= 1
+  trace('RUNTIME_RELEASE', {
+    actor_scope_type: actorScopeType,
+    refs_before: refsBefore,
+    refs_after: entry.refs,
+  })
   if (entry.refs > 0) {
     return Promise.resolve()
   }

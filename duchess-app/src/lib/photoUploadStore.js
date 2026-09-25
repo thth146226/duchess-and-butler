@@ -4,7 +4,16 @@ import {
   transitionPhotoUpload,
 } from './photoUploadDomain'
 import { PHOTO_UPLOAD_DB_ERROR_CODES } from './photoUploadDb'
+import { abbreviateQueueId, recordPhotoUploadDiagnostic } from './photoUploadDiagnostics'
 import { createPhotoUploadManager, LEASE_TTL_MS } from './photoUploadManager'
+
+function trace(event, data) {
+  try {
+    recordPhotoUploadDiagnostic(event, data)
+  } catch (_error) {
+    return
+  }
+}
 
 export const MAX_MANAGER_UPLOAD_ATTEMPTS = 5
 export const MAX_DB_ATTEMPTS = 5
@@ -207,6 +216,10 @@ function createPhotoUploadStore(options = {}) {
   function abortLocalUpload(queueId) {
     pendingRetire.add(queueId)
     const handle = activeUploads.get(queueId)
+    trace('RETIRE_SLOT_ABORT_REQUEST', {
+      queue_fragment: abbreviateQueueId(queueId),
+      has_handle: Boolean(handle),
+    })
     if (handle) {
       pendingRetire.delete(queueId)
       abortHandle(handle)
@@ -1114,22 +1127,41 @@ function createPhotoUploadStore(options = {}) {
   }
 
   async function wakeNow(context = {}) {
+    trace('STORE_WAKE_BEGIN', {
+      hidden_duration: context && Number.isInteger(context.hiddenDuration) ? context.hiddenDuration : 0,
+      stopped,
+      manager_installed: Boolean(manager),
+    })
     if (stopped) {
+      trace('STORE_WAKE_END', { woke: false, resumed_count: 0 })
       return { woke: false, resumed: 0 }
     }
     const hiddenDuration = Number.isInteger(context.hiddenDuration) ? context.hiddenDuration : 0
+    trace('STALE_THRESHOLD_CHECK', {
+      hidden_duration: hiddenDuration,
+      lease_ttl_ms: LEASE_TTL_MS,
+      will_retire: hiddenDuration >= LEASE_TTL_MS,
+    })
     if (hiddenDuration >= LEASE_TTL_MS) {
       installManager()
       if (manager && typeof manager.retireLifecycleStaleSlots === 'function') {
+        trace('STALE_RETIRE_REQUEST', {})
         await manager.retireLifecycleStaleSlots()
+        trace('STALE_RETIRE_COMPLETE', {})
       }
     }
+    trace('PAUSED_RESUME_BEGIN', {})
     const paused = await resumePausedUploads({ deferPump: true })
+    trace('PAUSED_RESUME_END', { resumed_count: paused && paused.resumed })
     if (stopped) {
+      trace('STORE_WAKE_END', { woke: false, resumed_count: paused.resumed })
       return { woke: false, resumed: paused.resumed }
     }
     installManager()
+    trace('PUMP_REQUEST_FROM_WAKE', {})
     await manager.pump()
+    trace('PUMP_RETURN_FROM_WAKE', {})
+    trace('STORE_WAKE_END', { woke: true, resumed_count: paused.resumed })
     return { woke: true, resumed: paused.resumed }
   }
 

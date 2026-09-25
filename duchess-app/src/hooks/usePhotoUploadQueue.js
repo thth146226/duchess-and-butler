@@ -2,10 +2,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase as applicationSupabase } from '../lib/supabase'
 import { PHOTO_UPLOAD_STATUSES } from '../lib/photoUploadDomain'
 import { PHOTO_UPLOAD_RECORD_SCHEMA_VERSION, createPhotoUploadDb } from '../lib/photoUploadDb'
+import { recordPhotoUploadDiagnostic } from '../lib/photoUploadDiagnostics'
 import {
   getPhotoUploadRuntimeStore,
   wakePhotoUploadRuntime,
 } from '../lib/photoUploadRuntime'
+
+function trace(event, data) {
+  try {
+    recordPhotoUploadDiagnostic(event, data)
+  } catch (_error) {
+    return
+  }
+}
 
 export const OFFICE_EVIDENCE_SOURCE_SURFACE = 'office_evidence'
 export const OFFICE_EVIDENCE_ENTITY_TYPE = 'job'
@@ -343,6 +352,7 @@ export function createPhotoUploadQueueController(options = {}) {
     const list = Array.from(files || [])
     const accepted = []
     const rejected = []
+    trace('ENQUEUE_BEGIN', { file_count: list.length })
 
     if (constructionError) {
       return {
@@ -426,8 +436,22 @@ export function createPhotoUploadQueueController(options = {}) {
       }
     }
 
+    const rejectedCodes = {}
+    for (const item of rejected) {
+      const code = item && item.code
+      if (typeof code === 'string' && code.length > 0) {
+        rejectedCodes[code] = (rejectedCodes[code] || 0) + 1
+      }
+    }
+    trace('ENQUEUE_RESULT', {
+      accepted_count: accepted.length,
+      rejected_count: rejected.length,
+      rejected_codes: rejectedCodes,
+    })
+
     if (accepted.length > 0) {
       actorScopeId = userId
+      trace('ENQUEUE_WAKE_REQUEST', { accepted_count: accepted.length })
       await wakePhotoUploadRuntime(
         OFFICE_EVIDENCE_ACTOR_SCOPE_TYPE,
         userId,

@@ -5,6 +5,8 @@ import { supabase } from './lib/supabase'
 import Login from './pages/Login'
 import DriverAccess from './pages/DriverAccess'
 import OfficePhotoUploadRuntime from './components/OfficePhotoUploadRuntime'
+import PhotoUploadDiagnosticPanel from './components/PhotoUploadDiagnosticPanel'
+import { enablePhotoUploadDiagnosticsFromSearch } from './lib/photoUploadDiagnostics'
 import Sidebar from './components/Sidebar'
 import Dashboard from './pages/Dashboard'
 import Notifications from './pages/Notifications'
@@ -48,6 +50,9 @@ const pageTitles = {
 }
 
 function AppInner() {
+  enablePhotoUploadDiagnosticsFromSearch(
+    typeof window !== 'undefined' && window.location ? window.location.search : ''
+  )
   const { user, profile, loading } = useAuth()
   const [page, setPage] = useState('dashboard')
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -68,7 +73,14 @@ function AppInner() {
 
   // Public driver portal — no auth required
   const params = new URLSearchParams(window.location.search)
-  if (params.get('token')) return <DriverAccess />
+  if (params.get('token')) {
+    return (
+      <>
+        <DriverAccess />
+        <PhotoUploadDiagnosticPanel />
+      </>
+    )
+  }
 
   // Public portal invite — no auth required
   if (window.location.pathname.startsWith('/portal/invite')) return <PortalInvite />
@@ -135,6 +147,7 @@ function AppInner() {
   return (
     <>
       <OfficePhotoUploadRuntime />
+      <PhotoUploadDiagnosticPanel />
       <style>{`
         @media (max-width: 768px) {
           .sidebar-desktop { transform: translateX(-260px) !important; }

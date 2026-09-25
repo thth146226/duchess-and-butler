@@ -14,6 +14,11 @@ import {
   createPhotoUploadManager,
 } from './photoUploadManager'
 import {
+  clearPhotoUploadDiagnostics,
+  readPhotoUploadDiagnostics,
+  setPhotoUploadDiagnosticsEnabled,
+} from './photoUploadDiagnostics'
+import {
   acquirePhotoUploadRuntime,
   getPhotoUploadRuntime,
   releasePhotoUploadRuntime,
@@ -248,8 +253,28 @@ async function createHarness(overrides = {}) {
   }
 }
 
+function expectEventSubsequence(events, expected) {
+  let cursor = 0
+  for (const event of events) {
+    const wanted = expected[cursor]
+    if (!wanted) {
+      break
+    }
+    if (event.event !== wanted.event) {
+      continue
+    }
+    if (wanted.will_retire != null && event.will_retire !== wanted.will_retire) {
+      continue
+    }
+    cursor += 1
+  }
+  expect(cursor).toBe(expected.length)
+}
+
 describe('photo upload app-wide foreground recovery', () => {
   afterEach(async () => {
+    setPhotoUploadDiagnosticsEnabled(false)
+    clearPhotoUploadDiagnostics()
     await resetPhotoUploadRuntimeRegistryForTests()
   })
 
@@ -574,5 +599,119 @@ describe('photo upload app-wide foreground recovery', () => {
     await waitFor(() => harness.transport.startCalls.some((call) => (
       call.storagePath === 'job-a/after_del_queue-auth-2.jpg'
     )))
+  })
+
+  test('visibility hidden/visible records the diagnostic sequence without restarting a healthy upload', async () => {
+    setPhotoUploadDiagnosticsEnabled(true)
+    clearPhotoUploadDiagnostics()
+    const harness = await createHarness({ records: [makeRecord()] })
+    await harness.runtime.ready
+    await waitFor(() => harness.transport.startCalls.length === 1)
+    clearPhotoUploadDiagnostics()
+    harness.documentTarget.visibilityState = 'hidden'
+    harness.documentTarget.dispatch('visibilitychange')
+    harness.clock.jump(1000)
+    harness.documentTarget.visibilityState = 'visible'
+    harness.documentTarget.dispatch('visibilitychange')
+    await flushMany()
+    const events = readPhotoUploadDiagnostics()
+    expectEventSubsequence(events, [
+      { event: 'VISIBILITY_HIDDEN' },
+      { event: 'VISIBILITY_VISIBLE' },
+      { event: 'WAKE_BEGIN' },
+    ])
+    const visible = events.find((event) => event.event === 'VISIBILITY_VISIBLE')
+    expect(visible.computed_hidden_duration).toBe(1000)
+    expect(harness.transport.abortCalls).toEqual([])
+    expect(harness.transport.startCalls).toHaveLength(1)
+    expect(harness.transport.maxLiveForPath()).toBe(1)
+  })
+
+  test('long hidden recovery records retire-then-pump diagnostic order', async () => {
+    setPhotoUploadDiagnosticsEnabled(true)
+    clearPhotoUploadDiagnostics()
+    const harness = await createHarness({
+      transport: createTransport({ failReclaim: true }),
+      records: [
+        makeRecord({
+          queue_id: 'uploading-1',
+          storage_path: 'job-a/after_del_uploading-1.jpg',
+          created_at: FIXED_CREATED_AT,
+        }),
+        makeRecord({
+          queue_id: 'uploading-2',
+          storage_path: 'job-a/after_del_uploading-2.jpg',
+          created_at: FIXED_CREATED_AT + 1,
+        }),
+      ],
+    })
+    await harness.runtime.ready
+    await waitFor(() => harness.transport.startCalls.length === 2)
+    await harness.db.putRecord(makeRecord({
+      queue_id: 'queued-3',
+      storage_path: 'job-a/after_del_queued-3.jpg',
+      created_at: FIXED_CREATED_AT + 2,
+    }))
+    clearPhotoUploadDiagnostics()
+    harness.documentTarget.visibilityState = 'hidden'
+    harness.documentTarget.dispatch('visibilitychange')
+    harness.clock.jump(LEASE_TTL_MS)
+    harness.documentTarget.visibilityState = 'visible'
+    harness.documentTarget.dispatch('visibilitychange')
+    await waitFor(() => harness.transport.startCalls.some((call) => call.storagePath.endsWith('queued-3.jpg')))
+    await flushMany()
+    const events = readPhotoUploadDiagnostics()
+    expectEventSubsequence(events, [
+      { event: 'VISIBILITY_VISIBLE' },
+      { event: 'WAKE_BEGIN' },
+      { event: 'STORE_WAKE_BEGIN' },
+      { event: 'STALE_THRESHOLD_CHECK', will_retire: true },
+      { event: 'STALE_RETIRE_REQUEST' },
+      { event: 'RETIRE_STALE_BEGIN' },
+      { event: 'RETIRE_STALE_END' },
+      { event: 'PUMP_REQUEST_FROM_WAKE' },
+      { event: 'PUMP_BEGIN' },
+    ])
+    expect(harness.transport.abortCalls).toEqual([
+      'job-a/after_del_uploading-1.jpg',
+      'job-a/after_del_uploading-2.jpg',
+    ])
+    expect(harness.transport.maxLiveForPath()).toBe(1)
+  })
+
+  test('diagnostic storage failure does not throw from wake', async () => {
+    const store = {
+      getItem() {
+        throw new Error('storage-read-failed')
+      },
+      setItem() {
+        throw new Error('storage-write-failed')
+      },
+      removeItem() {
+        throw new Error('storage-remove-failed')
+      },
+    }
+    const previous = globalThis.localStorage
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: store,
+    })
+    setPhotoUploadDiagnosticsEnabled(true)
+    try {
+      const harness = await createHarness({ records: [makeRecord()] })
+      await expect(harness.runtime.ready).resolves.toEqual(expect.objectContaining({ woke: true }))
+      await expect(harness.runtime.wake({ hiddenDuration: 0 })).resolves.toEqual(expect.objectContaining({
+        woke: true,
+      }))
+    } finally {
+      if (previous === undefined) {
+        delete globalThis.localStorage
+      } else {
+        Object.defineProperty(globalThis, 'localStorage', {
+          configurable: true,
+          value: previous,
+        })
+      }
+    }
   })
 })

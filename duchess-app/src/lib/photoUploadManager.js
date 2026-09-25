@@ -4,6 +4,15 @@ import {
   transitionPhotoUpload,
 } from './photoUploadDomain'
 import { PHOTO_UPLOAD_DB_ERROR_CODES } from './photoUploadDb'
+import { abbreviateQueueId, recordPhotoUploadDiagnostic } from './photoUploadDiagnostics'
+
+function trace(event, data) {
+  try {
+    recordPhotoUploadDiagnostic(event, data)
+  } catch (_error) {
+    return
+  }
+}
 
 export const MAX_CONCURRENT_UPLOADS = 2
 export const LEASE_TTL_MS = 30000
@@ -160,6 +169,51 @@ export function createPhotoUploadManager(options = {}) {
     return id
   }
 
+  function slotSnapshot() {
+    return {
+      active_slots: activeSlots.size,
+      locally_executed: locallyExecuted.size,
+      free_slots: MAX_CONCURRENT_UPLOADS - activeSlots.size,
+      max_concurrent: MAX_CONCURRENT_UPLOADS,
+    }
+  }
+
+  function eligibilityCounts(records, nowMs) {
+    const counts = {
+      actor_record_count: records.length,
+      eligible_record_count: 0,
+      status_not_eligible: 0,
+      locally_executed_blocked: 0,
+      lease_not_eligible: 0,
+      retry_not_due: 0,
+      other: 0,
+    }
+    for (const record of records) {
+      if (locallyExecuted.has(record.queue_id)) {
+        counts.locally_executed_blocked += 1
+        continue
+      }
+      if (hasForeignUnexpiredLease(record, nowMs, leaseOwner)) {
+        counts.lease_not_eligible += 1
+        continue
+      }
+      if (
+        (record.status === PHOTO_UPLOAD_STATUSES.UPLOAD_RETRY_WAIT
+          || record.status === PHOTO_UPLOAD_STATUSES.DB_RETRY_WAIT)
+        && !isRetryDue(record, nowMs)
+      ) {
+        counts.retry_not_due += 1
+        continue
+      }
+      if (!isEligible(record, nowMs, leaseOwner)) {
+        counts.status_not_eligible += 1
+        continue
+      }
+      counts.eligible_record_count += 1
+    }
+    return counts
+  }
+
   function cancelTimeout(id) {
     if (id == null) {
       return
@@ -314,6 +368,11 @@ export function createPhotoUploadManager(options = {}) {
     } catch (_error) {
       return
     } finally {
+      trace('SLOT_FINALLY_BEGIN', {
+        queue_fragment: abbreviateQueueId(slot.queueId),
+        active_slots_before: activeSlots.size,
+        locally_executed_before: locallyExecuted.size,
+      })
       stopHeartbeat(slot)
       if (!slot.stale && !stopped) {
         await safeRelease(slot)
@@ -356,14 +415,34 @@ export function createPhotoUploadManager(options = {}) {
             locallyExecuted.delete(slot.queueId)
           }
         }
+        trace('SLOT_FINALLY_END', {
+          queue_fragment: abbreviateQueueId(slot.queueId),
+          active_slots_after: activeSlots.size,
+          locally_executed_after: locallyExecuted.size,
+        })
+        trace('PUMP_REQUEST_FROM_SLOT_FINALLY', slotSnapshot())
         await pump()
+      } else {
+        trace('SLOT_FINALLY_END', {
+          queue_fragment: abbreviateQueueId(slot.queueId),
+          active_slots_after: activeSlots.size,
+          locally_executed_after: locallyExecuted.size,
+        })
       }
     }
   }
 
   async function retireLifecycleStaleSlots() {
     const slots = [...activeSlots.values()]
+    trace('RETIRE_STALE_BEGIN', {
+      active_slots_before: activeSlots.size,
+      locally_executed_before: locallyExecuted.size,
+    })
     if (slots.length === 0) {
+      trace('RETIRE_STALE_END', {
+        active_slots_after: activeSlots.size,
+        locally_executed_after: locallyExecuted.size,
+      })
       return
     }
     for (const slot of slots) {
@@ -377,8 +456,25 @@ export function createPhotoUploadManager(options = {}) {
           // The slot finally still clears bookkeeping if the handle cannot abort.
         }
       }
+    } else {
+      for (const slot of slots) {
+        trace('RETIRE_SLOT_ABORT_REQUEST', {
+          queue_fragment: abbreviateQueueId(slot.queueId),
+          has_handle: false,
+        })
+      }
+    }
+    for (const slot of slots) {
+      trace('RETIRE_SLOT_WAIT_SETTLED', { queue_fragment: abbreviateQueueId(slot.queueId) })
     }
     await Promise.all(slots.map((slot) => slot.settled))
+    for (const slot of slots) {
+      trace('RETIRE_SLOT_SETTLED', { queue_fragment: abbreviateQueueId(slot.queueId) })
+    }
+    trace('RETIRE_STALE_END', {
+      active_slots_after: activeSlots.size,
+      locally_executed_after: locallyExecuted.size,
+    })
   }
 
   async function claimAndStart(candidate) {
@@ -455,14 +551,22 @@ export function createPhotoUploadManager(options = {}) {
     return true
   }
 
-  async function fillSlots() {
+  async function fillSlots(started) {
     const attempted = new Set(activeSlots.keys())
+    if (!stopped && activeSlots.size >= MAX_CONCURRENT_UPLOADS) {
+      trace('PUMP_NO_WORK', { ...slotSnapshot(), reason: 'NO_FREE_SLOTS' })
+    }
     while (!stopped && activeSlots.size < MAX_CONCURRENT_UPLOADS) {
       const records = await db.listRecordsForActor({
         actorScopeType,
         actorScopeId,
       })
       const nowMs = now()
+      try {
+        trace('PUMP_SCAN', { ...slotSnapshot(), ...eligibilityCounts(records, nowMs) })
+      } catch (_error) {
+        // Eligibility counts are diagnostic only.
+      }
       const candidate = records
         .filter((record) => (
           !attempted.has(record.queue_id)
@@ -471,11 +575,20 @@ export function createPhotoUploadManager(options = {}) {
         ))
         .sort(compareEligibleRecords)[0]
       if (!candidate) {
+        trace('PUMP_NO_WORK', { ...slotSnapshot(), reason: 'NO_ELIGIBLE_RECORDS' })
         break
       }
       attempted.add(candidate.queue_id)
+      trace('PUMP_SLOT_SELECTED', {
+        queue_fragment: abbreviateQueueId(candidate.queue_id),
+        status: candidate.status,
+        active_slots_before_start: activeSlots.size,
+      })
       try {
-        await claimAndStart(candidate)
+        const startedSlot = await claimAndStart(candidate)
+        if (startedSlot) {
+          started.count += 1
+        }
       } catch (error) {
         if (isLeaseUnavailable(error) || isFenceConflict(error)) {
           continue
@@ -486,7 +599,11 @@ export function createPhotoUploadManager(options = {}) {
   }
 
   async function pumpOnce() {
+    const started = { count: 0 }
+    trace('PUMP_BEGIN', slotSnapshot())
     if (stopped) {
+      trace('PUMP_NO_WORK', { ...slotSnapshot(), reason: 'STOPPED' })
+      trace('PUMP_END', { ...slotSnapshot(), started_count: 0 })
       return
     }
     if (pumping) {
@@ -497,7 +614,7 @@ export function createPhotoUploadManager(options = {}) {
     try {
       do {
         pumpAgain = false
-        await fillSlots()
+        await fillSlots(started)
         if (stopped) {
           break
         }
@@ -505,11 +622,15 @@ export function createPhotoUploadManager(options = {}) {
       } while (pumpAgain)
     } finally {
       pumping = false
+      trace('PUMP_END', { ...slotSnapshot(), started_count: started.count })
     }
   }
 
   function pump() {
     if (stopped) {
+      trace('PUMP_BEGIN', slotSnapshot())
+      trace('PUMP_NO_WORK', { ...slotSnapshot(), reason: 'STOPPED' })
+      trace('PUMP_END', { ...slotSnapshot(), started_count: 0 })
       return pumpChain
     }
     pumpChain = pumpChain.then(pumpOnce, pumpOnce)
