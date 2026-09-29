@@ -13,6 +13,12 @@ import {
   PhotoUploadDbError,
   createPhotoUploadDb,
 } from './photoUploadDb'
+import {
+  abbreviateQueueId,
+  clearPhotoUploadDiagnostics,
+  readPhotoUploadDiagnostics,
+  setPhotoUploadDiagnosticsEnabled,
+} from './photoUploadDiagnostics'
 
 const SOURCE_BYTES = [1, 2, 3, 4, 5, 250, 251, 252]
 const FIXED_CREATED_AT = 1_700_000_000_000
@@ -895,5 +901,232 @@ describe('photoUploadDb', () => {
     expect(stored.lease_owner).toBe('tab-a')
     expect(stored.lease_generation).toBe(claimed.lease_generation)
     expect(stored.db_row_id).toBe('row-done')
+  })
+
+  const NATIVE_MESSAGE = 'TOP_SECRET_NATIVE_MESSAGE'
+  const NATIVE_STACK = 'secretStackFrame'
+  const NATIVE_TOKEN = 'super-secret-token'
+  const BLOB_SENTINEL = '1,2,3,4,5,250,251,252'
+  const FULL_QUEUE_ID = 'queue-office-a-1'
+
+  function nativeFailure() {
+    const error = new Error(NATIVE_MESSAGE)
+    error.name = 'UnknownError'
+    error.code = 0
+    error.stack = `${NATIVE_STACK} ${NATIVE_TOKEN} ${BLOB_SENTINEL}`
+    return error
+  }
+
+  function installNativeFailureDb({ failGet = false, failPut = false, failDone = false, current }) {
+    const native = nativeFailure()
+    const calls = { doneReads: 0, puts: [] }
+    const failingDb = createPhotoUploadDb({
+      dbName,
+      openDB: async () => ({
+        transaction() {
+          let donePromise = Promise.resolve()
+          if (failDone) {
+            donePromise = Promise.reject(native)
+            donePromise.catch(() => {})
+          }
+          return {
+            objectStore() {
+              return {
+                get: async () => {
+                  if (failGet) {
+                    throw native
+                  }
+                  return current
+                },
+                put: async (value) => {
+                  calls.puts.push(value)
+                  if (failPut) {
+                    throw native
+                  }
+                },
+              }
+            },
+            get done() {
+              calls.doneReads += 1
+              return donePromise
+            },
+          }
+        },
+        close() {},
+      }),
+    })
+    return { failingDb, calls }
+  }
+
+  async function useFailureDb(options) {
+    const installed = installNativeFailureDb(options)
+    await db.close()
+    db = installed.failingDb
+    return installed
+  }
+
+  function expectSafeNativeEvent(eventName) {
+    const events = readPhotoUploadDiagnostics()
+    const matches = events.filter((event) => event.event === eventName)
+    expect(matches).toHaveLength(1)
+    expect(matches[0].error_class).toBe('UnknownError')
+    expect(matches[0].reason).toBe(0)
+    expect(matches[0].queue_fragment).toBe(abbreviateQueueId(FULL_QUEUE_ID))
+    expect(matches[0].queue_fragment).not.toBe(FULL_QUEUE_ID)
+    const serialized = JSON.stringify(events)
+    expect(serialized).not.toContain(NATIVE_MESSAGE)
+    expect(serialized).not.toContain(NATIVE_STACK)
+    expect(serialized).not.toContain(NATIVE_TOKEN)
+    expect(serialized).not.toContain(BLOB_SENTINEL)
+    expect(serialized).not.toContain(FULL_QUEUE_ID)
+    expect(serialized).not.toContain('evidence.jpg')
+    expect(serialized).not.toContain('office-a')
+    expect(serialized).not.toContain('job-1/delivery_queue-office-a-1.jpg')
+    expect(serialized).not.toContain('tab-a')
+    expect(events.filter((event) => String(event.event).startsWith('IDB_')).map((event) => event.event)).toEqual([eventName])
+  }
+
+  async function expectDatabaseError(operation) {
+    const error = await operation().then(
+      () => {
+        throw new Error('expected native IndexedDB failure')
+      },
+      (caught) => caught,
+    )
+    expect(error).toBeInstanceOf(PhotoUploadDbError)
+    expect(error.name).toBe('PhotoUploadDbError')
+    expect(error.code).toBe(PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR)
+    expect(error.message).toBe(NATIVE_MESSAGE)
+    expect(error.cause).toBeInstanceOf(Error)
+    expect(error.cause.name).toBe('UnknownError')
+    expect(error.cause.code).toBe(0)
+  }
+
+  async function withNativeDiagnostics(run) {
+    setPhotoUploadDiagnosticsEnabled(true)
+    clearPhotoUploadDiagnostics()
+    try {
+      await run()
+    } finally {
+      clearPhotoUploadDiagnostics()
+      setPhotoUploadDiagnosticsEnabled(false)
+    }
+  }
+
+  function fencedCurrent(durable) {
+    return makeRecord({
+      lease_owner: 'tab-a',
+      lease_generation: 1,
+      lease_expires_at: FIXED_NOW + LEASE_TTL_MS,
+      blob: durable,
+    })
+  }
+
+  function fencedCandidate(callerBlob) {
+    return {
+      record: makeRecord({
+        status: PHOTO_UPLOAD_STATUSES.UPLOADING,
+        updated_at: FIXED_NOW + 5,
+        metadata_payload: { nested: 'progress' },
+        blob: callerBlob,
+      }),
+      leaseOwner: 'tab-a',
+      leaseGeneration: 1,
+    }
+  }
+
+  test('putRecordFenced attributes a native store.get failure', async () => {
+    await withNativeDiagnostics(async () => {
+      const { calls } = await useFailureDb({ failGet: true })
+      await expectDatabaseError(() => db.putRecordFenced(fencedCandidate(jpegBlob())))
+      expect(calls.doneReads).toBe(0)
+      expect(calls.puts).toEqual([])
+      expectSafeNativeEvent('IDB_FENCED_GET_ERROR')
+    })
+  })
+
+  test('putRecordFenced attributes a native store.put failure', async () => {
+    await withNativeDiagnostics(async () => {
+      const durable = jpegBlob()
+      const caller = new Blob([Uint8Array.from([9, 8, 7, 6, 5, 4, 3, 2])], { type: 'image/jpeg' })
+      const { calls } = await useFailureDb({ failPut: true, current: fencedCurrent(durable) })
+      await expectDatabaseError(() => db.putRecordFenced(fencedCandidate(caller)))
+      expect(calls.doneReads).toBe(0)
+      expect(calls.puts).toHaveLength(1)
+      expect(calls.puts[0].blob).toBe(durable)
+      expect(calls.puts[0].status).toBe(PHOTO_UPLOAD_STATUSES.UPLOADING)
+      expect(calls.puts[0].metadata_payload).toEqual({ nested: 'progress' })
+      expect(calls.puts[0].lease_owner).toBe('tab-a')
+      expect(calls.puts[0].lease_generation).toBe(1)
+      expectSafeNativeEvent('IDB_FENCED_PUT_ERROR')
+    })
+  })
+
+  test('putRecordFenced attributes a native transaction done failure', async () => {
+    await withNativeDiagnostics(async () => {
+      const durable = jpegBlob()
+      const caller = new Blob([Uint8Array.from([9, 8, 7, 6, 5, 4, 3, 2])], { type: 'image/jpeg' })
+      const { calls } = await useFailureDb({ failDone: true, current: fencedCurrent(durable) })
+      await expectDatabaseError(() => db.putRecordFenced(fencedCandidate(caller)))
+      expect(calls.doneReads).toBe(1)
+      expect(calls.puts).toHaveLength(1)
+      expect(calls.puts[0].blob).toBe(durable)
+      expectSafeNativeEvent('IDB_FENCED_TX_DONE_ERROR')
+    })
+  })
+
+  test('claimLease attributes a native store.get failure', async () => {
+    await withNativeDiagnostics(async () => {
+      const { calls } = await useFailureDb({ failGet: true })
+      await expectDatabaseError(() => db.claimLease(claimArgs()))
+      expect(calls.doneReads).toBe(0)
+      expect(calls.puts).toEqual([])
+      expectSafeNativeEvent('IDB_CLAIM_GET_ERROR')
+    })
+  })
+
+  test('claimLease attributes a native store.put failure', async () => {
+    await withNativeDiagnostics(async () => {
+      const { calls } = await useFailureDb({ failPut: true, current: makeRecord() })
+      await expectDatabaseError(() => db.claimLease(claimArgs()))
+      expect(calls.doneReads).toBe(0)
+      expect(calls.puts).toHaveLength(1)
+      expect(calls.puts[0].lease_owner).toBe('tab-a')
+      expect(calls.puts[0].lease_generation).toBe(1)
+      expect(calls.puts[0].lease_expires_at).toBe(FIXED_NOW + LEASE_TTL_MS)
+      expectSafeNativeEvent('IDB_CLAIM_PUT_ERROR')
+    })
+  })
+
+  test('claimLease attributes a native transaction done failure', async () => {
+    await withNativeDiagnostics(async () => {
+      const { calls } = await useFailureDb({ failDone: true, current: makeRecord() })
+      await expectDatabaseError(() => db.claimLease(claimArgs()))
+      expect(calls.doneReads).toBe(1)
+      expect(calls.puts).toHaveLength(1)
+      expect(calls.puts[0].lease_generation).toBe(1)
+      expectSafeNativeEvent('IDB_CLAIM_TX_DONE_ERROR')
+    })
+  })
+
+  test('application lease errors do not emit native IndexedDB diagnostics', async () => {
+    await withNativeDiagnostics(async () => {
+      await db.putRecord(makeRecord())
+      await expect(db.putRecordFenced({
+        record: makeRecord({ status: PHOTO_UPLOAD_STATUSES.UPLOADING }),
+        leaseOwner: 'tab-a',
+        leaseGeneration: 1,
+      })).rejects.toMatchObject({
+        name: 'PhotoUploadDbError',
+        code: PHOTO_UPLOAD_DB_ERROR_CODES.LEASE_FENCE_CONFLICT,
+      })
+      const claimed = await db.claimLease(claimArgs())
+      await expect(db.claimLease(claimArgs({ leaseOwner: 'tab-b' }))).rejects.toMatchObject({
+        name: 'PhotoUploadDbError',
+        code: PHOTO_UPLOAD_DB_ERROR_CODES.LEASE_NOT_AVAILABLE,
+      })
+      expect(claimed.lease_owner).toBe('tab-a')
+      expect(readPhotoUploadDiagnostics().filter((event) => String(event.event).startsWith('IDB_'))).toEqual([])
+    })
   })
 })

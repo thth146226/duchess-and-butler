@@ -1,5 +1,6 @@
 import { openDB as idbOpenDB } from 'idb'
 import { PHOTO_UPLOAD_STATUSES, isPhotoUploadStatus } from './photoUploadDomain'
+import { abbreviateQueueId, recordPhotoUploadDiagnostic } from './photoUploadDiagnostics'
 
 export const PHOTO_UPLOAD_DB_NAME = 'duchess-photo-upload-v1'
 export const PHOTO_UPLOAD_DB_VERSION = 1
@@ -180,6 +181,44 @@ function wrapDatabaseError(error) {
     wrapped.name = 'QuotaExceededError'
   }
   return wrapped
+}
+
+function trace(event, data) {
+  try {
+    recordPhotoUploadDiagnostic(event, data)
+  } catch (_error) {
+    return
+  }
+}
+
+function nativeErrorClass(error) {
+  if (error && typeof error.name === 'string' && error.name.length > 0 && error.name.length <= 80) {
+    return error.name
+  }
+  return 'Error'
+}
+
+function nativeErrorReason(error) {
+  const code = error && error.code
+  if (typeof code === 'string' && code.length > 0 && code.length <= 64) {
+    return code
+  }
+  if (typeof code === 'number' && Number.isFinite(code)) {
+    return code
+  }
+  return 'NO_NATIVE_CODE'
+}
+
+function traceNativeError(event, queueId, error) {
+  try {
+    trace(event, {
+      queue_fragment: abbreviateQueueId(queueId),
+      error_class: nativeErrorClass(error),
+      reason: nativeErrorReason(error),
+    })
+  } catch (_error) {
+    return
+  }
 }
 
 function isNonEmptyString(value) {
@@ -582,7 +621,13 @@ export function createPhotoUploadDb(options = {}) {
       const tx = db.transaction(PHOTO_UPLOAD_QUEUE_STORE, 'readwrite')
       const store = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
       try {
-        const existing = await store.get(queueId)
+        let existing
+        try {
+          existing = await store.get(queueId)
+        } catch (error) {
+          traceNativeError('IDB_CLAIM_GET_ERROR', queueId, error)
+          throw error
+        }
         if (!existing) {
           await tx.done
           throw invalidRecord('record not found')
@@ -610,8 +655,18 @@ export function createPhotoUploadDb(options = {}) {
           throw leaseNotAvailable('lease is held by a different owner')
         }
 
-        await store.put(next)
-        await tx.done
+        try {
+          await store.put(next)
+        } catch (error) {
+          traceNativeError('IDB_CLAIM_PUT_ERROR', queueId, error)
+          throw error
+        }
+        try {
+          await tx.done
+        } catch (error) {
+          traceNativeError('IDB_CLAIM_TX_DONE_ERROR', queueId, error)
+          throw error
+        }
         return next
       } catch (error) {
         throw wrapDatabaseError(error)
@@ -713,7 +768,13 @@ export function createPhotoUploadDb(options = {}) {
           await tx.done
           throw error
         }
-        const current = await store.get(validated.queue_id)
+        let current
+        try {
+          current = await store.get(validated.queue_id)
+        } catch (error) {
+          traceNativeError('IDB_FENCED_GET_ERROR', validated.queue_id, error)
+          throw error
+        }
         if (!current) {
           await tx.done
           throw invalidRecord('record not found')
@@ -731,8 +792,18 @@ export function createPhotoUploadDb(options = {}) {
         next.lease_owner = current.lease_owner
         next.lease_generation = current.lease_generation
         next.lease_expires_at = current.lease_expires_at
-        await store.put(next)
-        await tx.done
+        try {
+          await store.put(next)
+        } catch (error) {
+          traceNativeError('IDB_FENCED_PUT_ERROR', validated.queue_id, error)
+          throw error
+        }
+        try {
+          await tx.done
+        } catch (error) {
+          traceNativeError('IDB_FENCED_TX_DONE_ERROR', validated.queue_id, error)
+          throw error
+        }
         return next
       } catch (error) {
         throw wrapDatabaseError(error)
