@@ -14,6 +14,20 @@ function trace(event, data) {
   }
 }
 
+function diagnosticErrorClass(error) {
+  if (error && typeof error.name === 'string' && error.name.length > 0 && error.name.length <= 80) {
+    return error.name
+  }
+  return 'Error'
+}
+
+function diagnosticErrorReason(error) {
+  if (error && typeof error.code === 'string' && error.code.length > 0 && error.code.length <= 64) {
+    return error.code
+  }
+  return 'UNKNOWN_ERROR'
+}
+
 export const MAX_CONCURRENT_UPLOADS = 2
 export const LEASE_TTL_MS = 30000
 export const LEASE_HEARTBEAT_MS = 10000
@@ -478,13 +492,32 @@ export function createPhotoUploadManager(options = {}) {
   }
 
   async function claimAndStart(candidate) {
-    const claimed = await db.claimLease({
-      queueId: candidate.queue_id,
-      actorScopeType,
-      actorScopeId,
-      leaseOwner,
-      now: now(),
-      leaseTtlMs: LEASE_TTL_MS,
+    const queueFragment = abbreviateQueueId(candidate.queue_id)
+    trace('CLAIM_LEASE_BEGIN', {
+      queue_fragment: queueFragment,
+      status: candidate.status,
+    })
+    let claimed
+    try {
+      claimed = await db.claimLease({
+        queueId: candidate.queue_id,
+        actorScopeType,
+        actorScopeId,
+        leaseOwner,
+        now: now(),
+        leaseTtlMs: LEASE_TTL_MS,
+      })
+    } catch (error) {
+      trace('CLAIM_LEASE_ERROR', {
+        queue_fragment: queueFragment,
+        error_class: diagnosticErrorClass(error),
+        reason: diagnosticErrorReason(error),
+      })
+      throw error
+    }
+    trace('CLAIM_LEASE_SUCCESS', {
+      queue_fragment: queueFragment,
+      status: claimed.status,
     })
     const generation = claimed.lease_generation
     let workRecord = claimed
@@ -495,7 +528,28 @@ export function createPhotoUploadManager(options = {}) {
       claimed.status === PHOTO_UPLOAD_STATUSES.STORAGE_COMPLETE ||
       claimed.status === PHOTO_UPLOAD_STATUSES.DB_RETRY_WAIT
     ) {
-      workRecord = applyRequiredTransition(claimed, now())
+      trace('CLAIM_TRANSITION_BEGIN', {
+        queue_fragment: queueFragment,
+        status: claimed.status,
+      })
+      try {
+        workRecord = applyRequiredTransition(claimed, now())
+      } catch (error) {
+        trace('CLAIM_TRANSITION_ERROR', {
+          queue_fragment: queueFragment,
+          error_class: diagnosticErrorClass(error),
+          reason: diagnosticErrorReason(error),
+        })
+        throw error
+      }
+      trace('CLAIM_TRANSITION_SUCCESS', {
+        queue_fragment: queueFragment,
+        status: workRecord.status,
+      })
+      trace('FENCED_WRITE_BEGIN', {
+        queue_fragment: queueFragment,
+        status: workRecord.status,
+      })
       try {
         await db.putRecordFenced({
           record: workRecord,
@@ -503,6 +557,11 @@ export function createPhotoUploadManager(options = {}) {
           leaseGeneration: generation,
         })
       } catch (error) {
+        trace('FENCED_WRITE_ERROR', {
+          queue_fragment: queueFragment,
+          error_class: diagnosticErrorClass(error),
+          reason: diagnosticErrorReason(error),
+        })
         if (!isFenceConflict(error)) {
           await safeRelease({
             queueId: claimed.queue_id,
@@ -512,10 +571,18 @@ export function createPhotoUploadManager(options = {}) {
         }
         return false
       }
+      trace('FENCED_WRITE_SUCCESS', {
+        queue_fragment: queueFragment,
+        status: workRecord.status,
+      })
     } else if (
       claimed.status !== PHOTO_UPLOAD_STATUSES.UPLOADING &&
       claimed.status !== PHOTO_UPLOAD_STATUSES.DB_PENDING
     ) {
+      trace('CLAIM_START_STATUS_REJECTED', {
+        queue_fragment: queueFragment,
+        status: claimed.status,
+      })
       await safeRelease({
         queueId: claimed.queue_id,
         generation,
@@ -525,6 +592,10 @@ export function createPhotoUploadManager(options = {}) {
     }
 
     if (stopped) {
+      trace('CLAIM_START_STOPPED', {
+        queue_fragment: queueFragment,
+        status: workRecord.status,
+      })
       await safeRelease({
         queueId: claimed.queue_id,
         generation,
@@ -546,6 +617,11 @@ export function createPhotoUploadManager(options = {}) {
       settled,
     }
     activeSlots.set(slot.queueId, slot)
+    trace('SLOT_INSTALL', {
+      queue_fragment: abbreviateQueueId(slot.queueId),
+      status: workRecord.status,
+      active_slots_after: activeSlots.size,
+    })
     startHeartbeat(slot)
     void runSlot(slot, workRecord).finally(resolveSettled)
     return true

@@ -7,8 +7,14 @@ import { PHOTO_UPLOAD_STATUSES } from './photoUploadDomain'
 import {
   PHOTO_UPLOAD_DB_ERROR_CODES,
   PHOTO_UPLOAD_RECORD_SCHEMA_VERSION,
+  PhotoUploadDbError,
   createPhotoUploadDb,
 } from './photoUploadDb'
+import {
+  clearPhotoUploadDiagnostics,
+  readPhotoUploadDiagnostics,
+  setPhotoUploadDiagnosticsEnabled,
+} from './photoUploadDiagnostics'
 import {
   LEASE_HEARTBEAT_MS,
   LEASE_TTL_MS,
@@ -197,6 +203,8 @@ describe('photoUploadManager', () => {
   })
 
   afterEach(async () => {
+    setPhotoUploadDiagnosticsEnabled(false)
+    clearPhotoUploadDiagnostics()
     if (handles) {
       await handles.cleanup()
       handles = null
@@ -1268,5 +1276,98 @@ describe('photoUploadManager', () => {
     expect(started).toEqual([])
     expect(clock.openTimerCount()).toBe(1)
     expect(manager.getRetryWakeState().pending).toBe(true)
+  })
+
+  test('claim lease failure records CLAIM_LEASE_ERROR and still propagates', async () => {
+    setPhotoUploadDiagnosticsEnabled(true)
+    clearPhotoUploadDiagnostics()
+    const db = handles.db(createPhotoUploadDb({ dbName }))
+    const clock = createClock(FIXED_NOW)
+    const queueId = 'queue-office-a-1'
+    await db.putRecord(makeRecord({ queue_id: queueId }))
+    db.claimLease = async () => {
+      throw new PhotoUploadDbError(
+        PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR,
+        'secret claim message must not be stored',
+      )
+    }
+    const started = []
+    const manager = handles.manager(createPhotoUploadManager(managerOptions({
+      db,
+      clock,
+      executeClaimedRecord: async (record) => {
+        started.push(record.queue_id)
+      },
+    })))
+    await expect(manager.pump()).rejects.toMatchObject({
+      name: 'PhotoUploadDbError',
+      code: PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR,
+    })
+    const events = readPhotoUploadDiagnostics()
+    const names = events.map((event) => event.event)
+    expect(names).toContain('CLAIM_LEASE_BEGIN')
+    expect(names).toContain('CLAIM_LEASE_ERROR')
+    expect(names).not.toContain('SLOT_INSTALL')
+    const failure = events.find((event) => event.event === 'CLAIM_LEASE_ERROR')
+    expect(failure.reason).toBe(PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR)
+    expect(failure.error_class).toBe('PhotoUploadDbError')
+    expect(failure.queue_fragment).not.toBe(queueId)
+    const serialized = JSON.stringify(events)
+    expect(serialized).not.toContain(queueId)
+    expect(serialized).not.toContain('secret claim message must not be stored')
+    expect(serialized).not.toContain('evidence.jpg')
+    expect(serialized).not.toContain('job-1/delivery_queue-office-a-1.jpg')
+    expect(started).toEqual([])
+  })
+
+  test('fenced write failure records FENCED_WRITE_ERROR and does not install a slot', async () => {
+    setPhotoUploadDiagnosticsEnabled(true)
+    clearPhotoUploadDiagnostics()
+    const db = handles.db(createPhotoUploadDb({ dbName }))
+    const clock = createClock(FIXED_NOW)
+    const queueId = 'queue-office-a-1'
+    await db.putRecord(makeRecord({ queue_id: queueId }))
+    db.putRecordFenced = async () => {
+      throw new PhotoUploadDbError(
+        PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR,
+        'secret fenced message must not be stored',
+      )
+    }
+    const started = []
+    const manager = handles.manager(createPhotoUploadManager(managerOptions({
+      db,
+      clock,
+      executeClaimedRecord: async (record) => {
+        started.push(record.queue_id)
+      },
+    })))
+    await expect(manager.pump()).resolves.toBeUndefined()
+    await flushMany()
+    const events = readPhotoUploadDiagnostics()
+    const names = events.map((event) => event.event)
+    expect(names).toContain('CLAIM_LEASE_SUCCESS')
+    expect(names).toContain('CLAIM_TRANSITION_SUCCESS')
+    expect(names).toContain('FENCED_WRITE_BEGIN')
+    expect(names).toContain('FENCED_WRITE_ERROR')
+    expect(names).not.toContain('SLOT_INSTALL')
+    const failure = events.find((event) => event.event === 'FENCED_WRITE_ERROR')
+    expect(failure.reason).toBe(PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR)
+    expect(failure.error_class).toBe('PhotoUploadDbError')
+    expect(failure.queue_fragment).not.toBe(queueId)
+    const serialized = JSON.stringify(events)
+    expect(serialized).not.toContain(queueId)
+    expect(serialized).not.toContain('secret fenced message must not be stored')
+    expect(serialized).not.toContain('evidence.jpg')
+    expect(serialized).not.toContain('job-1/delivery_queue-office-a-1.jpg')
+    expect(serialized).not.toContain('tab-a')
+    expect(started).toEqual([])
+    const stored = await db.getRecord({
+      queueId,
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+    })
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.QUEUED)
+    expect(stored.lease_owner).toBeNull()
+    expect(stored.lease_generation).toBe(1)
   })
 })
