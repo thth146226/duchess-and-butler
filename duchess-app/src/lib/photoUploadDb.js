@@ -727,6 +727,7 @@ export function createPhotoUploadDb(options = {}) {
           throw leaseFenceConflict('LEASE_FENCE_CONFLICT')
         }
         const next = copyRecord(validated)
+        next.blob = current.blob
         next.lease_owner = current.lease_owner
         next.lease_generation = current.lease_generation
         next.lease_expires_at = current.lease_expires_at

@@ -824,4 +824,76 @@ describe('photoUploadDb', () => {
       expect(row.db_attempt_count).toBe(2)
     }
   })
+
+  test('putRecordFenced preserves the durable Blob and ignores the caller Blob', async () => {
+    const callerBytes = [9, 8, 7, 6, 5, 4, 3, 2]
+    await db.putRecord(makeRecord())
+    const claimed = await db.claimLease(claimArgs())
+    const callerBlob = new Blob([Uint8Array.from(callerBytes)], { type: 'image/jpeg' })
+    await db.putRecordFenced({
+      record: {
+        ...claimed,
+        status: PHOTO_UPLOAD_STATUSES.UPLOADING,
+        updated_at: FIXED_NOW + 5,
+        metadata_payload: { nested: 'progress' },
+        blob: callerBlob,
+        lease_owner: 'intruder',
+        lease_generation: 99,
+        lease_expires_at: FIXED_NOW + 1,
+      },
+      leaseOwner: 'tab-a',
+      leaseGeneration: claimed.lease_generation,
+    })
+    const stored = await db.getRecord({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+    })
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.UPLOADING)
+    expect(stored.updated_at).toBe(FIXED_NOW + 5)
+    expect(stored.metadata_payload).toEqual({ nested: 'progress' })
+    expect(stored.lease_owner).toBe('tab-a')
+    expect(stored.lease_generation).toBe(claimed.lease_generation)
+    expect(stored.lease_expires_at).toBe(claimed.lease_expires_at)
+    expect(await readBlobBytes(stored.blob)).toEqual(SOURCE_BYTES)
+    expect(await readBlobBytes(stored.blob)).not.toEqual(callerBytes)
+  })
+
+  test('putRecordFenced does not resurrect a Blob after DONE cleanup', async () => {
+    const callerBytes = [9, 8, 7, 6, 5, 4, 3, 2]
+    await db.putRecord(makeRecord({
+      status: PHOTO_UPLOAD_STATUSES.DONE,
+      completed_at: FIXED_UPDATED_AT,
+      db_row_id: 'row-done',
+    }))
+    await db.clearDoneBlob({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+      updatedAt: FIXED_UPDATED_AT + 50,
+    })
+    const claimed = await db.claimLease(claimArgs())
+    expect(claimed.blob).toBeNull()
+    await db.putRecordFenced({
+      record: {
+        ...claimed,
+        blob: new Blob([Uint8Array.from(callerBytes)], { type: 'image/jpeg' }),
+        updated_at: FIXED_NOW + 5,
+        metadata_payload: { nested: 'after-clear' },
+      },
+      leaseOwner: 'tab-a',
+      leaseGeneration: claimed.lease_generation,
+    })
+    const stored = await db.getRecord({
+      queueId: 'queue-office-a-1',
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+    })
+    expect(stored.blob).toBeNull()
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.DONE)
+    expect(stored.metadata_payload).toEqual({ nested: 'after-clear' })
+    expect(stored.lease_owner).toBe('tab-a')
+    expect(stored.lease_generation).toBe(claimed.lease_generation)
+    expect(stored.db_row_id).toBe('row-done')
+  })
 })
