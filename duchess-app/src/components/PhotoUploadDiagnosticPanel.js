@@ -59,7 +59,7 @@ export default function PhotoUploadDiagnosticPanel() {
   }
 
   return (
-    <div style={{ position: 'fixed', right: 12, bottom: 12, zIndex: 100000, fontFamily: 'ui-monospace, monospace' }}>
+    <div style={{ position: 'fixed', right: 12, top: 'calc(env(safe-area-inset-top, 0px) + 72px)', bottom: 'auto', zIndex: 100000, fontFamily: 'ui-monospace, monospace' }}>
       {open ? (
         <div style={{ width: 'min(420px, calc(100vw - 24px))', maxHeight: '70vh', overflow: 'auto', background: '#111', color: '#f5f5f5', borderRadius: 8, padding: 12, boxShadow: '0 8px 24px rgba(0,0,0,0.35)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
