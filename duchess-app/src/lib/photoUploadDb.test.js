@@ -917,8 +917,8 @@ describe('photoUploadDb', () => {
     return error
   }
 
-  function installNativeFailureDb({ failGet = false, failPut = false, failDone = false, current }) {
-    const native = nativeFailure()
+  function installNativeFailureDb({ failGet = false, failPut = false, failDone = false, current, error } = {}) {
+    const native = Object.prototype.hasOwnProperty.call(arguments[0] || {}, 'error') ? error : nativeFailure()
     const calls = { doneReads: 0, puts: [] }
     const failingDb = createPhotoUploadDb({
       dbName,
@@ -971,6 +971,7 @@ describe('photoUploadDb', () => {
     expect(matches).toHaveLength(1)
     expect(matches[0].error_class).toBe('UnknownError')
     expect(matches[0].reason).toBe(0)
+    expect(matches[0].message_class).toBe('OTHER_UNKNOWN_ERROR')
     expect(matches[0].queue_fragment).toBe(abbreviateQueueId(FULL_QUEUE_ID))
     expect(matches[0].queue_fragment).not.toBe(FULL_QUEUE_ID)
     const serialized = JSON.stringify(events)
@@ -1022,17 +1023,40 @@ describe('photoUploadDb', () => {
     })
   }
 
-  function fencedCandidate(callerBlob) {
+  function fencedCandidate(callerBlob, overrides = {}) {
     return {
       record: makeRecord({
         status: PHOTO_UPLOAD_STATUSES.UPLOADING,
         updated_at: FIXED_NOW + 5,
         metadata_payload: { nested: 'progress' },
         blob: callerBlob,
+        ...overrides,
       }),
       leaseOwner: 'tab-a',
       leaseGeneration: 1,
     }
+  }
+
+  function expectDiagnosticsHideSentinels(events, rawMessages = []) {
+    const serialized = JSON.stringify(events)
+    const sentinels = [
+      NATIVE_MESSAGE,
+      NATIVE_STACK,
+      NATIVE_TOKEN,
+      BLOB_SENTINEL,
+      FULL_QUEUE_ID,
+      'evidence.jpg',
+      'office-a',
+      'job-1/delivery_queue-office-a-1.jpg',
+      'tab-a',
+      ...rawMessages,
+    ]
+    for (const sentinel of sentinels) {
+      if (sentinel) {
+        expect(serialized).not.toContain(sentinel)
+      }
+    }
+    return serialized
   }
 
   test('putRecordFenced attributes a native store.get failure', async () => {
@@ -1059,6 +1083,10 @@ describe('photoUploadDb', () => {
       expect(calls.puts[0].lease_owner).toBe('tab-a')
       expect(calls.puts[0].lease_generation).toBe(1)
       expectSafeNativeEvent('IDB_FENCED_PUT_ERROR')
+      const fencedPut = readPhotoUploadDiagnostics().find((event) => event.event === 'IDB_FENCED_PUT_ERROR')
+      expect(fencedPut.status_before).toBe(PHOTO_UPLOAD_STATUSES.QUEUED)
+      expect(fencedPut.status_after).toBe(PHOTO_UPLOAD_STATUSES.UPLOADING)
+      expect(fencedPut.actor_status_index_changed).toBe(true)
     })
   })
 
@@ -1127,6 +1155,300 @@ describe('photoUploadDb', () => {
       })
       expect(claimed.lease_owner).toBe('tab-a')
       expect(readPhotoUploadDiagnostics().filter((event) => String(event.event).startsWith('IDB_'))).toEqual([])
+    })
+  })
+
+  test('native IndexedDB diagnostics classify messages without storing them', async () => {
+    const cases = [
+      {
+        message: 'Error preparing Blob/File data to be stored in object store',
+        messageClass: 'BLOB_FILE_PREPARATION',
+      },
+      {
+        message: 'Failed to execute \'put\' on \'IDBObjectStore\': The requested file could not be read, typically due to permission problems that have occurred after a reference to a file was acquired.',
+        messageClass: 'BLOB_FILE_PREPARATION',
+      },
+      {
+        message: 'Connection to Indexed Database server lost. Refresh the page to try again',
+        messageClass: 'IDB_SERVER_CONNECTION_LOST',
+      },
+      {
+        message: 'An internal error was encountered in the Indexed Database server',
+        messageClass: 'IDB_INTERNAL_SERVER_ERROR',
+      },
+      {
+        message: 'Attempt to get a record from database without an in-progress transaction',
+        messageClass: 'NO_IN_PROGRESS_TRANSACTION',
+      },
+      {
+        message: 'Attempt to put a record into database without an in-progress transaction',
+        messageClass: 'NO_IN_PROGRESS_TRANSACTION',
+      },
+      {
+        message: NATIVE_MESSAGE,
+        messageClass: 'OTHER_UNKNOWN_ERROR',
+      },
+      {
+        message: 'The transaction has finished.',
+        messageClass: 'OTHER_UNKNOWN_ERROR',
+      },
+      {
+        message: 'Internal error opening backing store for indexedDB.open.',
+        messageClass: 'OTHER_UNKNOWN_ERROR',
+      },
+      {
+        message: '   ',
+        messageClass: 'OTHER_UNKNOWN_ERROR',
+      },
+    ]
+
+    for (const item of cases) {
+      await withNativeDiagnostics(async () => {
+        const error = new Error(item.message)
+        error.name = 'UnknownError'
+        error.code = 0
+        error.stack = `${NATIVE_STACK} ${NATIVE_TOKEN} ${BLOB_SENTINEL}`
+        error.cause = new Error(NATIVE_MESSAGE)
+        await useFailureDb({ failGet: true, error })
+        await expect(db.claimLease(claimArgs())).rejects.toMatchObject({
+          name: 'PhotoUploadDbError',
+          code: PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR,
+          message: item.message,
+        })
+        const events = readPhotoUploadDiagnostics()
+        const matches = events.filter((event) => event.event === 'IDB_CLAIM_GET_ERROR')
+        expect(matches).toHaveLength(1)
+        expect(matches[0].message_class).toBe(item.messageClass)
+        expect(matches[0].error_class).toBe('UnknownError')
+        expect(matches[0].reason).toBe(0)
+        expect(matches[0].status_before).toBeUndefined()
+        expect(matches[0].status_after).toBeUndefined()
+        expect(matches[0].actor_status_index_changed).toBeUndefined()
+        expectDiagnosticsHideSentinels(events, [item.message])
+      })
+    }
+  })
+
+  test('native IndexedDB diagnostics tolerate missing and malformed errors', async () => {
+    const cases = [
+      {
+        label: 'null',
+        error: null,
+        messageClass: 'NO_MESSAGE',
+        rejection: { name: 'PhotoUploadDbError', message: 'DATABASE_ERROR' },
+      },
+      {
+        label: 'undefined',
+        error: undefined,
+        messageClass: 'NO_MESSAGE',
+        rejection: { name: 'PhotoUploadDbError', message: 'DATABASE_ERROR' },
+      },
+      {
+        label: 'string',
+        error: NATIVE_MESSAGE,
+        messageClass: 'NO_MESSAGE',
+        rejection: { name: 'PhotoUploadDbError', message: 'DATABASE_ERROR' },
+      },
+      {
+        label: 'empty message',
+        error: Object.assign(new Error(NATIVE_MESSAGE), { message: '' }),
+        messageClass: 'NO_MESSAGE',
+        rejection: { name: 'PhotoUploadDbError', message: 'DATABASE_ERROR' },
+      },
+      {
+        label: 'numeric message',
+        error: { name: 'UnknownError', message: 5, stack: NATIVE_STACK, cause: NATIVE_TOKEN },
+        messageClass: 'NO_MESSAGE',
+        rejection: { name: 'PhotoUploadDbError' },
+      },
+      {
+        label: 'object message',
+        error: {
+          name: 'UnknownError',
+          message: { toString() { return NATIVE_MESSAGE } },
+          stack: NATIVE_STACK,
+        },
+        messageClass: 'NO_MESSAGE',
+        rejection: { name: 'PhotoUploadDbError' },
+      },
+      {
+        label: 'plain object known message',
+        error: {
+          message: 'Connection to Indexed Database server lost. Refresh the page to try again',
+          stack: NATIVE_STACK,
+          cause: NATIVE_TOKEN,
+        },
+        messageClass: 'IDB_SERVER_CONNECTION_LOST',
+        rejection: { name: 'PhotoUploadDbError' },
+        hiddenRaw: 'Connection to Indexed Database server lost. Refresh the page to try again',
+      },
+    ]
+
+    for (const item of cases) {
+      await withNativeDiagnostics(async () => {
+        await useFailureDb({ failGet: true, error: item.error })
+        await expect(db.claimLease(claimArgs())).rejects.toMatchObject(item.rejection)
+        const events = readPhotoUploadDiagnostics()
+        const matches = events.filter((event) => event.event === 'IDB_CLAIM_GET_ERROR')
+        expect(matches).toHaveLength(1)
+        expect(matches[0].message_class).toBe(item.messageClass)
+        expectDiagnosticsHideSentinels(events, item.hiddenRaw ? [item.hiddenRaw] : [])
+      })
+    }
+
+    await withNativeDiagnostics(async () => {
+      const error = new Error('placeholder')
+      Object.defineProperty(error, 'message', {
+        configurable: true,
+        get() {
+          throw new Error(NATIVE_MESSAGE)
+        },
+      })
+      Object.defineProperty(error, 'stack', {
+        configurable: true,
+        get() {
+          throw new Error(NATIVE_STACK)
+        },
+      })
+      Object.defineProperty(error, 'cause', {
+        configurable: true,
+        get() {
+          throw new Error(NATIVE_TOKEN)
+        },
+      })
+      await useFailureDb({ failGet: true, error })
+      await expect(db.claimLease(claimArgs())).rejects.toBeInstanceOf(Error)
+      const events = readPhotoUploadDiagnostics()
+      expect(events.filter((event) => event.event === 'IDB_CLAIM_GET_ERROR')).toHaveLength(1)
+      expect(events[0].message_class).toBe('NO_MESSAGE')
+      expectDiagnosticsHideSentinels(events)
+    })
+  })
+
+  test('fenced put diagnostics report actor status index changes without identifiers', async () => {
+    await withNativeDiagnostics(async () => {
+      const durable = jpegBlob()
+      const caller = new Blob([Uint8Array.from([9, 8, 7, 6, 5, 4, 3, 2])], { type: 'image/jpeg' })
+      await useFailureDb({ failPut: true, current: fencedCurrent(durable) })
+      await expectDatabaseError(() => db.putRecordFenced(fencedCandidate(caller, {
+        status: PHOTO_UPLOAD_STATUSES.QUEUED,
+      })))
+      const event = readPhotoUploadDiagnostics().find((item) => item.event === 'IDB_FENCED_PUT_ERROR')
+      expect(event.message_class).toBe('OTHER_UNKNOWN_ERROR')
+      expect(event.status_before).toBe(PHOTO_UPLOAD_STATUSES.QUEUED)
+      expect(event.status_after).toBe(PHOTO_UPLOAD_STATUSES.QUEUED)
+      expect(event.actor_status_index_changed).toBe(false)
+      expectDiagnosticsHideSentinels(readPhotoUploadDiagnostics())
+    })
+
+    await withNativeDiagnostics(async () => {
+      const durable = jpegBlob()
+      const caller = new Blob([Uint8Array.from([9, 8, 7, 6, 5, 4, 3, 2])], { type: 'image/jpeg' })
+      const current = fencedCurrent(durable)
+      current.status = NATIVE_MESSAGE
+      await useFailureDb({ failPut: true, current })
+      await expectDatabaseError(() => db.putRecordFenced(fencedCandidate(caller)))
+      const event = readPhotoUploadDiagnostics().find((item) => item.event === 'IDB_FENCED_PUT_ERROR')
+      expect(event.status_before).toBe('UNDETERMINED')
+      expect(event.status_after).toBe(PHOTO_UPLOAD_STATUSES.UPLOADING)
+      expect(event.actor_status_index_changed).toBe(true)
+      expectDiagnosticsHideSentinels(readPhotoUploadDiagnostics())
+    })
+
+    await withNativeDiagnostics(async () => {
+      const durable = jpegBlob()
+      const caller = new Blob([Uint8Array.from([9, 8, 7, 6, 5, 4, 3, 2])], { type: 'image/jpeg' })
+      const current = fencedCurrent(durable)
+      delete current.status
+      await useFailureDb({ failPut: true, current })
+      await expectDatabaseError(() => db.putRecordFenced(fencedCandidate(caller)))
+      const event = readPhotoUploadDiagnostics().find((item) => item.event === 'IDB_FENCED_PUT_ERROR')
+      expect(event.status_before).toBe('UNDETERMINED')
+      expect(event.status_after).toBe(PHOTO_UPLOAD_STATUSES.UPLOADING)
+      expect(event.actor_status_index_changed).toBe('UNDETERMINED')
+      expectDiagnosticsHideSentinels(readPhotoUploadDiagnostics())
+    })
+
+    await withNativeDiagnostics(async () => {
+      const durable = jpegBlob()
+      const caller = new Blob([Uint8Array.from([9, 8, 7, 6, 5, 4, 3, 2])], { type: 'image/jpeg' })
+      const base = fencedCurrent(durable)
+      let actorReads = 0
+      const current = new Proxy(base, {
+        get(target, prop, receiver) {
+          if (prop === 'actor_scope_id') {
+            actorReads += 1
+            if (actorReads === 1) {
+              return target.actor_scope_id
+            }
+            return NATIVE_TOKEN
+          }
+          if (prop === 'status') {
+            return target.status
+          }
+          return Reflect.get(target, prop, receiver)
+        },
+      })
+      await useFailureDb({ failPut: true, current })
+      await expectDatabaseError(() => db.putRecordFenced(fencedCandidate(caller, {
+        status: PHOTO_UPLOAD_STATUSES.QUEUED,
+      })))
+      const event = readPhotoUploadDiagnostics().find((item) => item.event === 'IDB_FENCED_PUT_ERROR')
+      expect(actorReads).toBeGreaterThan(1)
+      expect(event.status_before).toBe(PHOTO_UPLOAD_STATUSES.QUEUED)
+      expect(event.status_after).toBe(PHOTO_UPLOAD_STATUSES.QUEUED)
+      expect(event.actor_status_index_changed).toBe(true)
+      expectDiagnosticsHideSentinels(readPhotoUploadDiagnostics())
+    })
+
+    await withNativeDiagnostics(async () => {
+      const durable = jpegBlob()
+      const caller = new Blob([Uint8Array.from([9, 8, 7, 6, 5, 4, 3, 2])], { type: 'image/jpeg' })
+      const base = fencedCurrent(durable)
+      const current = new Proxy(base, {
+        get(target, prop, receiver) {
+          if (prop === 'status') {
+            throw new Error(NATIVE_MESSAGE)
+          }
+          if (prop === 'actor_scope_id' || prop === 'actor_scope_type') {
+            return target[prop]
+          }
+          return Reflect.get(target, prop, receiver)
+        },
+      })
+      await useFailureDb({ failPut: true, current })
+      await expectDatabaseError(() => db.putRecordFenced(fencedCandidate(caller)))
+      const event = readPhotoUploadDiagnostics().find((item) => item.event === 'IDB_FENCED_PUT_ERROR')
+      expect(event.status_before).toBe('UNDETERMINED')
+      expect(event.status_after).toBe(PHOTO_UPLOAD_STATUSES.UPLOADING)
+      expect(event.actor_status_index_changed).toBe('UNDETERMINED')
+      expectDiagnosticsHideSentinels(readPhotoUploadDiagnostics())
+    })
+
+    await withNativeDiagnostics(async () => {
+      const durable = jpegBlob()
+      const caller = new Blob([Uint8Array.from([9, 8, 7, 6, 5, 4, 3, 2])], { type: 'image/jpeg' })
+      const base = fencedCurrent(durable)
+      let actorReads = 0
+      const current = new Proxy(base, {
+        get(target, prop, receiver) {
+          if (prop === 'actor_scope_id') {
+            actorReads += 1
+            if (actorReads === 1) {
+              return target.actor_scope_id
+            }
+            return { token: NATIVE_TOKEN }
+          }
+          return Reflect.get(target, prop, receiver)
+        },
+      })
+      await useFailureDb({ failPut: true, current })
+      await expectDatabaseError(() => db.putRecordFenced(fencedCandidate(caller)))
+      const event = readPhotoUploadDiagnostics().find((item) => item.event === 'IDB_FENCED_PUT_ERROR')
+      expect(event.status_before).toBe(PHOTO_UPLOAD_STATUSES.QUEUED)
+      expect(event.status_after).toBe(PHOTO_UPLOAD_STATUSES.UPLOADING)
+      expect(event.actor_status_index_changed).toBe('UNDETERMINED')
+      expectDiagnosticsHideSentinels(readPhotoUploadDiagnostics())
     })
   })
 })

@@ -209,13 +209,106 @@ function nativeErrorReason(error) {
   return 'NO_NATIVE_CODE'
 }
 
-function traceNativeError(event, queueId, error) {
+const NATIVE_MESSAGE_CLASS = Object.freeze({
+  BLOB_FILE_PREPARATION: 'BLOB_FILE_PREPARATION',
+  IDB_SERVER_CONNECTION_LOST: 'IDB_SERVER_CONNECTION_LOST',
+  IDB_INTERNAL_SERVER_ERROR: 'IDB_INTERNAL_SERVER_ERROR',
+  NO_IN_PROGRESS_TRANSACTION: 'NO_IN_PROGRESS_TRANSACTION',
+  OTHER_UNKNOWN_ERROR: 'OTHER_UNKNOWN_ERROR',
+  NO_MESSAGE: 'NO_MESSAGE',
+})
+
+const ACTOR_STATUS_INDEX_FIELDS = Object.freeze([
+  'actor_scope_type',
+  'actor_scope_id',
+  'status',
+])
+
+const UNDETERMINED_INDEX_DIAGNOSTIC = 'UNDETERMINED'
+
+function classifyNativeErrorMessage(error) {
+  let message
   try {
-    trace(event, {
+    if (error === null || typeof error !== 'object') {
+      return NATIVE_MESSAGE_CLASS.NO_MESSAGE
+    }
+    message = error.message
+  } catch (_error) {
+    return NATIVE_MESSAGE_CLASS.NO_MESSAGE
+  }
+  if (typeof message !== 'string' || message.length === 0) {
+    return NATIVE_MESSAGE_CLASS.NO_MESSAGE
+  }
+  if (
+    message.indexOf('Error preparing Blob/File data to be stored in object store') !== -1
+    || message.indexOf('The requested file could not be read, typically due to permission problems that have occurred after a reference to a file was acquired') !== -1
+  ) {
+    return NATIVE_MESSAGE_CLASS.BLOB_FILE_PREPARATION
+  }
+  if (message.indexOf('Connection to Indexed Database server lost') !== -1) {
+    return NATIVE_MESSAGE_CLASS.IDB_SERVER_CONNECTION_LOST
+  }
+  if (message.indexOf('An internal error was encountered in the Indexed Database server') !== -1) {
+    return NATIVE_MESSAGE_CLASS.IDB_INTERNAL_SERVER_ERROR
+  }
+  if (message.indexOf('without an in-progress transaction') !== -1) {
+    return NATIVE_MESSAGE_CLASS.NO_IN_PROGRESS_TRANSACTION
+  }
+  return NATIVE_MESSAGE_CLASS.OTHER_UNKNOWN_ERROR
+}
+
+function readIndexField(record, field) {
+  try {
+    if (record === null || typeof record !== 'object') {
+      return null
+    }
+    const value = record[field]
+    if (typeof value !== 'string') {
+      return null
+    }
+    return value
+  } catch (_error) {
+    return null
+  }
+}
+
+function indexedStatusSnapshot(record) {
+  const status = readIndexField(record, 'status')
+  if (!isPhotoUploadStatus(status)) {
+    return UNDETERMINED_INDEX_DIAGNOSTIC
+  }
+  return status
+}
+
+function actorStatusIndexChanged(current, next) {
+  let changed = false
+  for (const field of ACTOR_STATUS_INDEX_FIELDS) {
+    const before = readIndexField(current, field)
+    const after = readIndexField(next, field)
+    if (before === null || after === null) {
+      return UNDETERMINED_INDEX_DIAGNOSTIC
+    }
+    if (before !== after) {
+      changed = true
+    }
+  }
+  return changed
+}
+
+function traceNativeError(event, queueId, error, indexRecords) {
+  try {
+    const data = {
       queue_fragment: abbreviateQueueId(queueId),
       error_class: nativeErrorClass(error),
       reason: nativeErrorReason(error),
-    })
+      message_class: classifyNativeErrorMessage(error),
+    }
+    if (indexRecords) {
+      data.status_before = indexedStatusSnapshot(indexRecords.current)
+      data.status_after = indexedStatusSnapshot(indexRecords.next)
+      data.actor_status_index_changed = actorStatusIndexChanged(indexRecords.current, indexRecords.next)
+    }
+    trace(event, data)
   } catch (_error) {
     return
   }
@@ -795,7 +888,10 @@ export function createPhotoUploadDb(options = {}) {
         try {
           await store.put(next)
         } catch (error) {
-          traceNativeError('IDB_FENCED_PUT_ERROR', validated.queue_id, error)
+          traceNativeError('IDB_FENCED_PUT_ERROR', validated.queue_id, error, {
+            current,
+            next,
+          })
           throw error
         }
         try {
