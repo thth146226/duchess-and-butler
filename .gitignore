@@ -8,3 +8,4 @@ duchess-app/node_modules/
 duchess-app/.env
 duchess-app/.env.local
 duchess-app/.env.*.local
+release-package/

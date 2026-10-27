@@ -1,29 +1,8 @@
 import { useEffect, useState, useRef } from 'react'
-import { createClient } from '@supabase/supabase-js'
-import { resolveDriverSupabaseBearer, useDriverPhotoUploadQueue } from '../hooks/useDriverPhotoUploadQueue'
-import { PHOTO_UPLOAD_ACTOR_SCOPE_TYPES } from '../lib/photoUploadDb'
-import { acquirePhotoUploadRuntime, releasePhotoUploadRuntime } from '../lib/photoUploadRuntime'
+import { useDriverPhotoUploadQueue } from '../hooks/useDriverPhotoUploadQueue'
+import { driverPortalSupabase as supabase } from '../lib/driverPortalSupabase'
 import { DRIVER_REPORT_SOURCE_SURFACES, useDriverReportPhotoUploadQueue } from '../hooks/useDriverReportPhotoUploadQueue'
 import PhotoUploadQueueStatus from '../components/PhotoUploadQueueStatus'
-
-const supabase = createClient(
-  'https://ecosxamjvxveawaeluma.supabase.co',
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVjb3N4YW1qdnh2ZWF3YWVsdW1hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMyNDY2MjIsImV4cCI6MjA4ODgyMjYyMn0.UkMQcQGovE5aX9znOeG1MtJ1_5FWA7kc5WNAE6HeBOw',
-  {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
-      storageKey: 'driver-portal-auth',
-    },
-    global: {
-      headers: {
-        'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVjb3N4YW1qdnh2ZWF3YWVsdW1hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMyNDY2MjIsImV4cCI6MjA4ODgyMjYyMn0.UkMQcQGovE5aX9znOeG1MtJ1_5FWA7kc5WNAE6HeBOw',
-        'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVjb3N4YW1qdnh2ZWF3YWVsdW1hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMyNDY2MjIsImV4cCI6MjA4ODgyMjYyMn0.UkMQcQGovE5aX9znOeG1MtJ1_5FWA7kc5WNAE6HeBOw',
-      }
-    },
-  }
-)
 
 const RUN_TYPES = [
   { value: 'after_del', label: 'After DEL', bg: '#FCEBEB', color: '#A32D2D', border: '#FCA5A5' },
@@ -61,7 +40,7 @@ function fmt(d) {
   return new Date(d + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })
 }
 
-export default function DriverPortal({ token }) {
+export default function DriverPortal({ token, onDriverId }) {
   const [driver, setDriver]       = useState(null)
   const [portalRuns, setPortalRuns] = useState([])
   const [selectedJob, setSelected]= useState(null)
@@ -96,17 +75,11 @@ export default function DriverPortal({ token }) {
   const driverId = driver?.id || null
 
   useEffect(() => {
-    if (!driverId) return undefined
-    acquirePhotoUploadRuntime({
-      actorScopeType: PHOTO_UPLOAD_ACTOR_SCOPE_TYPES.DRIVER_PORTAL,
-      actorScopeId: driverId,
-      supabaseClient: supabase,
-      getAccessToken: () => resolveDriverSupabaseBearer(supabase),
-    })
-    return () => {
-      releasePhotoUploadRuntime(PHOTO_UPLOAD_ACTOR_SCOPE_TYPES.DRIVER_PORTAL, driverId)
+    if (!driverId || typeof onDriverId !== 'function') {
+      return undefined
     }
-  }, [driverId])
+    onDriverId(driverId)
+  }, [driverId, onDriverId])
 
   useEffect(() => { if (token) loadPortal() }, [token])
 

@@ -627,16 +627,33 @@ export function createPhotoUploadManager(options = {}) {
     return true
   }
 
+  const localDeferUntil = new Map()
+  let listDeferUntil = 0
+
   async function fillSlots(started) {
     const attempted = new Set(activeSlots.keys())
     if (!stopped && activeSlots.size >= MAX_CONCURRENT_UPLOADS) {
       trace('PUMP_NO_WORK', { ...slotSnapshot(), reason: 'NO_FREE_SLOTS' })
     }
     while (!stopped && activeSlots.size < MAX_CONCURRENT_UPLOADS) {
-      const records = await db.listRecordsForActor({
-        actorScopeType,
-        actorScopeId,
-      })
+      if (now() < listDeferUntil) {
+        trace('PUMP_NO_WORK', { ...slotSnapshot(), reason: 'LOCAL_DB_BACKOFF' })
+        break
+      }
+      let records
+      try {
+        records = await db.listRecordsForActor({
+          actorScopeType,
+          actorScopeId,
+        })
+      } catch (error) {
+        if (error && error.code === PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR) {
+          listDeferUntil = now() + LEASE_HEARTBEAT_MS
+          trace('PUMP_NO_WORK', { ...slotSnapshot(), reason: 'LOCAL_DB_BACKOFF' })
+          break
+        }
+        throw error
+      }
       const nowMs = now()
       try {
         trace('PUMP_SCAN', { ...slotSnapshot(), ...eligibilityCounts(records, nowMs) })
@@ -647,6 +664,7 @@ export function createPhotoUploadManager(options = {}) {
         .filter((record) => (
           !attempted.has(record.queue_id)
           && !locallyExecuted.has(record.queue_id)
+          && nowMs >= (localDeferUntil.get(record.queue_id) || 0)
           && isEligible(record, nowMs, leaseOwner)
         ))
         .sort(compareEligibleRecords)[0]
@@ -667,6 +685,10 @@ export function createPhotoUploadManager(options = {}) {
         }
       } catch (error) {
         if (isLeaseUnavailable(error) || isFenceConflict(error)) {
+          continue
+        }
+        if (error && error.code === PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR) {
+          localDeferUntil.set(candidate.queue_id, now() + LEASE_HEARTBEAT_MS)
           continue
         }
         throw error
@@ -690,6 +712,13 @@ export function createPhotoUploadManager(options = {}) {
     try {
       do {
         pumpAgain = false
+        if (!stopped && db && typeof db.migrateNextLegacyRecord === 'function') {
+          try {
+            await db.migrateNextLegacyRecord()
+          } catch (_error) {
+            listDeferUntil = now() + LEASE_HEARTBEAT_MS
+          }
+        }
         await fillSlots(started)
         if (stopped) {
           break

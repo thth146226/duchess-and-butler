@@ -8,6 +8,7 @@ import {
   PHOTO_UPLOAD_DB_ERROR_CODES,
   PHOTO_UPLOAD_DB_NAME,
   PHOTO_UPLOAD_DB_VERSION,
+  PHOTO_UPLOAD_PAYLOAD_STORE,
   PHOTO_UPLOAD_QUEUE_STORE,
   PHOTO_UPLOAD_RECORD_SCHEMA_VERSION,
   PhotoUploadDbError,
@@ -116,17 +117,18 @@ describe('photoUploadDb', () => {
     }
   })
 
-  test('creates version 1 queue store with actor indexes', async () => {
+  test('creates version 2 queue and payload stores with actor indexes', async () => {
     await db.putRecord(makeRecord())
     await db.close()
     db = null
 
     const raw = await openRawDatabase(dbName)
     expect(raw.name).toBe(dbName)
-    expect(raw.version).toBe(1)
+    expect(raw.version).toBe(2)
     expect(PHOTO_UPLOAD_DB_NAME).toBe('duchess-photo-upload-v1')
-    expect(PHOTO_UPLOAD_DB_VERSION).toBe(1)
+    expect(PHOTO_UPLOAD_DB_VERSION).toBe(2)
     expect(raw.objectStoreNames.contains(PHOTO_UPLOAD_QUEUE_STORE)).toBe(true)
+    expect(raw.objectStoreNames.contains(PHOTO_UPLOAD_PAYLOAD_STORE)).toBe(true)
 
     const tx = raw.transaction(PHOTO_UPLOAD_QUEUE_STORE, 'readonly')
     const store = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
@@ -139,6 +141,12 @@ describe('photoUploadDb', () => {
       'actor_scope_id',
       'status',
     ])
+    const payloads = raw.transaction(PHOTO_UPLOAD_PAYLOAD_STORE, 'readonly')
+      .objectStore(PHOTO_UPLOAD_PAYLOAD_STORE)
+    expect(payloads.keyPath).toBe('payload_id')
+    expect(payloads.indexNames.contains('by_queue')).toBe(true)
+    expect(payloads.index('by_queue').unique).toBe(true)
+    expect(payloads.indexNames.contains('by_actor')).toBe(true)
     raw.close()
   })
 
@@ -920,6 +928,7 @@ describe('photoUploadDb', () => {
   function installNativeFailureDb({ failGet = false, failPut = false, failDone = false, current, error } = {}) {
     const native = Object.prototype.hasOwnProperty.call(arguments[0] || {}, 'error') ? error : nativeFailure()
     const calls = { doneReads: 0, puts: [] }
+    const payloads = new Map()
     const failingDb = createPhotoUploadDb({
       dbName,
       openDB: async () => ({
@@ -930,7 +939,18 @@ describe('photoUploadDb', () => {
             donePromise.catch(() => {})
           }
           return {
-            objectStore() {
+            objectStore(name) {
+              if (name === PHOTO_UPLOAD_PAYLOAD_STORE) {
+                return {
+                  get: async (key) => payloads.get(key),
+                  put: async (value) => {
+                    payloads.set(value.payload_id, value)
+                  },
+                  delete: async (key) => {
+                    payloads.delete(key)
+                  },
+                }
+              }
               return {
                 get: async () => {
                   if (failGet) {
@@ -944,8 +964,10 @@ describe('photoUploadDb', () => {
                     throw native
                   }
                 },
+                delete: async () => {},
               }
             },
+            abort() {},
             get done() {
               calls.doneReads += 1
               return donePromise
@@ -1014,13 +1036,16 @@ describe('photoUploadDb', () => {
     }
   }
 
-  function fencedCurrent(durable) {
-    return makeRecord({
-      lease_owner: 'tab-a',
-      lease_generation: 1,
-      lease_expires_at: FIXED_NOW + LEASE_TTL_MS,
-      blob: durable,
-    })
+  function fencedCurrent(_durable) {
+    return {
+      ...makeRecord({
+        blob: null,
+        lease_owner: 'tab-a',
+        lease_generation: 1,
+        lease_expires_at: FIXED_NOW + LEASE_TTL_MS,
+      }),
+      payload_id: FULL_QUEUE_ID,
+    }
   }
 
   function fencedCandidate(callerBlob, overrides = {}) {
@@ -1063,7 +1088,7 @@ describe('photoUploadDb', () => {
     await withNativeDiagnostics(async () => {
       const { calls } = await useFailureDb({ failGet: true })
       await expectDatabaseError(() => db.putRecordFenced(fencedCandidate(jpegBlob())))
-      expect(calls.doneReads).toBe(0)
+      expect(calls.doneReads).toBe(1)
       expect(calls.puts).toEqual([])
       expectSafeNativeEvent('IDB_FENCED_GET_ERROR')
     })
@@ -1075,9 +1100,10 @@ describe('photoUploadDb', () => {
       const caller = new Blob([Uint8Array.from([9, 8, 7, 6, 5, 4, 3, 2])], { type: 'image/jpeg' })
       const { calls } = await useFailureDb({ failPut: true, current: fencedCurrent(durable) })
       await expectDatabaseError(() => db.putRecordFenced(fencedCandidate(caller)))
-      expect(calls.doneReads).toBe(0)
+      expect(calls.doneReads).toBe(1)
       expect(calls.puts).toHaveLength(1)
-      expect(calls.puts[0].blob).toBe(durable)
+      expect(calls.puts[0].blob).toBeUndefined()
+      expect(calls.puts[0].payload_id).toBe(FULL_QUEUE_ID)
       expect(calls.puts[0].status).toBe(PHOTO_UPLOAD_STATUSES.UPLOADING)
       expect(calls.puts[0].metadata_payload).toEqual({ nested: 'progress' })
       expect(calls.puts[0].lease_owner).toBe('tab-a')
@@ -1096,9 +1122,10 @@ describe('photoUploadDb', () => {
       const caller = new Blob([Uint8Array.from([9, 8, 7, 6, 5, 4, 3, 2])], { type: 'image/jpeg' })
       const { calls } = await useFailureDb({ failDone: true, current: fencedCurrent(durable) })
       await expectDatabaseError(() => db.putRecordFenced(fencedCandidate(caller)))
-      expect(calls.doneReads).toBe(1)
+      expect(calls.doneReads).toBe(2)
       expect(calls.puts).toHaveLength(1)
-      expect(calls.puts[0].blob).toBe(durable)
+      expect(calls.puts[0].blob).toBeUndefined()
+      expect(calls.puts[0].payload_id).toBe(FULL_QUEUE_ID)
       expectSafeNativeEvent('IDB_FENCED_TX_DONE_ERROR')
     })
   })
@@ -1107,7 +1134,7 @@ describe('photoUploadDb', () => {
     await withNativeDiagnostics(async () => {
       const { calls } = await useFailureDb({ failGet: true })
       await expectDatabaseError(() => db.claimLease(claimArgs()))
-      expect(calls.doneReads).toBe(0)
+      expect(calls.doneReads).toBe(1)
       expect(calls.puts).toEqual([])
       expectSafeNativeEvent('IDB_CLAIM_GET_ERROR')
     })
@@ -1115,10 +1142,14 @@ describe('photoUploadDb', () => {
 
   test('claimLease attributes a native store.put failure', async () => {
     await withNativeDiagnostics(async () => {
-      const { calls } = await useFailureDb({ failPut: true, current: makeRecord() })
+      const { calls } = await useFailureDb({
+        failPut: true,
+        current: { ...makeRecord({ blob: null }), payload_id: FULL_QUEUE_ID },
+      })
       await expectDatabaseError(() => db.claimLease(claimArgs()))
-      expect(calls.doneReads).toBe(0)
+      expect(calls.doneReads).toBe(1)
       expect(calls.puts).toHaveLength(1)
+      expect(calls.puts[0].blob).toBeUndefined()
       expect(calls.puts[0].lease_owner).toBe('tab-a')
       expect(calls.puts[0].lease_generation).toBe(1)
       expect(calls.puts[0].lease_expires_at).toBe(FIXED_NOW + LEASE_TTL_MS)
@@ -1128,10 +1159,14 @@ describe('photoUploadDb', () => {
 
   test('claimLease attributes a native transaction done failure', async () => {
     await withNativeDiagnostics(async () => {
-      const { calls } = await useFailureDb({ failDone: true, current: makeRecord() })
+      const { calls } = await useFailureDb({
+        failDone: true,
+        current: { ...makeRecord({ blob: null }), payload_id: FULL_QUEUE_ID },
+      })
       await expectDatabaseError(() => db.claimLease(claimArgs()))
-      expect(calls.doneReads).toBe(1)
+      expect(calls.doneReads).toBe(2)
       expect(calls.puts).toHaveLength(1)
+      expect(calls.puts[0].blob).toBeUndefined()
       expect(calls.puts[0].lease_generation).toBe(1)
       expectSafeNativeEvent('IDB_CLAIM_TX_DONE_ERROR')
     })

@@ -53,7 +53,14 @@ export function createPhotoUploadRollbackRecovery({ db } = {}) {
 
   async function inspectRollbackSafety({ actorScopeType, actorScopeId }) {
     const records = await db.listRecordsForActor({ actorScopeType, actorScopeId })
-    return toSafeReport(actorScopeType, actorScopeId, records)
+    const report = toSafeReport(actorScopeType, actorScopeId, records)
+    if (!report.hasRetainedLocalBlob && typeof db.hasRetainedPayloadForActor === 'function') {
+      report.hasRetainedLocalBlob = Boolean(await db.hasRetainedPayloadForActor({
+        actorScopeType,
+        actorScopeId,
+      }))
+    }
+    return report
   }
 
   async function assertLegacyRollbackSafe(input) {

@@ -3,9 +3,12 @@ import { PHOTO_UPLOAD_STATUSES, isPhotoUploadStatus } from './photoUploadDomain'
 import { abbreviateQueueId, recordPhotoUploadDiagnostic } from './photoUploadDiagnostics'
 
 export const PHOTO_UPLOAD_DB_NAME = 'duchess-photo-upload-v1'
-export const PHOTO_UPLOAD_DB_VERSION = 1
+export const PHOTO_UPLOAD_DB_VERSION = 2
 export const PHOTO_UPLOAD_QUEUE_STORE = 'photo_upload_queue'
+export const PHOTO_UPLOAD_PAYLOAD_STORE = 'photo_upload_payloads'
 export const PHOTO_UPLOAD_RECORD_SCHEMA_VERSION = 1
+const PAYLOAD_VERIFY_CHUNK_BYTES = 65536
+const LEGACY_MIGRATION_RETRY_MS = 30000
 
 export const PHOTO_UPLOAD_DB_ERROR_CODES = Object.freeze({
   INVALID_RECORD: 'INVALID_RECORD',
@@ -393,7 +396,8 @@ function requireActorScope(actorScopeType, actorScopeId) {
   }
 }
 
-function validateRecord(record) {
+function validateRecord(record, options = {}) {
+  const requireBlob = options.requireBlob !== false
   if (!isPlainObject(record)) {
     throw invalidRecord('record must be a plain object')
   }
@@ -486,8 +490,10 @@ function validateRecord(record) {
     if (record.blob !== null && !(record.blob instanceof Blob)) {
       throw invalidRecord('blob must be a Blob or null when status is DONE')
     }
-  } else if (!(record.blob instanceof Blob)) {
+  } else if (requireBlob && !(record.blob instanceof Blob)) {
     throw invalidRecord('blob must be retained as a Blob until DONE cleanup')
+  } else if (record.blob != null && !(record.blob instanceof Blob)) {
+    throw invalidRecord('blob must be a Blob or null')
   }
 
   if (record.blob instanceof Blob) {
@@ -543,51 +549,585 @@ function validateRecord(record) {
   return copyRecord(record)
 }
 
-function upgradePhotoUploadDb(database) {
-  if (database.objectStoreNames.contains(PHOTO_UPLOAD_QUEUE_STORE)) {
+function queueStoreNames(database, transaction) {
+  if (!database.objectStoreNames.contains(PHOTO_UPLOAD_QUEUE_STORE)) {
+    const store = database.createObjectStore(PHOTO_UPLOAD_QUEUE_STORE, {
+      keyPath: 'queue_id',
+    })
+    store.createIndex('by_actor', ['actor_scope_type', 'actor_scope_id'])
+    store.createIndex('by_actor_status', ['actor_scope_type', 'actor_scope_id', 'status'])
     return
   }
-  const store = database.createObjectStore(PHOTO_UPLOAD_QUEUE_STORE, {
-    keyPath: 'queue_id',
-  })
-  store.createIndex('by_actor', ['actor_scope_type', 'actor_scope_id'])
-  store.createIndex('by_actor_status', ['actor_scope_type', 'actor_scope_id', 'status'])
+  if (transaction && typeof transaction.objectStore === 'function') {
+    transaction.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
+  }
+}
+
+function upgradePhotoUploadDb(database, _oldVersion, _newVersion, transaction) {
+  queueStoreNames(database, transaction)
+  if (!database.objectStoreNames.contains(PHOTO_UPLOAD_PAYLOAD_STORE)) {
+    const payloads = database.createObjectStore(PHOTO_UPLOAD_PAYLOAD_STORE, {
+      keyPath: 'payload_id',
+    })
+    payloads.createIndex('by_queue', 'queue_id', { unique: true })
+    payloads.createIndex('by_actor', ['actor_scope_type', 'actor_scope_id'])
+  }
+}
+
+function abortTransaction(tx) {
+  try {
+    if (tx && typeof tx.abort === 'function') {
+      tx.abort()
+    }
+  } catch (_error) {
+    return
+  }
+}
+
+function abortAndSettle(tx) {
+  abortTransaction(tx)
+  try {
+    const done = tx && tx.done
+    if (done && typeof done.then === 'function') {
+      done.then(() => {}, () => {})
+    }
+  } catch (_error) {
+    return
+  }
+}
+
+function bytesEqual(left, right) {
+  if (left.length !== right.length) {
+    return false
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return false
+    }
+  }
+  return true
+}
+
+function createPayloadToken() {
+  const cryptoObj = globalThis.crypto
+  if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+    return cryptoObj.randomUUID()
+  }
+  if (cryptoObj && typeof cryptoObj.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16)
+    cryptoObj.getRandomValues(bytes)
+    let token = ''
+    for (let index = 0; index < bytes.length; index += 1) {
+      token += bytes[index].toString(16).padStart(2, '0')
+    }
+    return token
+  }
+  return `payload-${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`
+}
+
+async function readBlobSlice(blob, start, end) {
+  const slice = blob.slice(start, end)
+  return new Uint8Array(await slice.arrayBuffer())
+}
+
+async function blobsEqualChunked(left, right) {
+  if (!(left instanceof Blob) || !(right instanceof Blob)) {
+    return false
+  }
+  if (left.size !== right.size || left.type !== right.type) {
+    return false
+  }
+  let offset = 0
+  while (offset < left.size) {
+    const end = Math.min(left.size, offset + PAYLOAD_VERIFY_CHUNK_BYTES)
+    const leftChunk = await readBlobSlice(left, offset, end)
+    const rightChunk = await readBlobSlice(right, offset, end)
+    if (!bytesEqual(leftChunk, rightChunk)) {
+      return false
+    }
+    offset = end
+  }
+  return true
+}
+
+function buildPayload(record, blob) {
+  return {
+    payload_id: record.queue_id,
+    queue_id: record.queue_id,
+    actor_scope_type: record.actor_scope_type,
+    actor_scope_id: record.actor_scope_id,
+    blob,
+    size_bytes: blob.size,
+    mime_type: blob.type || record.mime_type,
+    created_at: Number.isInteger(record.created_at) ? record.created_at : 0,
+  }
+}
+
+function toStoredQueueRecord(record, payloadId) {
+  const stored = copyRecord(record)
+  delete stored.blob
+  stored.payload_id = payloadId
+  return stored
+}
+
+function toPublicRecord(stored, blob) {
+  const source = {}
+  for (const field of PHOTO_UPLOAD_RECORD_FIELDS) {
+    source[field] = field === 'blob' ? (blob === undefined ? null : blob) : stored[field]
+  }
+  return copyRecord(source)
+}
+
+function isLegacyInlineBlob(row) {
+  return Boolean(row && row.blob instanceof Blob && (row.payload_id == null || row.payload_id === ''))
+}
+
+async function readOwnedPayload(payloadStore, row) {
+  if (!row || typeof row.payload_id !== 'string' || row.payload_id.length === 0) {
+    return null
+  }
+  const payload = await payloadStore.get(row.payload_id)
+  if (!payload || !sameActor(payload, row.actor_scope_type, row.actor_scope_id)) {
+    return null
+  }
+  return payload
+}
+
+function separatedPayloadId(row) {
+  if (!row || isLegacyInlineBlob(row)) {
+    return null
+  }
+  if (typeof row.payload_id === 'string' && row.payload_id.length > 0) {
+    return row.payload_id
+  }
+  return null
+}
+
+function legacySnapshot(row) {
+  return {
+    queue_id: row.queue_id,
+    actor_scope_type: row.actor_scope_type,
+    actor_scope_id: row.actor_scope_id,
+    status: row.status,
+    updated_at: row.updated_at,
+    lease_generation: row.lease_generation,
+    lease_owner: row.lease_owner,
+    lease_expires_at: row.lease_expires_at,
+  }
+}
+
+function sameLegacySnapshot(row, snapshot) {
+  return Boolean(
+    row
+    && row.queue_id === snapshot.queue_id
+    && row.actor_scope_type === snapshot.actor_scope_type
+    && row.actor_scope_id === snapshot.actor_scope_id
+    && row.status === snapshot.status
+    && row.updated_at === snapshot.updated_at
+    && row.lease_generation === snapshot.lease_generation
+    && row.lease_owner === snapshot.lease_owner
+    && row.lease_expires_at === snapshot.lease_expires_at
+    && row.blob instanceof Blob
+  )
+}
+
+function isCleanedDone(row) {
+  return Boolean(
+    row
+    && row.status === PHOTO_UPLOAD_STATUSES.DONE
+    && (row.payload_id == null || row.payload_id === '')
+    && !(row.blob instanceof Blob)
+  )
+}
+
+async function putPayloadBytes(payloadStore, record, blob) {
+  const payloadId = record.queue_id
+  const existing = await payloadStore.get(payloadId)
+  if (existing && !sameActor(existing, record.actor_scope_type, record.actor_scope_id)) {
+    throw actorConflict('payload is owned by a different actor')
+  }
+  await payloadStore.put(buildPayload(record, blob))
+  return payloadId
+}
+
+function payloadIdentityMatches(snapshot, original, payload) {
+  if (!payload || !(payload.blob instanceof Blob) || !(original instanceof Blob)) {
+    return false
+  }
+  return payload.payload_id === snapshot.queue_id
+    && payload.queue_id === snapshot.queue_id
+    && payload.actor_scope_type === snapshot.actor_scope_type
+    && payload.actor_scope_id === snapshot.actor_scope_id
+    && payload.blob.size === original.size
+    && payload.blob.type === original.type
 }
 
 export function createPhotoUploadDb(options = {}) {
   const dbName = options.dbName || PHOTO_UPLOAD_DB_NAME
   const open = options.openDB || idbOpenDB
+  const afterLegacyPayloadCommit = options.afterLegacyPayloadCommit
+  const beforeLegacyPromote = options.beforeLegacyPromote
   let dbPromise = null
+  let closed = false
+  let connectionToken = 0
+  const legacyRetryAt = new Map()
+
+  function forgetConnection(token) {
+    if (token === connectionToken) {
+      dbPromise = null
+    }
+  }
 
   async function getDb() {
+    if (closed) {
+      throw new PhotoUploadDbError(PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR, 'PHOTO_UPLOAD_DB_CLOSED')
+    }
     if (!dbPromise) {
-      dbPromise = Promise.resolve()
-        .then(() =>
-          open(dbName, PHOTO_UPLOAD_DB_VERSION, {
-            upgrade: upgradePhotoUploadDb,
-          })
-        )
+      const token = connectionToken + 1
+      connectionToken = token
+      let openedDb = null
+      const pending = Promise.resolve()
+        .then(() => open(dbName, PHOTO_UPLOAD_DB_VERSION, {
+          upgrade: upgradePhotoUploadDb,
+          blocked() {
+            return undefined
+          },
+          blocking() {
+            forgetConnection(token)
+            if (openedDb && typeof openedDb.close === 'function') {
+              try {
+                openedDb.close()
+              } catch (_error) {
+                return
+              }
+            }
+          },
+          terminated() {
+            forgetConnection(token)
+          },
+        }))
+        .then((db) => {
+          openedDb = db
+          if (closed || token !== connectionToken) {
+            if (db && typeof db.close === 'function') {
+              db.close()
+            }
+            throw new PhotoUploadDbError(PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR, 'PHOTO_UPLOAD_DB_CLOSED')
+          }
+          return db
+        })
         .catch((error) => {
-          dbPromise = null
+          forgetConnection(token)
           throw wrapDatabaseError(error)
         })
+      dbPromise = pending
     }
     return dbPromise
   }
 
+  async function reopenDb() {
+    const pending = dbPromise
+    connectionToken += 1
+    dbPromise = null
+    if (!pending) {
+      return
+    }
+    try {
+      const database = await pending
+      if (database && typeof database.close === 'function') {
+        database.close()
+      }
+    } catch (_error) {
+      return
+    }
+  }
+
+  async function withQueueAndPayload(fn) {
+    const db = await getDb()
+    const tx = db.transaction(
+      [PHOTO_UPLOAD_QUEUE_STORE, PHOTO_UPLOAD_PAYLOAD_STORE],
+      'readwrite'
+    )
+    const queueStore = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
+    const payloadStore = tx.objectStore(PHOTO_UPLOAD_PAYLOAD_STORE)
+    try {
+      const result = await fn(tx, queueStore, payloadStore)
+      await tx.done
+      return result
+    } catch (error) {
+      abortAndSettle(tx)
+      throw error
+    }
+  }
+
+  async function hydrate(payloadStore, stored) {
+    if (!stored) {
+      return null
+    }
+    if (stored.blob instanceof Blob) {
+      return toPublicRecord(stored, stored.blob)
+    }
+    const payload = await readOwnedPayload(payloadStore, stored)
+    const blob = payload && payload.blob instanceof Blob ? payload.blob : null
+    return toPublicRecord(stored, blob)
+  }
+
+  async function stageLegacyPayload(queueId) {
+    const db = await getDb()
+    const tx = db.transaction(
+      [PHOTO_UPLOAD_QUEUE_STORE, PHOTO_UPLOAD_PAYLOAD_STORE],
+      'readwrite'
+    )
+    const queueStore = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
+    const payloadStore = tx.objectStore(PHOTO_UPLOAD_PAYLOAD_STORE)
+    try {
+      const row = await queueStore.get(queueId)
+      if (!row) {
+        await tx.done
+        return { state: 'absent' }
+      }
+      if (!isLegacyInlineBlob(row)) {
+        await tx.done
+        return { state: 'current' }
+      }
+      const snapshot = legacySnapshot(row)
+      const original = row.blob
+      const existing = await payloadStore.get(queueId)
+      if (existing && !sameActor(existing, row.actor_scope_type, row.actor_scope_id)) {
+        throw actorConflict('payload is owned by a different actor')
+      }
+      const prepared = Boolean(
+        existing
+        && typeof existing.payload_token === 'string'
+        && existing.payload_token.length > 0
+        && existing.blob instanceof Blob
+        && existing.blob.size === original.size
+        && existing.blob.type === original.type
+      )
+      if (prepared) {
+        const payloadToken = existing.payload_token
+        await tx.done
+        return { state: 'staged', snapshot, original, payloadToken }
+      }
+      const payloadToken = createPayloadToken()
+      const payload = buildPayload(row, original)
+      payload.payload_token = payloadToken
+      await payloadStore.put(payload)
+      await tx.done
+      return { state: 'staged', snapshot, original, payloadToken }
+    } catch (error) {
+      abortAndSettle(tx)
+      throw error
+    }
+  }
+
+  async function readCommittedPayload(queueId) {
+    const db = await getDb()
+    const tx = db.transaction(PHOTO_UPLOAD_PAYLOAD_STORE, 'readonly')
+    try {
+      const payload = await tx.objectStore(PHOTO_UPLOAD_PAYLOAD_STORE).get(queueId)
+      await tx.done
+      return payload || null
+    } catch (error) {
+      abortAndSettle(tx)
+      throw error
+    }
+  }
+
+  async function readQueueRow(queueId) {
+    const db = await getDb()
+    const tx = db.transaction(PHOTO_UPLOAD_QUEUE_STORE, 'readonly')
+    try {
+      const row = await tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE).get(queueId)
+      await tx.done
+      return row || null
+    } catch (error) {
+      abortAndSettle(tx)
+      throw error
+    }
+  }
+
+  function peerPromoted(row, snapshot) {
+    return Boolean(
+      row
+      && row.queue_id === snapshot.queue_id
+      && row.actor_scope_type === snapshot.actor_scope_type
+      && row.actor_scope_id === snapshot.actor_scope_id
+      && !(row.blob instanceof Blob)
+      && row.payload_id === snapshot.queue_id
+    )
+  }
+
+  async function verifyStaged(staged) {
+    const recovered = await readCommittedPayload(staged.snapshot.queue_id)
+    if (!recovered || recovered.payload_token !== staged.payloadToken) {
+      return 'rejected'
+    }
+    if (!payloadIdentityMatches(staged.snapshot, staged.original, recovered)) {
+      return 'rejected'
+    }
+    const payloadMatches = await blobsEqualChunked(staged.original, recovered.blob)
+    const inline = await readQueueRow(staged.snapshot.queue_id)
+    if (peerPromoted(inline, staged.snapshot)) {
+      return payloadMatches ? 'ok' : 'rejected'
+    }
+    if (!sameLegacySnapshot(inline, staged.snapshot)) {
+      return 'rejected'
+    }
+    const inlineMatches = await blobsEqualChunked(staged.original, inline.blob)
+    if (payloadMatches && inlineMatches) {
+      return 'ok'
+    }
+    if (!payloadMatches && inlineMatches) {
+      return 'payload-mismatch'
+    }
+    return 'rejected'
+  }
+
+  async function restageMismatched(staged) {
+    const db = await getDb()
+    const tx = db.transaction(
+      [PHOTO_UPLOAD_QUEUE_STORE, PHOTO_UPLOAD_PAYLOAD_STORE],
+      'readwrite'
+    )
+    const queueStore = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
+    const payloadStore = tx.objectStore(PHOTO_UPLOAD_PAYLOAD_STORE)
+    try {
+      const row = await queueStore.get(staged.snapshot.queue_id)
+      const payload = await payloadStore.get(staged.snapshot.queue_id)
+      if (!sameLegacySnapshot(row, staged.snapshot) || !payload || payload.payload_token !== staged.payloadToken) {
+        await tx.done
+        return
+      }
+      if (!sameActor(payload, staged.snapshot.actor_scope_type, staged.snapshot.actor_scope_id)) {
+        await tx.done
+        return
+      }
+      const replacement = buildPayload(row, row.blob)
+      replacement.payload_token = createPayloadToken()
+      await payloadStore.put(replacement)
+      await tx.done
+    } catch (error) {
+      abortAndSettle(tx)
+      throw error
+    }
+  }
+
+  async function promoteUnchangedLegacy(snapshot, payloadToken, original) {
+    const db = await getDb()
+    const tx = db.transaction(
+      [PHOTO_UPLOAD_QUEUE_STORE, PHOTO_UPLOAD_PAYLOAD_STORE],
+      'readwrite'
+    )
+    const queueStore = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
+    const payloadStore = tx.objectStore(PHOTO_UPLOAD_PAYLOAD_STORE)
+    try {
+      const row = await queueStore.get(snapshot.queue_id)
+      const payload = await payloadStore.get(snapshot.queue_id)
+      const tokenOk = Boolean(payload && payload.payload_token === payloadToken)
+      if (sameLegacySnapshot(row, snapshot) && tokenOk && payloadIdentityMatches(snapshot, row.blob, payload)) {
+        const bound = buildPayload(row, original)
+        bound.payload_token = payloadToken
+        await payloadStore.put(bound)
+        await queueStore.put(toStoredQueueRecord(toPublicRecord(row, null), snapshot.queue_id))
+        await tx.done
+        return true
+      }
+      const payloadBlob = payload && payload.blob instanceof Blob ? payload.blob : null
+      const observed = peerPromoted(row, snapshot) && tokenOk && payloadIdentityMatches(snapshot, original, payload)
+      await tx.done
+      if (!observed || !payloadBlob) {
+        return false
+      }
+      return blobsEqualChunked(original, payloadBlob)
+    } catch (error) {
+      abortAndSettle(tx)
+      throw error
+    }
+  }
+
+  async function promoteLegacyRecord(queueId) {
+    const staged = await stageLegacyPayload(queueId)
+    if (staged.state === 'absent' || staged.state === 'current') {
+      return true
+    }
+    try {
+      if (typeof afterLegacyPayloadCommit === 'function') {
+        await afterLegacyPayloadCommit({ queueId: staged.snapshot.queue_id })
+      }
+      await reopenDb()
+      const verified = await verifyStaged(staged)
+      if (verified === 'payload-mismatch') {
+        await restageMismatched(staged)
+      }
+      if (verified !== 'ok') {
+        return false
+      }
+      if (typeof beforeLegacyPromote === 'function') {
+        await beforeLegacyPromote({
+          queueId: staged.snapshot.queue_id,
+          payloadToken: staged.payloadToken,
+        })
+      }
+      await reopenDb()
+      const confirmed = await verifyStaged(staged)
+      if (confirmed === 'payload-mismatch') {
+        await restageMismatched(staged)
+      }
+      if (confirmed !== 'ok') {
+        return false
+      }
+      return await promoteUnchangedLegacy(staged.snapshot, staged.payloadToken, staged.original)
+    } catch (_error) {
+      return false
+    }
+  }
+
   return {
     async putRecord(record) {
-      const validated = validateRecord(record)
-      const db = await getDb()
-      const tx = db.transaction(PHOTO_UPLOAD_QUEUE_STORE, 'readwrite')
-      const store = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
+      const incomingBlob = record && record.blob instanceof Blob ? record.blob : null
+      const preserveBytes = !incomingBlob && record && record.status !== PHOTO_UPLOAD_STATUSES.DONE
+      const validated = validateRecord(record, { requireBlob: !preserveBytes && !(record && record.status === PHOTO_UPLOAD_STATUSES.DONE && record.blob == null) })
       try {
-        const existing = await store.get(validated.queue_id)
-        if (existing && !sameActor(existing, validated.actor_scope_type, validated.actor_scope_id)) {
-          throw actorConflict('queue_id is owned by a different actor')
+        if (preserveBytes) {
+          const promoted = await promoteLegacyRecord(validated.queue_id)
+          if (!promoted) {
+            throw new PhotoUploadDbError(PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR, 'PAYLOAD_COPY_MISMATCH')
+          }
         }
-        await store.put(validated)
-        await tx.done
+        await withQueueAndPayload(async (_tx, queueStore, payloadStore) => {
+          const existing = await queueStore.get(validated.queue_id)
+          if (existing && !sameActor(existing, validated.actor_scope_type, validated.actor_scope_id)) {
+            throw actorConflict('queue_id is owned by a different actor')
+          }
+          if (isCleanedDone(existing) && incomingBlob) {
+            throw blobCleanupForbidden('DONE cleanup cannot be reversed')
+          }
+          let payloadId = existing && typeof existing.payload_id === 'string' ? existing.payload_id : null
+          if (isCleanedDone(existing)) {
+            payloadId = null
+          } else if (incomingBlob) {
+            payloadId = await putPayloadBytes(payloadStore, validated, incomingBlob)
+          } else if (existing && isLegacyInlineBlob(existing)) {
+            throw new PhotoUploadDbError(PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR, 'LEGACY_RECORD_UNPROMOTED')
+          } else if (preserveBytes) {
+            const payload = await readOwnedPayload(payloadStore, existing || {})
+            if (!payload) {
+              throw invalidRecord('blob must be retained as a Blob until DONE cleanup')
+            }
+            payloadId = payload.payload_id
+          } else if (validated.status === PHOTO_UPLOAD_STATUSES.DONE && validated.blob == null) {
+            if (payloadId) {
+              const payload = await payloadStore.get(payloadId)
+              if (payload && !sameActor(payload, validated.actor_scope_type, validated.actor_scope_id)) {
+                throw actorConflict('payload is owned by a different actor')
+              }
+              await payloadStore.delete(payloadId)
+            }
+            payloadId = null
+          }
+          await queueStore.put(toStoredQueueRecord(validated, payloadId))
+        })
       } catch (error) {
         throw wrapDatabaseError(error)
       }
@@ -599,13 +1139,21 @@ export function createPhotoUploadDb(options = {}) {
       }
       requireActorScope(actorScopeType, actorScopeId)
       const db = await getDb()
+      const tx = db.transaction(
+        [PHOTO_UPLOAD_QUEUE_STORE, PHOTO_UPLOAD_PAYLOAD_STORE],
+        'readonly'
+      )
       try {
-        const record = await db.get(PHOTO_UPLOAD_QUEUE_STORE, queueId)
+        const record = await tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE).get(queueId)
         if (!record || !sameActor(record, actorScopeType, actorScopeId)) {
+          await tx.done
           return null
         }
-        return record
+        const publicRecord = await hydrate(tx.objectStore(PHOTO_UPLOAD_PAYLOAD_STORE), record)
+        await tx.done
+        return publicRecord
       } catch (error) {
+        abortAndSettle(tx)
         throw wrapDatabaseError(error)
       }
     },
@@ -614,11 +1162,12 @@ export function createPhotoUploadDb(options = {}) {
       requireActorScope(actorScopeType, actorScopeId)
       const db = await getDb()
       try {
-        return await db.getAllFromIndex(
+        const rows = await db.getAllFromIndex(
           PHOTO_UPLOAD_QUEUE_STORE,
           'by_actor',
           [actorScopeType, actorScopeId]
         )
+        return rows.map((row) => toPublicRecord(row, null))
       } catch (error) {
         throw wrapDatabaseError(error)
       }
@@ -631,12 +1180,78 @@ export function createPhotoUploadDb(options = {}) {
       }
       const db = await getDb()
       try {
-        return await db.getAllFromIndex(
+        const rows = await db.getAllFromIndex(
           PHOTO_UPLOAD_QUEUE_STORE,
           'by_actor_status',
           [actorScopeType, actorScopeId, status]
         )
+        return rows.map((row) => toPublicRecord(row, null))
       } catch (error) {
+        throw wrapDatabaseError(error)
+      }
+    },
+
+    async hasRetainedPayloadForActor({ actorScopeType, actorScopeId }) {
+      requireActorScope(actorScopeType, actorScopeId)
+      const db = await getDb()
+      try {
+        const rows = await db.getAllFromIndex(
+          PHOTO_UPLOAD_QUEUE_STORE,
+          'by_actor',
+          [actorScopeType, actorScopeId]
+        )
+        return rows.some((row) => (
+          (typeof row.payload_id === 'string' && row.payload_id.length > 0)
+          || row.blob instanceof Blob
+        ))
+      } catch (error) {
+        throw wrapDatabaseError(error)
+      }
+    },
+
+    async getPayloadForUpload({ queueId, actorScopeType, actorScopeId }) {
+      if (!isNonEmptyString(queueId)) {
+        throw invalidRecord('queueId must be a non-empty string')
+      }
+      requireActorScope(actorScopeType, actorScopeId)
+      const db = await getDb()
+      const tx = db.transaction(
+        [PHOTO_UPLOAD_QUEUE_STORE, PHOTO_UPLOAD_PAYLOAD_STORE],
+        'readonly'
+      )
+      try {
+        const record = await tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE).get(queueId)
+        if (!record || !sameActor(record, actorScopeType, actorScopeId)) {
+          await tx.done
+          return null
+        }
+        if (record.blob instanceof Blob || !record.payload_id) {
+          await tx.done
+          throw new PhotoUploadDbError(PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR, 'PAYLOAD_UNAVAILABLE')
+        }
+        const payload = await tx.objectStore(PHOTO_UPLOAD_PAYLOAD_STORE).get(record.payload_id)
+        await tx.done
+        const compatible = Boolean(
+          payload
+          && payload.payload_id === record.payload_id
+          && payload.queue_id === record.queue_id
+          && sameActor(payload, actorScopeType, actorScopeId)
+          && payload.blob instanceof Blob
+          && payload.blob.size === record.file_size
+          && payload.blob.type === record.mime_type
+        )
+        if (!compatible) {
+          throw new PhotoUploadDbError(PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR, 'PAYLOAD_UNAVAILABLE')
+        }
+        return {
+          payload_id: payload.payload_id,
+          queue_id: payload.queue_id,
+          blob: payload.blob,
+          size_bytes: payload.blob.size,
+          mime_type: payload.blob.type,
+        }
+      } catch (error) {
+        abortAndSettle(tx)
         throw wrapDatabaseError(error)
       }
     },
@@ -646,20 +1261,27 @@ export function createPhotoUploadDb(options = {}) {
         throw invalidRecord('queueId must be a non-empty string')
       }
       requireActorScope(actorScopeType, actorScopeId)
-      const db = await getDb()
-      const tx = db.transaction(PHOTO_UPLOAD_QUEUE_STORE, 'readwrite')
-      const store = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
       try {
-        const existing = await store.get(queueId)
-        if (!existing) {
-          await tx.done
-          return
-        }
-        if (!sameActor(existing, actorScopeType, actorScopeId)) {
-          throw actorConflict('cannot delete a record owned by a different actor')
-        }
-        await store.delete(queueId)
-        await tx.done
+        await withQueueAndPayload(async (_tx, queueStore, payloadStore) => {
+          const existing = await queueStore.get(queueId)
+          if (!existing) {
+            return
+          }
+          if (!sameActor(existing, actorScopeType, actorScopeId)) {
+            throw actorConflict('cannot delete a record owned by a different actor')
+          }
+          const payloadId = typeof existing.payload_id === 'string' && existing.payload_id.length > 0
+            ? existing.payload_id
+            : queueId
+          const payload = await payloadStore.get(payloadId)
+          if (payload && !sameActor(payload, actorScopeType, actorScopeId)) {
+            throw actorConflict('cannot delete a payload owned by a different actor')
+          }
+          if (payload) {
+            await payloadStore.delete(payloadId)
+          }
+          await queueStore.delete(queueId)
+        })
       } catch (error) {
         throw wrapDatabaseError(error)
       }
@@ -673,25 +1295,36 @@ export function createPhotoUploadDb(options = {}) {
       if (!isNonNegativeInteger(updatedAt)) {
         throw invalidRecord('updatedAt must be epoch milliseconds')
       }
-      const db = await getDb()
-      const tx = db.transaction(PHOTO_UPLOAD_QUEUE_STORE, 'readwrite')
-      const store = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
       try {
-        const existing = await store.get(queueId)
-        if (!existing) {
-          throw invalidRecord('record not found')
-        }
-        if (!sameActor(existing, actorScopeType, actorScopeId)) {
-          throw actorConflict('cannot clear a blob owned by a different actor')
-        }
-        if (existing.status !== PHOTO_UPLOAD_STATUSES.DONE) {
-          throw blobCleanupForbidden('Blob cleanup is allowed only for DONE records')
-        }
-        const updated = copyRecord(existing)
-        updated.blob = null
-        updated.updated_at = updatedAt
-        await store.put(updated)
-        await tx.done
+        await withQueueAndPayload(async (_tx, queueStore, payloadStore) => {
+          const existing = await queueStore.get(queueId)
+          if (!existing) {
+            throw invalidRecord('record not found')
+          }
+          if (!sameActor(existing, actorScopeType, actorScopeId)) {
+            throw actorConflict('cannot clear a blob owned by a different actor')
+          }
+          if (existing.status !== PHOTO_UPLOAD_STATUSES.DONE) {
+            throw blobCleanupForbidden('Blob cleanup is allowed only for DONE records')
+          }
+          const payloadId = typeof existing.payload_id === 'string' && existing.payload_id.length > 0
+            ? existing.payload_id
+            : (existing.blob instanceof Blob ? queueId : null)
+          if (payloadId) {
+            const payload = await payloadStore.get(payloadId)
+            if (payload && !sameActor(payload, actorScopeType, actorScopeId)) {
+              throw actorConflict('cannot clear a payload owned by a different actor')
+            }
+            if (payload || existing.blob instanceof Blob) {
+              if (payload) {
+                await payloadStore.delete(payloadId)
+              }
+            }
+          }
+          const updated = toStoredQueueRecord(toPublicRecord(existing, null), null)
+          updated.updated_at = updatedAt
+          await queueStore.put(updated)
+        })
       } catch (error) {
         throw wrapDatabaseError(error)
       }
@@ -711,8 +1344,12 @@ export function createPhotoUploadDb(options = {}) {
       requireNow(now)
       requireLeaseTtlMs(leaseTtlMs)
       const db = await getDb()
-      const tx = db.transaction(PHOTO_UPLOAD_QUEUE_STORE, 'readwrite')
+      const tx = db.transaction(
+        [PHOTO_UPLOAD_QUEUE_STORE, PHOTO_UPLOAD_PAYLOAD_STORE],
+        'readwrite'
+      )
       const store = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
+      const payloadStore = tx.objectStore(PHOTO_UPLOAD_PAYLOAD_STORE)
       try {
         let existing
         try {
@@ -733,15 +1370,17 @@ export function createPhotoUploadDb(options = {}) {
         const noOwner = existing.lease_owner === null
         const expired = isLeaseExpired(existing, now)
         const sameOwner = existing.lease_owner === leaseOwner
-        let next
+        const payloadId = separatedPayloadId(existing)
+        if (isLegacyInlineBlob(existing)) {
+          throw new PhotoUploadDbError(PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR, 'LEGACY_RECORD_UNPROMOTED')
+        }
+        const next = toStoredQueueRecord(toPublicRecord(existing, null), payloadId)
 
         if (noOwner || expired) {
-          next = copyRecord(existing)
           next.lease_owner = leaseOwner
           next.lease_generation = existing.lease_generation + 1
           next.lease_expires_at = now + leaseTtlMs
         } else if (sameOwner) {
-          next = copyRecord(existing)
           next.lease_expires_at = now + leaseTtlMs
         } else {
           await tx.done
@@ -754,14 +1393,22 @@ export function createPhotoUploadDb(options = {}) {
           traceNativeError('IDB_CLAIM_PUT_ERROR', queueId, error)
           throw error
         }
+        let publicRecord
+        try {
+          publicRecord = await hydrate(payloadStore, next)
+        } catch (error) {
+          traceNativeError('IDB_CLAIM_GET_ERROR', queueId, error)
+          throw error
+        }
         try {
           await tx.done
         } catch (error) {
           traceNativeError('IDB_CLAIM_TX_DONE_ERROR', queueId, error)
           throw error
         }
-        return next
+        return publicRecord
       } catch (error) {
+        abortAndSettle(tx)
         throw wrapDatabaseError(error)
       }
     },
@@ -782,8 +1429,12 @@ export function createPhotoUploadDb(options = {}) {
       requireNow(now)
       requireLeaseTtlMs(leaseTtlMs)
       const db = await getDb()
-      const tx = db.transaction(PHOTO_UPLOAD_QUEUE_STORE, 'readwrite')
+      const tx = db.transaction(
+        [PHOTO_UPLOAD_QUEUE_STORE, PHOTO_UPLOAD_PAYLOAD_STORE],
+        'readwrite'
+      )
       const store = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
+      const payloadStore = tx.objectStore(PHOTO_UPLOAD_PAYLOAD_STORE)
       try {
         const existing = await store.get(queueId)
         if (!existing) {
@@ -798,12 +1449,18 @@ export function createPhotoUploadDb(options = {}) {
           await tx.done
           throw leaseFenceConflict('LEASE_FENCE_CONFLICT')
         }
-        const next = copyRecord(existing)
+        if (isLegacyInlineBlob(existing)) {
+          throw new PhotoUploadDbError(PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR, 'LEGACY_RECORD_UNPROMOTED')
+        }
+        const payloadId = separatedPayloadId(existing)
+        const next = toStoredQueueRecord(toPublicRecord(existing, null), payloadId)
         next.lease_expires_at = now + leaseTtlMs
         await store.put(next)
+        const publicRecord = await hydrate(payloadStore, next)
         await tx.done
-        return next
+        return publicRecord
       } catch (error) {
+        abortAndSettle(tx)
         throw wrapDatabaseError(error)
       }
     },
@@ -820,8 +1477,12 @@ export function createPhotoUploadDb(options = {}) {
       requireLeaseOwner(leaseOwner)
       requireLeaseGeneration(leaseGeneration)
       const db = await getDb()
-      const tx = db.transaction(PHOTO_UPLOAD_QUEUE_STORE, 'readwrite')
+      const tx = db.transaction(
+        [PHOTO_UPLOAD_QUEUE_STORE, PHOTO_UPLOAD_PAYLOAD_STORE],
+        'readwrite'
+      )
       const store = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
+      const payloadStore = tx.objectStore(PHOTO_UPLOAD_PAYLOAD_STORE)
       try {
         const existing = await store.get(queueId)
         if (!existing) {
@@ -836,13 +1497,19 @@ export function createPhotoUploadDb(options = {}) {
           await tx.done
           throw leaseFenceConflict('LEASE_FENCE_CONFLICT')
         }
-        const next = copyRecord(existing)
+        if (isLegacyInlineBlob(existing)) {
+          throw new PhotoUploadDbError(PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR, 'LEGACY_RECORD_UNPROMOTED')
+        }
+        const payloadId = separatedPayloadId(existing)
+        const next = toStoredQueueRecord(toPublicRecord(existing, null), payloadId)
         next.lease_owner = null
         next.lease_expires_at = null
         await store.put(next)
+        const publicRecord = await hydrate(payloadStore, next)
         await tx.done
-        return next
+        return publicRecord
       } catch (error) {
+        abortAndSettle(tx)
         throw wrapDatabaseError(error)
       }
     },
@@ -851,12 +1518,16 @@ export function createPhotoUploadDb(options = {}) {
       requireLeaseOwner(leaseOwner)
       requireLeaseGeneration(leaseGeneration)
       const db = await getDb()
-      const tx = db.transaction(PHOTO_UPLOAD_QUEUE_STORE, 'readwrite')
+      const tx = db.transaction(
+        [PHOTO_UPLOAD_QUEUE_STORE, PHOTO_UPLOAD_PAYLOAD_STORE],
+        'readwrite'
+      )
       const store = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
+      const payloadStore = tx.objectStore(PHOTO_UPLOAD_PAYLOAD_STORE)
       try {
         let validated
         try {
-          validated = validateRecord(record)
+          validated = validateRecord(record, { requireBlob: false })
         } catch (error) {
           await tx.done
           throw error
@@ -880,8 +1551,12 @@ export function createPhotoUploadDb(options = {}) {
           await tx.done
           throw leaseFenceConflict('LEASE_FENCE_CONFLICT')
         }
-        const next = copyRecord(validated)
-        next.blob = current.blob
+        if (isLegacyInlineBlob(current)) {
+          throw new PhotoUploadDbError(PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR, 'LEGACY_RECORD_UNPROMOTED')
+        }
+        const cleaned = current.payload_id == null && !(current.blob instanceof Blob)
+        const payloadId = cleaned ? null : separatedPayloadId(current)
+        const next = toStoredQueueRecord(validated, payloadId)
         next.lease_owner = current.lease_owner
         next.lease_generation = current.lease_generation
         next.lease_expires_at = current.lease_expires_at
@@ -894,19 +1569,68 @@ export function createPhotoUploadDb(options = {}) {
           })
           throw error
         }
+        let publicRecord
+        try {
+          publicRecord = await hydrate(payloadStore, next)
+        } catch (error) {
+          traceNativeError('IDB_FENCED_GET_ERROR', validated.queue_id, error)
+          throw error
+        }
         try {
           await tx.done
         } catch (error) {
           traceNativeError('IDB_FENCED_TX_DONE_ERROR', validated.queue_id, error)
           throw error
         }
-        return next
+        return publicRecord
       } catch (error) {
+        abortAndSettle(tx)
         throw wrapDatabaseError(error)
       }
     },
 
+    async migrateNextLegacyRecord() {
+      const db = await getDb()
+      const scan = db.transaction(PHOTO_UPLOAD_QUEUE_STORE, 'readonly')
+      const scanStore = scan.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
+      let queueId = null
+      try {
+        let cursor = await scanStore.openCursor()
+        const nowMs = Date.now()
+        while (cursor) {
+          const row = cursor.value
+          const retryAt = row && legacyRetryAt.get(row.queue_id)
+          if (row && row.blob instanceof Blob && (!retryAt || retryAt <= nowMs)) {
+            queueId = row.queue_id
+            break
+          }
+          cursor = await cursor.continue()
+        }
+        await scan.done
+      } catch (error) {
+        abortAndSettle(scan)
+        throw wrapDatabaseError(error)
+      }
+      if (!queueId) {
+        return { migrated: false }
+      }
+      try {
+        const promoted = await promoteLegacyRecord(queueId)
+        if (!promoted) {
+          legacyRetryAt.set(queueId, Date.now() + LEGACY_MIGRATION_RETRY_MS)
+          return { migrated: false, deferred: true, queueId }
+        }
+        legacyRetryAt.delete(queueId)
+        return { migrated: true, queueId }
+      } catch (_error) {
+        legacyRetryAt.set(queueId, Date.now() + LEGACY_MIGRATION_RETRY_MS)
+        return { migrated: false, deferred: true, queueId }
+      }
+    },
+
     async close() {
+      closed = true
+      connectionToken += 1
       if (!dbPromise) {
         return
       }
