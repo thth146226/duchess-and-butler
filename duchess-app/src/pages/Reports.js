@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { OFFICE_REPORT_SOURCE_SURFACES, useOfficeReportPhotoUploadQueue } from '../hooks/useOfficeReportPhotoUploadQueue'
 import PhotoUploadQueueStatus from '../components/PhotoUploadQueueStatus'
+import { usePhotoUploadControls } from '../hooks/usePhotoUploadControls'
 
 const STATUS_STYLE = {
   draft:     { bg: '#FEF3C7', color: '#854F0B' },
@@ -16,6 +17,7 @@ function fmtDate(d) {
 
 export default function Reports() {
   const { profile } = useAuth()
+  const { blocked: uploadBlocked, message: uploadBlockedMessage } = usePhotoUploadControls()
   const [reports, setReports]       = useState([])
   const [loading, setLoading]       = useState(true)
   const [selected, setSelected]     = useState(null)
@@ -102,6 +104,7 @@ export default function Reports() {
   })
 
   async function uploadReportPhoto(files) {
+    if (uploadBlocked) return
     const list = Array.from(files || [])
     if (!list.length || !selected?.id) return
     const result = await enqueueFiles(list)
@@ -570,16 +573,20 @@ export default function Reports() {
                   </div>
                 ))}
               </div>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 14px', background: '#F7F3EE', border: '1px dashed #DDD8CF', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', color: '#6B6860' }}>
-                <input type="file" accept="image/*" multiple data-testid="office-reports-photo-input" style={{ display: 'none' }}
-                  onChange={e => { uploadReportPhoto(e.target.files); e.target.value = '' }} />
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 14px', background: '#F7F3EE', border: '1px dashed #DDD8CF', borderRadius: '6px', cursor: uploadBlocked ? 'not-allowed' : 'pointer', fontSize: '12px', color: '#6B6860' }}>
+                <input type="file" accept="image/*" multiple data-testid="office-reports-photo-input" style={{ display: 'none' }} disabled={uploadBlocked}
+                  onChange={e => { if (!uploadBlocked) uploadReportPhoto(e.target.files); e.target.value = '' }} />
                 {busy ? 'Queuing…' : '+ Add collection photos'}
               </label>
+              {uploadBlocked && (
+                <div data-testid="photo-upload-activation-message" style={{ marginTop: '8px', fontSize: '12px', color: '#6B6860' }}>{uploadBlockedMessage}</div>
+              )}
               <PhotoUploadQueueStatus
                 records={queueRecords}
                 variant="report"
                 onUploadRetry={manualUploadRetry}
                 onDbRetry={manualDbRetry}
+                actionsDisabled={uploadBlocked}
               />
             </div>
 

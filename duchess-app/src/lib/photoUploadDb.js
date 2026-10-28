@@ -1,9 +1,11 @@
 import { openDB as idbOpenDB } from 'idb'
 import { PHOTO_UPLOAD_STATUSES, isPhotoUploadStatus } from './photoUploadDomain'
 import { abbreviateQueueId, recordPhotoUploadDiagnostic } from './photoUploadDiagnostics'
+import { assertProductionDatabaseOpen, withProductionOpenContext } from './photoUploadActivation'
 
 export const PHOTO_UPLOAD_DB_NAME = 'duchess-photo-upload-v1'
 export const PHOTO_UPLOAD_DB_VERSION = 2
+export const PHOTO_UPLOAD_GLOBAL_DB_VERSION_LIMITATION = 'IndexedDB stores one version for the whole database. Opening duchess-photo-upload-v1 at version 2 upgrades that shared database for every actor in the browser. Promoting payloads is limited to the authorized actor, and that is not complete isolation.'
 export const PHOTO_UPLOAD_QUEUE_STORE = 'photo_upload_queue'
 export const PHOTO_UPLOAD_PAYLOAD_STORE = 'photo_upload_payloads'
 export const PHOTO_UPLOAD_RECORD_SCHEMA_VERSION = 1
@@ -764,7 +766,27 @@ function payloadIdentityMatches(snapshot, original, payload) {
 
 export function createPhotoUploadDb(options = {}) {
   const dbName = options.dbName || PHOTO_UPLOAD_DB_NAME
+  const actor = {
+    actorScopeType: options.actorScopeType || null,
+    actorScopeId: options.actorScopeId || null,
+  }
   const open = options.openDB || idbOpenDB
+
+  function operationActorAllowed(actorScopeType, actorScopeId) {
+    if (!actor.actorScopeType || !actor.actorScopeId) {
+      return true
+    }
+    return actor.actorScopeType === actorScopeType && actor.actorScopeId === actorScopeId
+  }
+
+  function legacyRowAllowed(row) {
+    if (!actor.actorScopeType || !actor.actorScopeId) {
+      return true
+    }
+    return Boolean(row)
+      && row.actor_scope_type === actor.actorScopeType
+      && row.actor_scope_id === actor.actorScopeId
+  }
   const afterLegacyPayloadCommit = options.afterLegacyPayloadCommit
   const beforeLegacyPromote = options.beforeLegacyPromote
   let dbPromise = null
@@ -783,11 +805,12 @@ export function createPhotoUploadDb(options = {}) {
       throw new PhotoUploadDbError(PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR, 'PHOTO_UPLOAD_DB_CLOSED')
     }
     if (!dbPromise) {
+      assertProductionDatabaseOpen(dbName, actor)
       const token = connectionToken + 1
       connectionToken = token
       let openedDb = null
       const pending = Promise.resolve()
-        .then(() => open(dbName, PHOTO_UPLOAD_DB_VERSION, {
+        .then(() => withProductionOpenContext(actor, () => open(dbName, PHOTO_UPLOAD_DB_VERSION, {
           upgrade: upgradePhotoUploadDb,
           blocked() {
             return undefined
@@ -805,7 +828,7 @@ export function createPhotoUploadDb(options = {}) {
           terminated() {
             forgetConnection(token)
           },
-        }))
+        })))
         .then((db) => {
           openedDb = db
           if (closed || token !== connectionToken) {
@@ -1088,8 +1111,15 @@ export function createPhotoUploadDb(options = {}) {
       const incomingBlob = record && record.blob instanceof Blob ? record.blob : null
       const preserveBytes = !incomingBlob && record && record.status !== PHOTO_UPLOAD_STATUSES.DONE
       const validated = validateRecord(record, { requireBlob: !preserveBytes && !(record && record.status === PHOTO_UPLOAD_STATUSES.DONE && record.blob == null) })
+      if (!operationActorAllowed(validated.actor_scope_type, validated.actor_scope_id)) {
+        throw actorConflict('operation is outside the authorized actor')
+      }
       try {
         if (preserveBytes) {
+          const owner = await withQueueAndPayload(async (_tx, queueStore) => queueStore.get(validated.queue_id))
+          if (owner && !sameActor(owner, validated.actor_scope_type, validated.actor_scope_id)) {
+            throw actorConflict('queue_id is owned by a different actor')
+          }
           const promoted = await promoteLegacyRecord(validated.queue_id)
           if (!promoted) {
             throw new PhotoUploadDbError(PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR, 'PAYLOAD_COPY_MISMATCH')
@@ -1138,6 +1168,9 @@ export function createPhotoUploadDb(options = {}) {
         throw invalidRecord('queueId must be a non-empty string')
       }
       requireActorScope(actorScopeType, actorScopeId)
+      if (!operationActorAllowed(actorScopeType, actorScopeId)) {
+        throw actorConflict('operation is outside the authorized actor')
+      }
       const db = await getDb()
       const tx = db.transaction(
         [PHOTO_UPLOAD_QUEUE_STORE, PHOTO_UPLOAD_PAYLOAD_STORE],
@@ -1160,6 +1193,9 @@ export function createPhotoUploadDb(options = {}) {
 
     async listRecordsForActor({ actorScopeType, actorScopeId }) {
       requireActorScope(actorScopeType, actorScopeId)
+      if (!operationActorAllowed(actorScopeType, actorScopeId)) {
+        throw actorConflict('operation is outside the authorized actor')
+      }
       const db = await getDb()
       try {
         const rows = await db.getAllFromIndex(
@@ -1175,6 +1211,9 @@ export function createPhotoUploadDb(options = {}) {
 
     async listRecordsForActorByStatus({ actorScopeType, actorScopeId, status }) {
       requireActorScope(actorScopeType, actorScopeId)
+      if (!operationActorAllowed(actorScopeType, actorScopeId)) {
+        throw actorConflict('operation is outside the authorized actor')
+      }
       if (!isPhotoUploadStatus(status)) {
         throw invalidRecord('status is not a frozen photo upload status')
       }
@@ -1193,6 +1232,9 @@ export function createPhotoUploadDb(options = {}) {
 
     async hasRetainedPayloadForActor({ actorScopeType, actorScopeId }) {
       requireActorScope(actorScopeType, actorScopeId)
+      if (!operationActorAllowed(actorScopeType, actorScopeId)) {
+        throw actorConflict('operation is outside the authorized actor')
+      }
       const db = await getDb()
       try {
         const rows = await db.getAllFromIndex(
@@ -1214,6 +1256,9 @@ export function createPhotoUploadDb(options = {}) {
         throw invalidRecord('queueId must be a non-empty string')
       }
       requireActorScope(actorScopeType, actorScopeId)
+      if (!operationActorAllowed(actorScopeType, actorScopeId)) {
+        throw actorConflict('operation is outside the authorized actor')
+      }
       const db = await getDb()
       const tx = db.transaction(
         [PHOTO_UPLOAD_QUEUE_STORE, PHOTO_UPLOAD_PAYLOAD_STORE],
@@ -1261,6 +1306,9 @@ export function createPhotoUploadDb(options = {}) {
         throw invalidRecord('queueId must be a non-empty string')
       }
       requireActorScope(actorScopeType, actorScopeId)
+      if (!operationActorAllowed(actorScopeType, actorScopeId)) {
+        throw actorConflict('operation is outside the authorized actor')
+      }
       try {
         await withQueueAndPayload(async (_tx, queueStore, payloadStore) => {
           const existing = await queueStore.get(queueId)
@@ -1292,6 +1340,9 @@ export function createPhotoUploadDb(options = {}) {
         throw invalidRecord('queueId must be a non-empty string')
       }
       requireActorScope(actorScopeType, actorScopeId)
+      if (!operationActorAllowed(actorScopeType, actorScopeId)) {
+        throw actorConflict('operation is outside the authorized actor')
+      }
       if (!isNonNegativeInteger(updatedAt)) {
         throw invalidRecord('updatedAt must be epoch milliseconds')
       }
@@ -1343,6 +1394,9 @@ export function createPhotoUploadDb(options = {}) {
       requireLeaseOwner(leaseOwner)
       requireNow(now)
       requireLeaseTtlMs(leaseTtlMs)
+      if (!operationActorAllowed(actorScopeType, actorScopeId)) {
+        throw actorConflict('operation is outside the authorized actor')
+      }
       const db = await getDb()
       const tx = db.transaction(
         [PHOTO_UPLOAD_QUEUE_STORE, PHOTO_UPLOAD_PAYLOAD_STORE],
@@ -1428,6 +1482,9 @@ export function createPhotoUploadDb(options = {}) {
       requireLeaseGeneration(leaseGeneration)
       requireNow(now)
       requireLeaseTtlMs(leaseTtlMs)
+      if (!operationActorAllowed(actorScopeType, actorScopeId)) {
+        throw actorConflict('operation is outside the authorized actor')
+      }
       const db = await getDb()
       const tx = db.transaction(
         [PHOTO_UPLOAD_QUEUE_STORE, PHOTO_UPLOAD_PAYLOAD_STORE],
@@ -1476,6 +1533,9 @@ export function createPhotoUploadDb(options = {}) {
       requireActorScope(actorScopeType, actorScopeId)
       requireLeaseOwner(leaseOwner)
       requireLeaseGeneration(leaseGeneration)
+      if (!operationActorAllowed(actorScopeType, actorScopeId)) {
+        throw actorConflict('operation is outside the authorized actor')
+      }
       const db = await getDb()
       const tx = db.transaction(
         [PHOTO_UPLOAD_QUEUE_STORE, PHOTO_UPLOAD_PAYLOAD_STORE],
@@ -1531,6 +1591,10 @@ export function createPhotoUploadDb(options = {}) {
         } catch (error) {
           await tx.done
           throw error
+        }
+        if (!operationActorAllowed(validated.actor_scope_type, validated.actor_scope_id)) {
+          await tx.done
+          throw actorConflict('operation is outside the authorized actor')
         }
         let current
         try {
@@ -1600,7 +1664,7 @@ export function createPhotoUploadDb(options = {}) {
         while (cursor) {
           const row = cursor.value
           const retryAt = row && legacyRetryAt.get(row.queue_id)
-          if (row && row.blob instanceof Blob && (!retryAt || retryAt <= nowMs)) {
+          if (row && row.blob instanceof Blob && legacyRowAllowed(row) && (!retryAt || retryAt <= nowMs)) {
             queueId = row.queue_id
             break
           }

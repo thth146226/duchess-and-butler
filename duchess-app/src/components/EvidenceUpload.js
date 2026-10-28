@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { usePhotoUploadQueue } from '../hooks/usePhotoUploadQueue'
+import { usePhotoUploadControls } from '../hooks/usePhotoUploadControls'
 import PhotoUploadQueueStatus from './PhotoUploadQueueStatus'
 
 const RUN_TYPES = [
@@ -19,6 +20,7 @@ export default function EvidenceUpload({ jobId, jobTable = 'crms_jobs', crmsRef,
   const [queueError, setQueueError] = useState(null)
   const fileRef = useRef()
   const galleryRef = useRef()
+  const { blocked: uploadBlocked, message: uploadBlockedMessage } = usePhotoUploadControls()
   const jobIdRef = useRef(jobId)
   jobIdRef.current = jobId
 
@@ -58,6 +60,11 @@ export default function EvidenceUpload({ jobId, jobTable = 'crms_jobs', crmsRef,
   useEffect(() => { if (jobId) fetchPhotos() }, [jobId])
 
   async function handleUpload(e) {
+    if (uploadBlocked) {
+      setQueueNotice(null)
+      setQueueError(null)
+      return
+    }
     const files = Array.from(e.target.files || [])
     if (!files.length) return
     setQueueNotice(null)
@@ -122,6 +129,7 @@ export default function EvidenceUpload({ jobId, jobTable = 'crms_jobs', crmsRef,
           capture="environment"
           data-testid="evidence-camera-input"
           style={{ display: 'none' }}
+          disabled={uploadBlocked}
           onChange={handleUpload}
         />
         <input
@@ -131,12 +139,13 @@ export default function EvidenceUpload({ jobId, jobTable = 'crms_jobs', crmsRef,
           multiple
           data-testid="evidence-gallery-input"
           style={{ display: 'none' }}
+          disabled={uploadBlocked}
           onChange={handleUpload}
         />
         <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
           <button
-            onClick={() => fileRef.current.click()}
-            disabled={busy}
+            onClick={() => { if (!uploadBlocked) fileRef.current.click() }}
+            disabled={busy || uploadBlocked}
             style={{
               fontSize: '13px', fontWeight: '500', padding: '10px 20px',
               borderRadius: '6px', border: 'none',
@@ -145,10 +154,13 @@ export default function EvidenceUpload({ jobId, jobTable = 'crms_jobs', crmsRef,
               fontFamily: "'DM Sans', sans-serif",
             }}
           >{busy ? 'Queuing…' : '📷 Take photo'}</button>
+        {uploadBlocked && (
+          <div data-testid="photo-upload-activation-message" style={{ marginTop: '12px', fontSize: '12px', color: '#6B6860' }}>{uploadBlockedMessage}</div>
+        )}
 
           <button
-            onClick={() => galleryRef.current.click()}
-            disabled={busy}
+            onClick={() => { if (!uploadBlocked) galleryRef.current.click() }}
+            disabled={busy || uploadBlocked}
             style={{
               fontSize: '13px', fontWeight: '500', padding: '10px 20px',
               borderRadius: '6px', border: '1.5px solid #DDD8CF',
@@ -169,6 +181,7 @@ export default function EvidenceUpload({ jobId, jobTable = 'crms_jobs', crmsRef,
           variant="evidence"
           onUploadRetry={manualUploadRetry}
           onDbRetry={manualDbRetry}
+          actionsDisabled={uploadBlocked}
         />
       </div>
 

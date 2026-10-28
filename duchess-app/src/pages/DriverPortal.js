@@ -3,6 +3,7 @@ import { useDriverPhotoUploadQueue } from '../hooks/useDriverPhotoUploadQueue'
 import { driverPortalSupabase as supabase } from '../lib/driverPortalSupabase'
 import { DRIVER_REPORT_SOURCE_SURFACES, useDriverReportPhotoUploadQueue } from '../hooks/useDriverReportPhotoUploadQueue'
 import PhotoUploadQueueStatus from '../components/PhotoUploadQueueStatus'
+import { usePhotoUploadControls } from '../hooks/usePhotoUploadControls'
 
 const RUN_TYPES = [
   { value: 'after_del', label: 'After DEL', bg: '#FCEBEB', color: '#A32D2D', border: '#FCA5A5' },
@@ -54,6 +55,7 @@ export default function DriverPortal({ token, onDriverId }) {
   const [queueError, setQueueError] = useState(null)
   const fileRef = useRef()
   const galleryRef = useRef()
+  const { blocked: uploadBlocked, message: uploadBlockedMessage } = usePhotoUploadControls()
   const jobIdRef = useRef(null)
 
   const [reportMode, setReportMode]     = useState(false)
@@ -172,6 +174,11 @@ export default function DriverPortal({ token, onDriverId }) {
   })
 
   async function handleUpload(e) {
+    if (uploadBlocked) {
+      setQueueNotice(null)
+      setQueueError(null)
+      return
+    }
     const files = Array.from(e.target.files || [])
     if (!files.length || !selectedJob) return
     setQueueNotice(null)
@@ -474,9 +481,10 @@ export default function DriverPortal({ token, onDriverId }) {
                 ))}
               </div>
             )}
-            <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '12px', background: '#F7F3EE', border: '1.5px dashed #DDD8CF', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', color: '#6B6860' }}>
-              <input type="file" accept="image/*" capture="environment" data-testid="driver-report-mode-photo-input" style={{ display: 'none' }}
+            <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '12px', background: '#F7F3EE', border: '1.5px dashed #DDD8CF', borderRadius: '6px', cursor: uploadBlocked ? 'not-allowed' : 'pointer', fontSize: '13px', color: '#6B6860' }}>
+              <input type="file" accept="image/*" capture="environment" data-testid="driver-report-mode-photo-input" style={{ display: 'none' }} disabled={uploadBlocked}
                 onChange={async e => {
+                  if (uploadBlocked) return
                   const file = e.target.files[0]
                   if (!file) return
                   const result = await enqueueReportModeFiles([file])
@@ -496,6 +504,9 @@ export default function DriverPortal({ token, onDriverId }) {
                 }} />
               {reportModeBusy ? 'Queuing…' : '📷 Add collection photo'}
             </label>
+            {uploadBlocked && (
+              <div data-testid="photo-upload-activation-message" style={{ marginTop: '8px', fontSize: '12px', color: '#6B6860' }}>{uploadBlockedMessage}</div>
+            )}
           </div>
 
           <PhotoUploadQueueStatus
@@ -503,6 +514,7 @@ export default function DriverPortal({ token, onDriverId }) {
             variant="report"
             onUploadRetry={reportModeManualUploadRetry}
             onDbRetry={reportModeManualDbRetry}
+            actionsDisabled={uploadBlocked}
           />
 
           {/* Submit */}
@@ -794,16 +806,19 @@ export default function DriverPortal({ token, onDriverId }) {
                         }}>{rt.label}</button>
                       ))}
                     </div>
-                    <input ref={fileRef} type="file" accept="image/*" multiple capture="environment" data-testid="driver-evidence-camera-input" style={{ display: 'none' }} onChange={handleUpload} />
-                    <input ref={galleryRef} type="file" accept="image/*" multiple data-testid="driver-evidence-gallery-input" style={{ display: 'none' }} onChange={handleUpload} />
+                    <input ref={fileRef} type="file" accept="image/*" multiple capture="environment" data-testid="driver-evidence-camera-input" style={{ display: 'none' }} disabled={uploadBlocked} onChange={handleUpload} />
+                    <input ref={galleryRef} type="file" accept="image/*" multiple data-testid="driver-evidence-gallery-input" style={{ display: 'none' }} disabled={uploadBlocked} onChange={handleUpload} />
                     <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                      <button onClick={() => fileRef.current.click()} disabled={busy} style={{ fontSize: '12px', fontWeight: '500', padding: '9px 18px', borderRadius: '6px', border: 'none', background: '#1C1C1E', color: '#fff', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
+                      <button onClick={() => { if (!uploadBlocked) fileRef.current.click() }} disabled={busy || uploadBlocked} style={{ fontSize: '12px', fontWeight: '500', padding: '9px 18px', borderRadius: '6px', border: 'none', background: '#1C1C1E', color: '#fff', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
                         {busy ? 'Queuing…' : '📷 Take photo'}
                       </button>
-                      <button onClick={() => galleryRef.current.click()} disabled={busy} style={{ fontSize: '12px', fontWeight: '500', padding: '9px 18px', borderRadius: '6px', border: '1.5px solid #DDD8CF', background: 'transparent', color: '#1C1C1E', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
+                      <button onClick={() => { if (!uploadBlocked) galleryRef.current.click() }} disabled={busy || uploadBlocked} style={{ fontSize: '12px', fontWeight: '500', padding: '9px 18px', borderRadius: '6px', border: '1.5px solid #DDD8CF', background: 'transparent', color: '#1C1C1E', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}>
                         🖼 Gallery
                       </button>
                     </div>
+                    {uploadBlocked && (
+                      <div data-testid="photo-upload-activation-message" style={{ marginTop: '10px', fontSize: '12px', color: '#6B6860' }}>{uploadBlockedMessage}</div>
+                    )}
                     {queueNotice && (
                       <div style={{ marginTop: '10px', fontSize: '12px', color: '#3B6D11' }}>{queueNotice}</div>
                     )}
@@ -815,6 +830,7 @@ export default function DriverPortal({ token, onDriverId }) {
                       variant="evidence"
                       onUploadRetry={evidenceManualUploadRetry}
                       onDbRetry={evidenceManualDbRetry}
+                      actionsDisabled={uploadBlocked}
                     />
                   </div>
 
@@ -990,6 +1006,7 @@ export function DriverReportTab({ job, driver, supabase }) {
   const [toast, setToast]           = useState(null)
   const reportIdRef = useRef(null)
   reportIdRef.current = report?.id || null
+  const { blocked: uploadBlocked, message: uploadBlockedMessage } = usePhotoUploadControls()
 
   async function fetchPhotos(reportId) {
     const { data: p } = await supabase.from('evidence_photos').select('*').eq('order_id', reportId)
@@ -1085,7 +1102,7 @@ export function DriverReportTab({ job, driver, supabase }) {
   }
 
   async function uploadPhoto(file) {
-    if (!report || !file) return
+    if (uploadBlocked || !report || !file) return
     const result = await enqueueFiles([file])
     if (result.accepted.length > 0) {
       showToast('Photos queued for upload.')
@@ -1170,17 +1187,21 @@ export function DriverReportTab({ job, driver, supabase }) {
           </div>
         </div>
       )}
-      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px', background: '#F7F3EE', border: '1px dashed #DDD8CF', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', color: '#6B6860' }}>
-        <input type="file" accept="image/*" capture="environment" data-testid="driver-report-tab-photo-input" style={{ display: 'none' }}
-          onChange={e => e.target.files[0] && uploadPhoto(e.target.files[0])} />
+      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px', background: '#F7F3EE', border: '1px dashed #DDD8CF', borderRadius: '6px', cursor: uploadBlocked ? 'not-allowed' : 'pointer', fontSize: '12px', color: '#6B6860' }}>
+        <input type="file" accept="image/*" capture="environment" data-testid="driver-report-tab-photo-input" style={{ display: 'none' }} disabled={uploadBlocked}
+          onChange={e => !uploadBlocked && e.target.files[0] && uploadPhoto(e.target.files[0])} />
         {reportTabBusy ? 'Queuing…' : '+ Add photo'}
       </label>
+      {uploadBlocked && (
+        <div data-testid="photo-upload-activation-message" style={{ marginTop: '8px', fontSize: '12px', color: '#6B6860' }}>{uploadBlockedMessage}</div>
+      )}
       {toast && <div style={{ marginTop: '10px', background: '#1C1C1E', color: '#fff', padding: '10px 14px', borderRadius: '6px', fontSize: '12px', textAlign: 'center' }}>{toast.msg}</div>}
       <PhotoUploadQueueStatus
         records={reportTabQueueRecords}
         variant="report"
         onUploadRetry={reportTabManualUploadRetry}
         onDbRetry={reportTabManualDbRetry}
+        actionsDisabled={uploadBlocked}
       />
     </div>
   )

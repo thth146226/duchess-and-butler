@@ -1,12 +1,27 @@
 import { useState } from 'react'
 import { PHOTO_UPLOAD_DB_NAME } from './lib/photoUploadDb'
 import { createPhotoUploadRecoveryDb } from './lib/photoUploadCompatibleRecovery'
+import { refreshPhotoUploadActivation } from './lib/photoUploadActivation'
+import { supabase } from './lib/supabase'
 
 export function PhotoUploadRecoveryEntry() {
   const [line, setLine] = useState('Uploads are disabled. Local records stay readable.')
   const [report, setReport] = useState(null)
 
   async function inspectDatabase() {
+    const decision = await refreshPhotoUploadActivation({
+      purpose: 'recovery',
+      getAccessToken: async () => {
+        const result = await supabase.auth.getSession()
+        const session = result && result.data ? result.data.session : null
+        return session && typeof session.access_token === 'string' ? session.access_token : null
+      },
+    })
+    if (decision.state !== 'AUTHORIZED' || !decision.grant || decision.grant.purpose !== 'recovery') {
+      setReport(null)
+      setLine('Photo upload recovery is not enabled. Nothing was opened or changed.')
+      return
+    }
     const recovery = createPhotoUploadRecoveryDb()
     try {
       const snapshot = await recovery.inspect()

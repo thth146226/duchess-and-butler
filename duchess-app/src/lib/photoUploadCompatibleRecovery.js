@@ -4,6 +4,7 @@ import {
   PHOTO_UPLOAD_PAYLOAD_STORE,
   PHOTO_UPLOAD_QUEUE_STORE,
 } from './photoUploadDb'
+import { assertProductionDatabaseOpen, withProductionOpenContext } from './photoUploadActivation'
 
 export const RAW_V1_OPEN_PROHIBITED = 'RAW_V1_OPEN_PROHIBITED'
 export const PHOTO_UPLOAD_RECOVERY_MODE = 'compatible-v2'
@@ -62,8 +63,16 @@ function transactionDone(transaction) {
 }
 
 function openExisting(name) {
+  const recoveryActor = { purpose: 'recovery' }
+  assertProductionDatabaseOpen(name, recoveryActor)
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(name)
+    let request
+    try {
+      request = withProductionOpenContext(recoveryActor, () => indexedDB.open(name))
+    } catch (error) {
+      reject(error)
+      return
+    }
     request.onupgradeneeded = () => {
       const transaction = request.transaction
       if (transaction && typeof transaction.abort === 'function') {

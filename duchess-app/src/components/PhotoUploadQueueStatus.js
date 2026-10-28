@@ -91,7 +91,7 @@ function getStatusLabel(status) {
   return STATUS_LABELS[status] || status || 'Unknown'
 }
 
-function QueueRow({ record, variant, retryingQueueId, onUploadRetry, onDbRetry }) {
+function QueueRow({ record, variant, retryingQueueId, onUploadRetry, onDbRetry, actionsDisabled }) {
   const styles = VARIANT_STYLES[variant] || VARIANT_STYLES.evidence
   const status = record && record.status
   const label = getStatusLabel(status)
@@ -121,13 +121,17 @@ function QueueRow({ record, variant, retryingQueueId, onUploadRetry, onDbRetry }
           <button
             type="button"
             data-testid={showUploadRetry ? 'queue-retry-upload' : 'queue-retry-db'}
-            disabled={isRetrying}
+            disabled={isRetrying || actionsDisabled}
             style={{
               ...styles.retryButton,
               opacity: isRetrying ? 0.6 : 1,
               cursor: isRetrying ? 'not-allowed' : 'pointer',
             }}
-            onClick={showUploadRetry ? onUploadRetry : onDbRetry}
+            onClick={() => {
+              if (actionsDisabled || isRetrying) return
+              const retry = showUploadRetry ? onUploadRetry : onDbRetry
+              if (typeof retry === 'function') retry()
+            }}
           >
             Retry
           </button>
@@ -142,12 +146,14 @@ export default function PhotoUploadQueueStatus({
   variant = 'evidence',
   onUploadRetry,
   onDbRetry,
+  actionsDisabled = false,
 }) {
   const [retryingQueueId, setRetryingQueueId] = useState(null)
   const retryingRef = useRef(false)
 
   const handleUploadRetry = useCallback(
     (queueId) => async () => {
+      if (actionsDisabled) return
       if (typeof onUploadRetry !== 'function') return
       if (retryingRef.current) return
       retryingRef.current = true
@@ -159,11 +165,12 @@ export default function PhotoUploadQueueStatus({
         setRetryingQueueId(null)
       }
     },
-    [onUploadRetry],
+    [actionsDisabled, onUploadRetry],
   )
 
   const handleDbRetry = useCallback(
     (queueId) => async () => {
+      if (actionsDisabled) return
       if (typeof onDbRetry !== 'function') return
       if (retryingRef.current) return
       retryingRef.current = true
@@ -175,7 +182,7 @@ export default function PhotoUploadQueueStatus({
         setRetryingQueueId(null)
       }
     },
-    [onDbRetry],
+    [actionsDisabled, onDbRetry],
   )
 
   const styles = VARIANT_STYLES[variant] || VARIANT_STYLES.evidence
@@ -192,6 +199,7 @@ export default function PhotoUploadQueueStatus({
           retryingQueueId={retryingQueueId}
           onUploadRetry={handleUploadRetry(record.queue_id)}
           onDbRetry={handleDbRetry(record.queue_id)}
+          actionsDisabled={actionsDisabled}
         />
       ))}
     </div>

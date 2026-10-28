@@ -30,7 +30,7 @@ export default function DriverAccess() {
 
   return (
     <>
-      <DriverPhotoUploadRuntime driverId={driverId} />
+      <DriverPhotoUploadRuntime driverId={driverId} portalToken={token} />
       <DriverPortal token={token} onDriverId={onDriverId} />
     </>
   )

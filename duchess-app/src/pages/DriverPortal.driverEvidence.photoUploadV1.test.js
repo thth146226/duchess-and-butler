@@ -1,4 +1,5 @@
 import { createRoot } from 'react-dom/client'
+import { grantPhotoUploadActivationForTests } from '../lib/photoUploadActivation'
 import { act } from 'react'
 import DriverPortal from './DriverPortal'
 import { useDriverPhotoUploadQueue } from '../hooks/useDriverPhotoUploadQueue'
@@ -120,6 +121,7 @@ async function openEvidenceTab(container) {
 
 describe('DriverPortal driver evidence photo upload v1', () => {
   beforeEach(() => {
+    grantPhotoUploadActivationForTests({ actorScopeType: 'office_user', actorScopeId: 'user-1' })
     global.IS_REACT_ACT_ENVIRONMENT = true
     mockEnqueueFiles.mockReset()
     mockUpload.mockReset()
@@ -292,6 +294,7 @@ describe('DriverPortal driver evidence photo upload v1', () => {
 
 describe('DriverPortal driver evidence P11D queue status integration', () => {
   beforeEach(() => {
+    grantPhotoUploadActivationForTests({ actorScopeType: 'office_user', actorScopeId: 'user-1' })
     global.IS_REACT_ACT_ENVIRONMENT = true
     mockEnqueueFiles.mockReset()
     mockUpload.mockReset()

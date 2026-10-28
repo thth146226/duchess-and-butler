@@ -3,7 +3,6 @@
  */
 require('fake-indexeddb/auto')
 
-const { execFileSync } = require('child_process')
 const fs = require('fs')
 const path = require('path')
 
@@ -165,13 +164,6 @@ async function inlineBytes(row) {
   return Array.from(new Uint8Array(await row.blob.arrayBuffer()))
 }
 
-function baselineSource() {
-  return execFileSync('git', ['show', 'HEAD:duchess-app/src/lib/photoUploadDb.js'], {
-    cwd: path.resolve(__dirname, '../../..'),
-    encoding: 'utf8',
-  })
-}
-
 describe('photo upload compatible recovery', () => {
   let sequence = 0
   let dbName
@@ -185,11 +177,7 @@ describe('photo upload compatible recovery', () => {
     await deleteDatabase(dbName)
   })
 
-  test('baseline V1 open throws VersionError after the S1.2 upgrade and keeps the bytes', async () => {
-    const baseline = baselineSource()
-    expect(baseline).toContain('export const PHOTO_UPLOAD_DB_VERSION = 1')
-    expect(baseline).toContain('open(dbName, PHOTO_UPLOAD_DB_VERSION,')
-
+  test('opening an upgraded database at version 1 throws VersionError and keeps the bytes', async () => {
     const record = makeRecord()
     await seedV1(dbName, record)
     const before = await readRaw(dbName, 1)

@@ -1,4 +1,5 @@
 import { createRoot } from 'react-dom/client'
+import { grantPhotoUploadActivationForTests } from '../lib/photoUploadActivation'
 import { act } from 'react'
 import { ReportTab } from './Schedule'
 import { useOfficeReportPhotoUploadQueue } from '../hooks/useOfficeReportPhotoUploadQueue'
@@ -95,6 +96,7 @@ async function renderTab(overrides = {}) {
 
 describe('Schedule ReportTab photo upload v1', () => {
   beforeEach(() => {
+    grantPhotoUploadActivationForTests({ actorScopeType: 'office_user', actorScopeId: 'user-1' })
     global.IS_REACT_ACT_ENVIRONMENT = true
     mockUpload.mockReset()
     mockInsert.mockReset()
@@ -295,6 +297,7 @@ describe('Schedule ReportTab photo upload v1', () => {
 
 describe('Schedule ReportTab P11D queue status integration', () => {
   beforeEach(() => {
+    grantPhotoUploadActivationForTests({ actorScopeType: 'office_user', actorScopeId: 'user-1' })
     global.IS_REACT_ACT_ENVIRONMENT = true
     mockUpload.mockReset()
     mockInsert.mockReset()

@@ -4,21 +4,20 @@ import {
   retainDriverUploadRuntime,
   scheduleDriverUploadRuntimeRelease,
 } from '../lib/driverUploadSession'
-import { resolveDriverSupabaseBearer } from '../hooks/useDriverPhotoUploadQueue'
-
-export default function DriverPhotoUploadRuntime({ driverId }) {
+export default function DriverPhotoUploadRuntime({ driverId, portalToken }) {
   useEffect(() => {
     if (typeof driverId !== 'string' || driverId.length === 0) {
       return undefined
     }
+    const token = typeof portalToken === 'string' ? portalToken : ''
     retainDriverUploadRuntime(driverId, {
       supabaseClient: driverPortalSupabase,
-      getAccessToken: () => resolveDriverSupabaseBearer(driverPortalSupabase),
+      getAccessToken: () => Promise.resolve(token.length > 0 ? token : null),
     })
     return () => {
       scheduleDriverUploadRuntimeRelease(driverId)
     }
-  }, [driverId])
+  }, [driverId, portalToken])
 
   return null
 }
