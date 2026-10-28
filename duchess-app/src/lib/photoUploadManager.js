@@ -170,9 +170,11 @@ export function createPhotoUploadManager(options = {}) {
   let pumpChain = Promise.resolve()
   const activeSlots = new Map()
   const locallyExecuted = new Set()
+  const deferredWrites = new Set()
   const openTimers = new Set()
   let retryWakeTimer = null
   let retryWakeAt = null
+  let deferredWriteTimer = null
 
   function scheduleTimeout(callback, delay) {
     const id = setTimeoutImpl(() => {
@@ -240,6 +242,29 @@ export function createPhotoUploadManager(options = {}) {
     for (const id of [...openTimers]) {
       cancelTimeout(id)
     }
+  }
+
+  function clearDeferredWriteTimer() {
+    if (deferredWriteTimer != null) {
+      cancelTimeout(deferredWriteTimer)
+      deferredWriteTimer = null
+    }
+  }
+
+  function armDeferredWriteRetry() {
+    if (stopped || deferredWrites.size === 0 || deferredWriteTimer != null) {
+      return
+    }
+    deferredWriteTimer = scheduleTimeout(() => {
+      deferredWriteTimer = null
+      deferredWrites.clear()
+      void pump()
+    }, LEASE_TTL_MS)
+  }
+
+  function retryDeferredWrites() {
+    clearDeferredWriteTimer()
+    deferredWrites.clear()
   }
 
   function clearRetryWakeTimer() {
@@ -647,6 +672,7 @@ export function createPhotoUploadManager(options = {}) {
         .filter((record) => (
           !attempted.has(record.queue_id)
           && !locallyExecuted.has(record.queue_id)
+          && !deferredWrites.has(record.queue_id)
           && isEligible(record, nowMs, leaseOwner)
         ))
         .sort(compareEligibleRecords)[0]
@@ -669,7 +695,13 @@ export function createPhotoUploadManager(options = {}) {
         if (isLeaseUnavailable(error) || isFenceConflict(error)) {
           continue
         }
-        throw error
+        deferredWrites.add(candidate.queue_id)
+        trace('PUMP_RECORD_DEFERRED', {
+          queue_fragment: abbreviateQueueId(candidate.queue_id),
+          error_class: diagnosticErrorClass(error),
+          reason: diagnosticErrorReason(error),
+        })
+        continue
       }
     }
   }
@@ -695,6 +727,7 @@ export function createPhotoUploadManager(options = {}) {
           break
         }
         await scheduleRetryWake()
+        armDeferredWriteRetry()
       } while (pumpAgain)
     } finally {
       pumping = false
@@ -713,9 +746,56 @@ export function createPhotoUploadManager(options = {}) {
     return pumpChain
   }
 
+  async function retireExpiredInFlightSlots() {
+    const nowMs = now()
+    const expired = []
+    for (const slot of activeSlots.values()) {
+      let row = null
+      try {
+        if (typeof db.getRecord === 'function') {
+          row = await db.getRecord({
+            queueId: slot.queueId,
+            actorScopeType,
+            actorScopeId,
+          })
+        }
+      } catch (_error) {
+        expired.push(slot)
+        continue
+      }
+      const leaseOpen = Boolean(
+        row
+        && row.lease_owner === leaseOwner
+        && Number.isInteger(row.lease_expires_at)
+        && row.lease_expires_at > nowMs
+      )
+      if (!leaseOpen) {
+        expired.push(slot)
+      }
+    }
+    if (expired.length === 0) {
+      return
+    }
+    for (const slot of expired) {
+      slot.lifecycleRetire = true
+    }
+    if (typeof abortLocalUpload === 'function') {
+      for (const slot of expired) {
+        try {
+          abortLocalUpload(slot.queueId)
+        } catch (_error) {
+          // The slot finally still releases the lease if the handle cannot abort.
+        }
+      }
+    }
+    await Promise.all(expired.map((slot) => slot.settled))
+  }
+
   async function stop() {
     stopped = true
     clearRetryWakeTimer()
+    clearDeferredWriteTimer()
+    deferredWrites.clear()
     clearAllTimers()
     for (const slot of activeSlots.values()) {
       stopHeartbeat(slot)
@@ -738,6 +818,8 @@ export function createPhotoUploadManager(options = {}) {
     pump,
     stop,
     retireLifecycleStaleSlots,
+    retireExpiredInFlightSlots,
+    retryDeferredWrites,
     getRetryWakeState,
   }
 }

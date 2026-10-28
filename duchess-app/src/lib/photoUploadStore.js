@@ -1158,6 +1158,14 @@ function createPhotoUploadStore(options = {}) {
       return { woke: false, resumed: paused.resumed }
     }
     installManager()
+    if (typeof manager.retryDeferredWrites === 'function') {
+      manager.retryDeferredWrites()
+    }
+    if (typeof manager.retireExpiredInFlightSlots === 'function') {
+      trace('EXPIRED_LEASE_RETIRE_BEGIN', {})
+      await manager.retireExpiredInFlightSlots()
+      trace('EXPIRED_LEASE_RETIRE_END', {})
+    }
     trace('PUMP_REQUEST_FROM_WAKE', {})
     await manager.pump()
     trace('PUMP_RETURN_FROM_WAKE', {})
