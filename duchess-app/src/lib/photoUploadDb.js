@@ -482,9 +482,66 @@ export function createPhotoUploadDb(options = {}) {
     return dbPromise
   }
 
+  const detachedBlobs = new Map()
+
+  async function readQueueRow(queueId, errorEvent) {
+    const db = await getDb()
+    const tx = db.transaction(PHOTO_UPLOAD_QUEUE_STORE, 'readonly')
+    try {
+      const row = await tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE).get(queueId)
+      await tx.done
+      return row || null
+    } catch (error) {
+      if (errorEvent) {
+        traceNativeError(errorEvent, queueId, error)
+      }
+      throw wrapDatabaseError(error)
+    }
+  }
+
+  async function detachBlob(queueId, blob) {
+    if (!(blob instanceof Blob)) {
+      return blob
+    }
+    const cached = detachedBlobs.get(queueId)
+    if (cached && cached.size === blob.size && cached.type === blob.type) {
+      return cached.blob
+    }
+    const bytes = await blob.arrayBuffer()
+    if (bytes.byteLength !== blob.size) {
+      throw new PhotoUploadDbError(
+        PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR,
+        'BLOB_BYTE_LENGTH_MISMATCH'
+      )
+    }
+    const copy = new Blob([bytes], { type: blob.type })
+    detachedBlobs.set(queueId, { size: copy.size, type: copy.type, blob: copy })
+    return copy
+  }
+
+  function useDetachedBlob(record, detached) {
+    if (!(record.blob instanceof Blob)) {
+      return record
+    }
+    if (
+      !(detached instanceof Blob)
+      || detached.size !== record.blob.size
+      || detached.type !== record.blob.type
+    ) {
+      throw new PhotoUploadDbError(
+        PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR,
+        'BLOB_BYTE_LENGTH_MISMATCH'
+      )
+    }
+    record.blob = detached
+    return record
+  }
+
   return {
     async putRecord(record) {
       const validated = validateRecord(record)
+      const detached = await detachBlob(validated.queue_id, validated.blob)
+      const stored = useDetachedBlob(copyRecord(validated), detached)
       const db = await getDb()
       const tx = db.transaction(PHOTO_UPLOAD_QUEUE_STORE, 'readwrite')
       const store = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
@@ -493,7 +550,7 @@ export function createPhotoUploadDb(options = {}) {
         if (existing && !sameActor(existing, validated.actor_scope_type, validated.actor_scope_id)) {
           throw actorConflict('queue_id is owned by a different actor')
         }
-        await store.put(validated)
+        await store.put(stored)
         await tx.done
       } catch (error) {
         throw wrapDatabaseError(error)
@@ -597,6 +654,7 @@ export function createPhotoUploadDb(options = {}) {
         const updated = copyRecord(existing)
         updated.blob = null
         updated.updated_at = updatedAt
+        detachedBlobs.delete(queueId)
         await store.put(updated)
         await tx.done
       } catch (error) {
@@ -617,6 +675,14 @@ export function createPhotoUploadDb(options = {}) {
       requireLeaseOwner(leaseOwner)
       requireNow(now)
       requireLeaseTtlMs(leaseTtlMs)
+      const preview = await readQueueRow(queueId, 'IDB_CLAIM_GET_ERROR')
+      if (!preview) {
+        throw invalidRecord('record not found')
+      }
+      if (!sameActor(preview, actorScopeType, actorScopeId)) {
+        throw actorConflict('cannot claim a lease owned by a different actor')
+      }
+      const detached = await detachBlob(queueId, preview.blob)
       const db = await getDb()
       const tx = db.transaction(PHOTO_UPLOAD_QUEUE_STORE, 'readwrite')
       const store = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
@@ -655,6 +721,7 @@ export function createPhotoUploadDb(options = {}) {
           throw leaseNotAvailable('lease is held by a different owner')
         }
 
+        useDetachedBlob(next, detached)
         try {
           await store.put(next)
         } catch (error) {
@@ -688,6 +755,11 @@ export function createPhotoUploadDb(options = {}) {
       requireLeaseGeneration(leaseGeneration)
       requireNow(now)
       requireLeaseTtlMs(leaseTtlMs)
+      const preview = await readQueueRow(queueId)
+      if (!preview) {
+        throw invalidRecord('record not found')
+      }
+      const detached = await detachBlob(queueId, preview.blob)
       const db = await getDb()
       const tx = db.transaction(PHOTO_UPLOAD_QUEUE_STORE, 'readwrite')
       const store = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
@@ -706,6 +778,7 @@ export function createPhotoUploadDb(options = {}) {
           throw leaseFenceConflict('LEASE_FENCE_CONFLICT')
         }
         const next = copyRecord(existing)
+        useDetachedBlob(next, detached)
         next.lease_expires_at = now + leaseTtlMs
         await store.put(next)
         await tx.done
@@ -726,6 +799,11 @@ export function createPhotoUploadDb(options = {}) {
       requireActorScope(actorScopeType, actorScopeId)
       requireLeaseOwner(leaseOwner)
       requireLeaseGeneration(leaseGeneration)
+      const preview = await readQueueRow(queueId)
+      if (!preview) {
+        throw invalidRecord('record not found')
+      }
+      const detached = await detachBlob(queueId, preview.blob)
       const db = await getDb()
       const tx = db.transaction(PHOTO_UPLOAD_QUEUE_STORE, 'readwrite')
       const store = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
@@ -744,6 +822,7 @@ export function createPhotoUploadDb(options = {}) {
           throw leaseFenceConflict('LEASE_FENCE_CONFLICT')
         }
         const next = copyRecord(existing)
+        useDetachedBlob(next, detached)
         next.lease_owner = null
         next.lease_expires_at = null
         await store.put(next)
@@ -757,6 +836,9 @@ export function createPhotoUploadDb(options = {}) {
     async putRecordFenced({ record, leaseOwner, leaseGeneration }) {
       requireLeaseOwner(leaseOwner)
       requireLeaseGeneration(leaseGeneration)
+      const validatedPreview = validateRecord(record)
+      const preview = await readQueueRow(validatedPreview.queue_id, 'IDB_FENCED_GET_ERROR')
+      const detached = preview ? await detachBlob(validatedPreview.queue_id, preview.blob) : null
       const db = await getDb()
       const tx = db.transaction(PHOTO_UPLOAD_QUEUE_STORE, 'readwrite')
       const store = tx.objectStore(PHOTO_UPLOAD_QUEUE_STORE)
@@ -789,6 +871,7 @@ export function createPhotoUploadDb(options = {}) {
         }
         const next = copyRecord(validated)
         next.blob = current.blob
+        useDetachedBlob(next, detached)
         next.lease_owner = current.lease_owner
         next.lease_generation = current.lease_generation
         next.lease_expires_at = current.lease_expires_at

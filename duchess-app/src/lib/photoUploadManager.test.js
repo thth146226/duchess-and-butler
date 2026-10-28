@@ -1278,7 +1278,7 @@ describe('photoUploadManager', () => {
     expect(manager.getRetryWakeState().pending).toBe(true)
   })
 
-  test('claim lease failure records CLAIM_LEASE_ERROR and still propagates', async () => {
+  test('claim lease failure records CLAIM_LEASE_ERROR and leaves the pump running', async () => {
     setPhotoUploadDiagnosticsEnabled(true)
     clearPhotoUploadDiagnostics()
     const db = handles.db(createPhotoUploadDb({ dbName }))
@@ -1299,14 +1299,12 @@ describe('photoUploadManager', () => {
         started.push(record.queue_id)
       },
     })))
-    await expect(manager.pump()).rejects.toMatchObject({
-      name: 'PhotoUploadDbError',
-      code: PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR,
-    })
+    await expect(manager.pump()).resolves.toBeUndefined()
     const events = readPhotoUploadDiagnostics()
     const names = events.map((event) => event.event)
     expect(names).toContain('CLAIM_LEASE_BEGIN')
     expect(names).toContain('CLAIM_LEASE_ERROR')
+    expect(names).toContain('PUMP_RECORD_DEFERRED')
     expect(names).not.toContain('SLOT_INSTALL')
     const failure = events.find((event) => event.event === 'CLAIM_LEASE_ERROR')
     expect(failure.reason).toBe(PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR)
