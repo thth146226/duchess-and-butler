@@ -3,6 +3,10 @@ import { act } from 'react'
 import EvidenceUpload from './EvidenceUpload'
 import { usePhotoUploadQueue } from '../hooks/usePhotoUploadQueue'
 import { supabase } from '../lib/supabase'
+import {
+  grantPhotoUploadActivationForTests,
+  resetPhotoUploadActivationForTests,
+} from '../lib/photoUploadActivation'
 
 jest.mock('../hooks/usePhotoUploadQueue')
 jest.mock('../contexts/AuthContext', () => ({
@@ -62,6 +66,10 @@ function renderComponent(props = {}) {
 describe('EvidenceUpload photo upload v1', () => {
   beforeEach(() => {
     global.IS_REACT_ACT_ENVIRONMENT = true
+    grantPhotoUploadActivationForTests({
+      actorScopeType: 'office_user',
+      actorScopeId: 'user-1',
+    })
     mockEnqueueFiles.mockReset()
     mockManualUploadRetry.mockReset()
     mockManualDbRetry.mockReset()
@@ -99,7 +107,30 @@ describe('EvidenceUpload photo upload v1', () => {
   })
 
   afterEach(() => {
+    resetPhotoUploadActivationForTests()
     document.body.innerHTML = ''
+  })
+
+  test('a blocked account disables photo selection and does not claim a photo was queued', async () => {
+    resetPhotoUploadActivationForTests()
+    mockEnqueueFiles.mockResolvedValue({ accepted: [{ queueId: 'q1' }], rejected: [] })
+    const { container, root } = renderComponent()
+    const takePhoto = Array.from(container.querySelectorAll('button')).find((button) => button.textContent.includes('Take photo'))
+    const galleryButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent.includes('Choose from gallery'))
+    expect(takePhoto.disabled).toBe(true)
+    expect(galleryButton.disabled).toBe(true)
+    expect(container.querySelector('[data-testid="evidence-gallery-input"]').disabled).toBe(true)
+    expect(container.textContent).toContain('Photo upload is not enabled for this account. Nothing new is saved or sent.')
+    const gallery = container.querySelector('[data-testid="evidence-gallery-input"]')
+    Object.defineProperty(gallery, 'files', {
+      value: [new File([Uint8Array.from([1])], 'a.jpg', { type: 'image/jpeg' })],
+    })
+    await act(async () => {
+      gallery.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(mockEnqueueFiles).not.toHaveBeenCalled()
+    expect(container.textContent).not.toContain('Photos queued for upload.')
+    act(() => { root.unmount() })
   })
 
   test('file picker still renders with multiple selection', () => {
@@ -292,6 +323,10 @@ describe('EvidenceUpload photo upload v1', () => {
 
 describe('EvidenceUpload P11D queue status integration', () => {
   beforeEach(() => {
+    grantPhotoUploadActivationForTests({
+      actorScopeType: 'office_user',
+      actorScopeId: 'user-1',
+    })
     global.IS_REACT_ACT_ENVIRONMENT = true
     mockEnqueueFiles.mockReset()
     mockManualUploadRetry.mockReset()
@@ -330,6 +365,7 @@ describe('EvidenceUpload P11D queue status integration', () => {
   })
 
   afterEach(() => {
+    resetPhotoUploadActivationForTests()
     document.body.innerHTML = ''
   })
 

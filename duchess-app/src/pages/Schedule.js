@@ -6,6 +6,7 @@ import JobNotes from '../components/JobNotes'
 import EvidenceUpload from '../components/EvidenceUpload'
 import { OFFICE_REPORT_SOURCE_SURFACES, useOfficeReportPhotoUploadQueue } from '../hooks/useOfficeReportPhotoUploadQueue'
 import PhotoUploadQueueStatus from '../components/PhotoUploadQueueStatus'
+import { usePhotoUploadControls } from '../hooks/usePhotoUploadControls'
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
 const today    = new Date().toLocaleDateString('en-CA')
@@ -2634,6 +2635,7 @@ export function ReportTab({ job, runType, profile, supabase, showToast }) {
   const [newSignature, setNewSignature] = useState(null)
   const [newClientName, setNewClientName] = useState('')
   const [newDriverNotes, setNewDriverNotes] = useState('')
+  const { blocked: uploadBlocked, message: uploadBlockedMessage } = usePhotoUploadControls()
 
   useEffect(() => {
     fetchReport()
@@ -2799,7 +2801,7 @@ export function ReportTab({ job, runType, profile, supabase, showToast }) {
   }
 
   async function uploadPhoto(file) {
-    if (!report || !file) return
+    if (uploadBlocked || !report || !file) return
     const result = await enqueueFiles([file])
     if (result.accepted.length > 0) {
       showToast('Photos queued for upload.')
@@ -2867,16 +2869,20 @@ export function ReportTab({ job, runType, profile, supabase, showToast }) {
             </div>
           ))}
         </div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 12px', background: '#F7F3EE', border: '1px dashed #DDD8CF', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', color: '#6B6860' }}>
-          <input type="file" accept="image/*" data-testid="office-schedule-report-photo-input" style={{ display: 'none' }}
-            onChange={e => e.target.files[0] && uploadPhoto(e.target.files[0])} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 12px', background: '#F7F3EE', border: '1px dashed #DDD8CF', borderRadius: '6px', cursor: uploadBlocked ? 'not-allowed' : 'pointer', fontSize: '12px', color: '#6B6860' }}>
+          <input type="file" accept="image/*" data-testid="office-schedule-report-photo-input" style={{ display: 'none' }} disabled={uploadBlocked}
+            onChange={e => !uploadBlocked && e.target.files[0] && uploadPhoto(e.target.files[0])} />
           {busy ? 'Queuing…' : '+ Add photo'}
         </label>
+        {uploadBlocked && (
+          <div data-testid="photo-upload-activation-message" style={{ marginTop: '8px', fontSize: '12px', color: '#6B6860' }}>{uploadBlockedMessage}</div>
+        )}
         <PhotoUploadQueueStatus
           records={queueRecords}
           variant="report"
           onUploadRetry={manualUploadRetry}
           onDbRetry={manualDbRetry}
+          actionsDisabled={uploadBlocked}
         />
       </div>
     </div>

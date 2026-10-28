@@ -1,4 +1,5 @@
 import { createRoot } from 'react-dom/client'
+import { grantPhotoUploadActivationForTests } from '../lib/photoUploadActivation'
 import { act } from 'react'
 import Reports from './Reports'
 import { useOfficeReportPhotoUploadQueue } from '../hooks/useOfficeReportPhotoUploadQueue'
@@ -106,6 +107,7 @@ async function openFirstReport(container) {
 
 describe('Reports photo upload v1', () => {
   beforeEach(() => {
+    grantPhotoUploadActivationForTests({ actorScopeType: 'office_user', actorScopeId: 'user-1' })
     global.IS_REACT_ACT_ENVIRONMENT = true
     mockUpload.mockReset()
     mockInsert.mockReset()
@@ -298,6 +300,7 @@ describe('Reports photo upload v1', () => {
 
 describe('Reports office reports P11D queue status integration', () => {
   beforeEach(() => {
+    grantPhotoUploadActivationForTests({ actorScopeType: 'office_user', actorScopeId: 'user-1' })
     global.IS_REACT_ACT_ENVIRONMENT = true
     mockUpload.mockReset()
     mockInsert.mockReset()

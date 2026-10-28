@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
+import { usePhotoUploadControls } from '../hooks/usePhotoUploadControls'
 
 export default function EvidencePhotos({ orderId, orderName }) {
   const { profile } = useAuth()
+  const { blocked: uploadBlocked, message: uploadBlockedMessage } = usePhotoUploadControls()
   const [photos, setPhotos] = useState([])
   const [uploading, setUploading] = useState(false)
   const [selectedType, setSelectedType] = useState('DEL')
@@ -25,6 +27,7 @@ export default function EvidencePhotos({ orderId, orderName }) {
   }
 
   async function handleUpload(e) {
+    if (uploadBlocked) return
     const files = Array.from(e.target.files)
     if (!files.length) return
     setUploading(true)
@@ -107,6 +110,7 @@ export default function EvidencePhotos({ orderId, orderName }) {
           accept="image/*"
           multiple
           style={{ display: 'none' }}
+          disabled={uploadBlocked}
           onChange={handleUpload}
         />
 
@@ -116,11 +120,14 @@ export default function EvidencePhotos({ orderId, orderName }) {
             background: selectedType === 'DEL' ? '#EF4444' : '#22C55E',
             opacity: uploading ? 0.7 : 1
           }}
-          onClick={() => fileRef.current.click()}
-          disabled={uploading}
+          onClick={() => { if (!uploadBlocked) fileRef.current.click() }}
+          disabled={uploading || uploadBlocked}
         >
           {uploading ? 'Uploading…' : `📷 Upload ${selectedType === 'DEL' ? 'Delivery' : 'Collection'} Photos`}
         </button>
+        {uploadBlocked && (
+          <div data-testid="photo-upload-activation-message" style={{ fontSize: '12px', color: '#6B6860', marginTop: '8px' }}>{uploadBlockedMessage}</div>
+        )}
 
         <div style={{ fontSize: '11px', color: '#9CA3AF', marginTop: '8px' }}>
           Photos will be marked with your name and timestamp automatically

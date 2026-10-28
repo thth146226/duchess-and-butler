@@ -1,8 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import DriverPhotoUploadRuntime from '../components/DriverPhotoUploadRuntime'
 import DriverPortal from './DriverPortal'
 
 export default function DriverAccess() {
   const [token, setToken] = useState(null)
+  const [driverId, setDriverId] = useState(null)
+  const onDriverId = useCallback((id) => {
+    if (typeof id !== 'string' || id.length === 0) {
+      return
+    }
+    setDriverId((current) => (current === id ? current : id))
+  }, [])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -20,5 +28,10 @@ export default function DriverAccess() {
     </div>
   )
 
-  return <DriverPortal token={token} />
+  return (
+    <>
+      <DriverPhotoUploadRuntime driverId={driverId} portalToken={token} />
+      <DriverPortal token={token} onDriverId={onDriverId} />
+    </>
+  )
 }

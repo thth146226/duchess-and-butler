@@ -227,6 +227,7 @@ export function createDriverReportPhotoUploadQueueController(options = {}) {
   let constructionError = null
   const leaseOwner = createLeaseOwner()
   let actorScopeId = null
+  let boundActorId = null
   const pendingObservation = new Set()
   const notifiedDone = new Set()
   let pollTimer = null
@@ -248,9 +249,21 @@ export function createDriverReportPhotoUploadQueueController(options = {}) {
     if (constructionError) {
       throw constructionError
     }
+    if (db && boundActorId !== actorScopeId) {
+      const previous = db
+      db = null
+      boundActorId = null
+      if (previous && typeof previous.close === 'function') {
+        void previous.close()
+      }
+    }
     if (!db) {
       try {
-        db = createDb()
+        db = createDb({
+          actorScopeType: DRIVER_REPORT_ACTOR_SCOPE_TYPE,
+          actorScopeId,
+        })
+        boundActorId = actorScopeId
       } catch (error) {
         constructionError = error
         throw error
@@ -428,6 +441,7 @@ export function createDriverReportPhotoUploadQueueController(options = {}) {
       return rejectAll(list, DRIVER_REPORT_QUEUE_ERROR_CODES.PROVISIONAL_ID_REQUIRED)
     }
 
+    actorScopeId = driverId
     let handle
     try {
       handle = ensureDb()

@@ -188,6 +188,32 @@ function createPhotoUploadStore(options = {}) {
   let wakeChain = Promise.resolve()
   const activeUploads = new Map()
   const pendingRetire = new Set()
+  const localPayloadFailures = new Map()
+  const stopWaiters = []
+
+  function requestStop() {
+    stopped = true
+    const waiters = stopWaiters.splice(0, stopWaiters.length)
+    waiters.forEach((resolve) => resolve())
+  }
+
+  function whenStopped() {
+    if (stopped) {
+      return { promise: Promise.resolve(), cancel() {} }
+    }
+    let cancel = () => {}
+    const promise = new Promise((resolve) => {
+      const waiter = () => resolve()
+      stopWaiters.push(waiter)
+      cancel = () => {
+        const index = stopWaiters.indexOf(waiter)
+        if (index >= 0) {
+          stopWaiters.splice(index, 1)
+        }
+      }
+    })
+    return { promise, cancel }
+  }
 
   function runtimeStatus() {
     return {
@@ -260,6 +286,9 @@ function createPhotoUploadStore(options = {}) {
     function enqueue(mutator) {
       session.persistChain = session.persistChain
         .then(async () => {
+          if (stopped) {
+            return PHOTO_UPLOAD_WORKER_OUTCOMES.OK
+          }
           if (session.fenced) {
             lastWorkerOutcome = PHOTO_UPLOAD_WORKER_OUTCOMES.WORKER_FENCED
             return PHOTO_UPLOAD_WORKER_OUTCOMES.WORKER_FENCED
@@ -318,6 +347,26 @@ function createPhotoUploadStore(options = {}) {
     }
 
     return { session, enqueue, drain }
+  }
+
+  function persistLocalPayloadRetry(enqueue, queueId) {
+    const failures = (localPayloadFailures.get(queueId) || 0) + 1
+    localPayloadFailures.set(queueId, failures)
+    const nowMs = now()
+    const calculated = calculateBackoffDelayMs(
+      failures,
+      MANAGER_UPLOAD_BACKOFF_BASE_MS,
+      MANAGER_UPLOAD_BACKOFF_MAX_MS,
+      random
+    )
+    const delay = Math.max(MANAGER_UPLOAD_BACKOFF_BASE_MS, calculated)
+    return enqueue((record) => applyEvent(record, PHOTO_UPLOAD_EVENTS.UPLOAD_RETRYABLE_FAILURE, nowMs, {
+      retry_phase: PHOTO_UPLOAD_RETRY_PHASES.UPLOAD,
+      next_retry_at: nowMs + delay,
+      failure_stage: PHOTO_UPLOAD_RETRY_PHASES.UPLOAD,
+      last_error: sanitizedError('LOCAL_PAYLOAD_UNAVAILABLE'),
+      last_http_status: null,
+    }))
   }
 
   function scheduleUploadRetry(record, attemptCount, nowMs) {
@@ -485,8 +534,8 @@ function createPhotoUploadStore(options = {}) {
       last_error: null,
       failure_stage: null,
     }))
-    if (persisted === PHOTO_UPLOAD_WORKER_OUTCOMES.WORKER_FENCED) {
-      return persisted
+    if (persisted === PHOTO_UPLOAD_WORKER_OUTCOMES.WORKER_FENCED || stopped) {
+      return drain()
     }
     try {
       await db.clearDoneBlob({
@@ -695,13 +744,38 @@ function createPhotoUploadStore(options = {}) {
     }
 
     if (
-      !(session.record.blob instanceof Blob)
-      || !isNonEmptyString(session.record.storage_path)
+      !isNonEmptyString(session.record.storage_path)
       || !isNonEmptyString(session.record.mime_type)
     ) {
       await persistUploadPermanent(enqueue, PHOTO_UPLOAD_RUNTIME_ERROR_CODES.MAX_UPLOAD_ATTEMPTS_REACHED, null)
       return drain()
     }
+
+    try {
+      const payload = typeof db.getPayloadForUpload === 'function'
+        ? await db.getPayloadForUpload({
+          queueId: session.record.queue_id,
+          actorScopeType,
+          actorScopeId,
+        })
+        : null
+      if (!payload || !(payload.blob instanceof Blob)) {
+        await persistLocalPayloadRetry(enqueue, session.record.queue_id)
+        return drain()
+      }
+      session.record = {
+        ...session.record,
+        blob: payload.blob,
+      }
+    } catch (error) {
+      if (error && error.code === PHOTO_UPLOAD_DB_ERROR_CODES.DATABASE_ERROR) {
+        await persistLocalPayloadRetry(enqueue, session.record.queue_id)
+        return drain()
+      }
+      throw error
+    }
+
+    localPayloadFailures.delete(session.record.queue_id)
 
     const handle = transport.startUpload({
       blob: session.record.blob,
@@ -759,24 +833,34 @@ function createPhotoUploadStore(options = {}) {
       abortHandle(handle)
     }
 
-    let transportResult = null
-    let transportError = null
+    const settled = handle.done.then(
+      (value) => ({ kind: 'done', value }),
+      (error) => ({ kind: 'error', error })
+    )
+    const stopWait = whenStopped()
+    let outcome
     try {
-      transportResult = await handle.done
-    } catch (error) {
-      transportError = error
+      outcome = await Promise.race([
+        settled,
+        stopWait.promise.then(() => ({ kind: 'stopped' })),
+      ])
     } finally {
-      unregisterUpload(session.record.queue_id)
+      stopWait.cancel()
     }
+    unregisterUpload(session.record.queue_id)
 
     const drained = await drain()
-    if (drained === PHOTO_UPLOAD_WORKER_OUTCOMES.WORKER_FENCED || session.fenced) {
+    if (drained === PHOTO_UPLOAD_WORKER_OUTCOMES.WORKER_FENCED || session.fenced || outcome.kind === 'stopped' || stopped) {
       abortHandle(handle)
-      return PHOTO_UPLOAD_WORKER_OUTCOMES.WORKER_FENCED
+      return drain()
     }
 
-    if (stopped) {
-      return drain()
+    let transportResult = null
+    let transportError = null
+    if (outcome.kind === 'error') {
+      transportError = outcome.error
+    } else {
+      transportResult = outcome.value
     }
 
     if (transportError) {
@@ -890,7 +974,7 @@ function createPhotoUploadStore(options = {}) {
   }
 
   async function stop() {
-    stopped = true
+    requestStop()
     abortAllUploads()
     if (manager && typeof manager.stop === 'function') {
       await manager.stop()

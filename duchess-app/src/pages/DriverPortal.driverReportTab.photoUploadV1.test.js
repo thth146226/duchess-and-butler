@@ -1,4 +1,5 @@
 import { createRoot } from 'react-dom/client'
+import { grantPhotoUploadActivationForTests } from '../lib/photoUploadActivation'
 import { act } from 'react'
 import DriverPortal from './DriverPortal'
 import { useDriverPhotoUploadQueue } from '../hooks/useDriverPhotoUploadQueue'
@@ -133,6 +134,7 @@ async function openReportTab(container) {
 
 describe('DriverPortal DriverReportTab photo upload v1', () => {
   beforeEach(() => {
+    grantPhotoUploadActivationForTests({ actorScopeType: 'office_user', actorScopeId: 'user-1' })
     global.IS_REACT_ACT_ENVIRONMENT = true
     mockEnqueueFiles.mockReset()
     mockManualUploadRetry.mockReset()
@@ -262,6 +264,7 @@ describe('DriverPortal DriverReportTab photo upload v1', () => {
 
 describe('DriverPortal driver report tab P11D queue status integration', () => {
   beforeEach(() => {
+    grantPhotoUploadActivationForTests({ actorScopeType: 'office_user', actorScopeId: 'user-1' })
     global.IS_REACT_ACT_ENVIRONMENT = true
     mockEnqueueFiles.mockReset()
     mockManualUploadRetry.mockReset()

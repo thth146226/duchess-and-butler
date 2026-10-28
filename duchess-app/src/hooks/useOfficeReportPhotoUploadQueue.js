@@ -191,6 +191,7 @@ export function createOfficeReportPhotoUploadQueueController(options = {}) {
   let constructionError = null
   const leaseOwner = createLeaseOwner()
   let actorScopeId = null
+  let boundActorId = null
   const pendingObservation = new Set()
   const notifiedDone = new Set()
   let pollTimer = null
@@ -218,9 +219,21 @@ export function createOfficeReportPhotoUploadQueueController(options = {}) {
     if (constructionError) {
       throw constructionError
     }
+    if (db && boundActorId !== actorScopeId) {
+      const previous = db
+      db = null
+      boundActorId = null
+      if (previous && typeof previous.close === 'function') {
+        void previous.close()
+      }
+    }
     if (!db) {
       try {
-        db = createDb()
+        db = createDb({
+          actorScopeType: OFFICE_REPORT_ACTOR_SCOPE_TYPE,
+          actorScopeId,
+        })
+        boundActorId = actorScopeId
       } catch (error) {
         constructionError = error
         throw error
@@ -399,6 +412,7 @@ export function createOfficeReportPhotoUploadQueueController(options = {}) {
       return rejectAll(list, OFFICE_REPORT_QUEUE_ERROR_CODES.AUTH_REQUIRED)
     }
 
+    actorScopeId = userId
     let handle
     try {
       handle = ensureDb()

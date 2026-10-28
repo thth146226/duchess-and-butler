@@ -176,6 +176,7 @@ export function createPhotoUploadQueueController(options = {}) {
   let constructionError = null
   const leaseOwner = createLeaseOwner()
   let actorScopeId = null
+  let boundActorId = null
   const pendingObservation = new Set()
   const notifiedDone = new Set()
   let pollTimer = null
@@ -203,9 +204,21 @@ export function createPhotoUploadQueueController(options = {}) {
     if (constructionError) {
       throw constructionError
     }
+    if (db && boundActorId !== actorScopeId) {
+      const previous = db
+      db = null
+      boundActorId = null
+      if (previous && typeof previous.close === 'function') {
+        void previous.close()
+      }
+    }
     if (!db) {
       try {
-        db = createDb()
+        db = createDb({
+          actorScopeType: OFFICE_EVIDENCE_ACTOR_SCOPE_TYPE,
+          actorScopeId,
+        })
+        boundActorId = actorScopeId
       } catch (error) {
         constructionError = error
         throw error
@@ -385,6 +398,7 @@ export function createPhotoUploadQueueController(options = {}) {
       }
     }
 
+    actorScopeId = userId
     let handle
     try {
       handle = ensureDb()

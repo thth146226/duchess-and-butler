@@ -600,6 +600,7 @@ async function markDriverPortalRunDone(input, { now, supabase: injected } = {}) 
 
 module.exports = {
   HttpError,
+  resolveDriverByToken,
   getDriverPortalRuns,
   markDriverPortalRunDone,
   getLondonDateString,

@@ -48,6 +48,10 @@ const SAFE_KEYS = new Set([
   'rejected_count',
   'rejected_codes',
   'error_class',
+  'message_class',
+  'status_before',
+  'status_after',
+  'actor_status_index_changed',
 ])
 
 let memoryEvents = []

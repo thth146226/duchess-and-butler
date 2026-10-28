@@ -1,4 +1,9 @@
 import { PHOTO_UPLOAD_ACTOR_SCOPE_TYPES, createPhotoUploadDb } from './photoUploadDb'
+import {
+  getPhotoUploadActivation,
+  refreshPhotoUploadActivation,
+  revokePhotoUploadActivation,
+} from './photoUploadActivation'
 import { recordPhotoUploadDiagnostic } from './photoUploadDiagnostics'
 import { createPhotoUploadStore } from './photoUploadStore'
 import { createPhotoUploadTransport } from './photoUploadTransport'
@@ -76,7 +81,301 @@ export function getPhotoUploadRuntimeStore(actorScopeType, actorScopeId, getRunt
   return runtime.getStore()
 }
 
+function activationMatches(actorScopeType, actorScopeId, now) {
+  const current = getPhotoUploadActivation(now)
+  return Boolean(
+    current.state === 'AUTHORIZED'
+    && current.grant
+    && current.grant.purpose !== 'recovery'
+    && current.grant.actorScopeType === actorScopeType
+    && current.grant.actorScopeId === actorScopeId
+  )
+}
+
+function createGatedRuntimeEntry(options) {
+  const actorScopeType = options.actorScopeType
+  const actorScopeId = options.actorScopeId
+  const now = typeof options.now === 'function' ? options.now : Date.now
+  const createTransport = options.createTransport || createPhotoUploadTransport
+  const createReconciler = options.createReconciler || createDefaultReconciler
+  const createStore = options.createStore || createPhotoUploadStore
+  const windowTarget = options.windowTarget || defaultWindow()
+  const documentTarget = options.documentTarget || defaultDocument()
+  const supabaseClient = options.supabaseClient
+  const getAccessToken = typeof options.getAccessToken === 'function'
+    ? options.getAccessToken
+    : async function readSessionAccessToken() {
+      if (!supabaseClient || !supabaseClient.auth || typeof supabaseClient.auth.getSession !== 'function') {
+        return null
+      }
+      const result = await supabaseClient.auth.getSession()
+      const session = result && result.data ? result.data.session : null
+      return session && isNonEmptyString(session.access_token) ? session.access_token : null
+    }
+  const isOnline = typeof options.isOnline === 'function'
+    ? options.isOnline
+    : () => (typeof navigator === 'undefined' || navigator.onLine !== false)
+
+  let db = null
+  let store = null
+  let released = false
+  let pendingActivation = null
+  let halting = null
+  const detachFns = []
+  let hiddenSince = null
+
+  async function halt() {
+    if (halting) {
+      return halting
+    }
+    const currentStore = store
+    const currentDb = db
+    store = null
+    db = null
+    halting = (async () => {
+      try {
+        if (currentStore && typeof currentStore.stop === 'function') {
+          await currentStore.stop()
+        }
+        if (currentDb && typeof currentDb.close === 'function') {
+          await currentDb.close()
+        }
+      } finally {
+        halting = null
+      }
+    })()
+    return halting
+  }
+
+  async function activate() {
+    if (released) {
+      return false
+    }
+    const decision = await refreshPhotoUploadActivation({
+      getAccessToken,
+      fetcher: options.activationFetcher,
+      now,
+    })
+    if (released) {
+      return false
+    }
+    const allowed = decision.state === 'AUTHORIZED'
+      && decision.grant
+      && decision.grant.purpose !== 'recovery'
+      && decision.grant.actorScopeType === actorScopeType
+      && decision.grant.actorScopeId === actorScopeId
+    if (!allowed) {
+      if (store) {
+        await halt()
+      }
+      return false
+    }
+    if (!store) {
+      db = createPhotoUploadDb({ actorScopeType, actorScopeId })
+      const transport = createTransport()
+      const reconciler = createReconciler({ supabaseClient })
+      store = createStore({
+        db,
+        transport,
+        reconciler,
+        actorScopeType,
+        actorScopeId,
+        leaseOwner: options.leaseOwner,
+        managerFactory: options.managerFactory,
+        getAccessToken,
+        isOnline,
+        now,
+        random: options.random,
+        setTimeoutImpl: options.setTimeoutImpl,
+        clearTimeoutImpl: options.clearTimeoutImpl,
+      })
+      trace('RUNTIME_CREATE', { actor_scope_type: actorScopeType })
+    }
+    if (!activationMatches(actorScopeType, actorScopeId, now())) {
+      await halt()
+      return false
+    }
+    return true
+  }
+
+  function ensureActive() {
+    if (!pendingActivation) {
+      pendingActivation = activate().finally(() => {
+        pendingActivation = null
+      })
+    }
+    return pendingActivation
+  }
+
+  const publicApi = {
+    actorScopeType,
+    actorScopeId,
+    ready: Promise.resolve(),
+    async wake(context) {
+      if (released) {
+        return { woke: false, resumed: 0 }
+      }
+      const started = Date.now()
+      const hiddenDuration = context && Number.isInteger(context.hiddenDuration) ? context.hiddenDuration : 0
+      trace('WAKE_BEGIN', {
+        actor_scope_type: actorScopeType,
+        hidden_duration: hiddenDuration,
+        persisted: context && Object.prototype.hasOwnProperty.call(context, 'persisted') ? Boolean(context.persisted) : undefined,
+        source: context && typeof context.source === 'string' ? context.source : undefined,
+      })
+      try {
+        const allowed = await ensureActive()
+        if (!allowed || !store || !activationMatches(actorScopeType, actorScopeId, now())) {
+          if (store) {
+            await halt()
+          }
+          trace('WAKE_END', { woke: false, resumed_count: 0, duration_ms: Date.now() - started })
+          return { woke: false, resumed: 0 }
+        }
+        const pending = store.wake(context)
+        const result = pending && typeof pending.then === 'function' ? await pending : pending
+        trace('WAKE_END', {
+          woke: result && result.woke,
+          resumed_count: result && result.resumed,
+          duration_ms: Date.now() - started,
+        })
+        return result
+      } catch (error) {
+        trace('WAKE_ERROR', { error_class: error && error.name ? error.name : 'Error' })
+        if (!activationMatches(actorScopeType, actorScopeId, now())) {
+          await halt()
+        }
+        return { woke: false, resumed: 0 }
+      }
+    },
+    getStore() {
+      return store
+    },
+  }
+
+  function hiddenDurationNow() {
+    if (hiddenSince == null) {
+      return 0
+    }
+    return now() - hiddenSince
+  }
+
+  function onVisibility() {
+    if (!documentTarget) {
+      return
+    }
+    if (documentTarget.visibilityState === 'hidden') {
+      hiddenSince = now()
+      trace('VISIBILITY_HIDDEN', { timestamp: hiddenSince, hidden_since: hiddenSince })
+      return
+    }
+    if (documentTarget.visibilityState === 'visible') {
+      const hiddenDuration = hiddenDurationNow()
+      const since = hiddenSince
+      trace('VISIBILITY_VISIBLE', {
+        hidden_since: since,
+        now: now(),
+        computed_hidden_duration: hiddenDuration,
+      })
+      hiddenSince = null
+      void publicApi.wake({ hiddenDuration, source: 'visibility' })
+    }
+  }
+
+  function onPageShow(event) {
+    const hiddenDuration = hiddenDurationNow()
+    const since = hiddenSince
+    const persisted = Boolean(event && event.persisted)
+    trace('PAGESHOW', {
+      persisted,
+      hidden_since: since,
+      computed_hidden_duration: hiddenDuration,
+    })
+    hiddenSince = null
+    void publicApi.wake({
+      hiddenDuration,
+      persisted,
+      source: 'pageshow',
+    })
+  }
+
+  function onOnline() {
+    trace('ONLINE', {})
+    void publicApi.wake({ hiddenDuration: 0, source: 'online' })
+  }
+
+  if (documentTarget && typeof documentTarget.addEventListener === 'function') {
+    documentTarget.addEventListener('visibilitychange', onVisibility)
+    detachFns.push(() => {
+      documentTarget.removeEventListener('visibilitychange', onVisibility)
+    })
+  }
+  if (windowTarget && typeof windowTarget.addEventListener === 'function') {
+    windowTarget.addEventListener('pageshow', onPageShow)
+    windowTarget.addEventListener('online', onOnline)
+    detachFns.push(() => {
+      windowTarget.removeEventListener('pageshow', onPageShow)
+      windowTarget.removeEventListener('online', onOnline)
+    })
+  }
+
+  const auth = supabaseClient && supabaseClient.auth
+  if (auth && typeof auth.onAuthStateChange === 'function') {
+    try {
+      const result = auth.onAuthStateChange((_event, session) => {
+        const nextId = session && session.user ? session.user.id : null
+        if (actorScopeType === PHOTO_UPLOAD_ACTOR_SCOPE_TYPES.OFFICE_USER) {
+          if (nextId !== actorScopeId) {
+            revokePhotoUploadActivation()
+            void halt()
+            return
+          }
+        } else if (!session) {
+          revokePhotoUploadActivation()
+          void halt()
+          return
+        }
+        trace('AUTH_WAKE_REQUESTED', { actor_scope_type: actorScopeType })
+        void publicApi.wake({ hiddenDuration: 0, source: 'auth' })
+      })
+      const subscription = result && result.data ? result.data.subscription : null
+      if (subscription && typeof subscription.unsubscribe === 'function') {
+        detachFns.push(() => {
+          subscription.unsubscribe()
+        })
+      }
+    } catch (_error) {
+      // Auth wake is additive. Lifecycle listeners still recover the queue.
+    }
+  }
+
+  publicApi.ready = publicApi.wake({ hiddenDuration: 0, source: 'bootstrap' })
+
+  return {
+    refs: 1,
+    publicApi,
+    detach() {
+      for (const fn of detachFns) {
+        try {
+          fn()
+        } catch (_error) {
+          // Listener removal is best-effort during teardown.
+        }
+      }
+      detachFns.length = 0
+    },
+    async stop() {
+      released = true
+      trace('RUNTIME_STOP', { actor_scope_type: actorScopeType })
+      await halt()
+    },
+  }
+}
+
 function createRuntimeEntry(options) {
+  if (typeof options.createDb !== 'function') {
+    return createGatedRuntimeEntry(options)
+  }
   const actorScopeType = options.actorScopeType
   const actorScopeId = options.actorScopeId
   const now = typeof options.now === 'function' ? options.now : Date.now
@@ -317,6 +616,14 @@ export function releasePhotoUploadRuntime(actorScopeType, actorScopeId) {
   }
   registry.delete(key)
   entry.detach()
+  const current = getPhotoUploadActivation()
+  if (
+    current.grant
+    && current.grant.actorScopeType === actorScopeType
+    && current.grant.actorScopeId === actorScopeId
+  ) {
+    revokePhotoUploadActivation()
+  }
   return entry.stop()
 }
 

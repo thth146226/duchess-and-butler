@@ -1,4 +1,5 @@
 import { createRoot } from 'react-dom/client'
+import { grantPhotoUploadActivationForTests } from '../lib/photoUploadActivation'
 import { act } from 'react'
 import DriverPortal from './DriverPortal'
 import { useDriverPhotoUploadQueue } from '../hooks/useDriverPhotoUploadQueue'
@@ -158,6 +159,7 @@ function findBackButton(container) {
 
 describe('DriverPortal reportMode photo upload v1', () => {
   beforeEach(() => {
+    grantPhotoUploadActivationForTests({ actorScopeType: 'office_user', actorScopeId: 'user-1' })
     global.IS_REACT_ACT_ENVIRONMENT = true
     mockEnqueueFiles.mockReset()
     mockProveReportId.mockReset()
@@ -554,6 +556,7 @@ describe('DriverPortal reportMode photo upload v1', () => {
 
 describe('DriverPortal report mode P11D queue status integration', () => {
   beforeEach(() => {
+    grantPhotoUploadActivationForTests({ actorScopeType: 'office_user', actorScopeId: 'user-1' })
     global.IS_REACT_ACT_ENVIRONMENT = true
     mockEnqueueFiles.mockReset()
     mockProveReportId.mockReset()
