@@ -6,6 +6,7 @@ import JobNotes from '../components/JobNotes'
 import EvidenceUpload from '../components/EvidenceUpload'
 import { OFFICE_REPORT_SOURCE_SURFACES, useOfficeReportPhotoUploadQueue } from '../hooks/useOfficeReportPhotoUploadQueue'
 import PhotoUploadQueueStatus from '../components/PhotoUploadQueueStatus'
+import OrderWeightSection from '../components/OrderWeightSection'
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
 const today    = new Date().toLocaleDateString('en-CA')
@@ -1537,17 +1538,28 @@ function DispatchCard({ run, drivers, onSelect, onAssign, isSaving }) {
 // ── RUN DETAIL: ITEMS / CHANGES (tabs) ─────────────────────────────────────────
 function RunDetailItems({ run }) {
   const [items, setItems] = useState([])
+  const [itemsError, setItemsError] = useState(false)
   const [loading, setLoading] = useState(true)
   useEffect(() => {
     if (!run.crmsId || !run.jobId) {
       setItems([])
+      setItemsError(false)
       setLoading(false)
       return
     }
     let cancelled = false
-    supabase.from('crms_job_items').select('id, item_name, quantity, unit, category').eq('job_id', run.jobId).then(({ data }) => {
+    setItems([])
+    setItemsError(false)
+    setLoading(true)
+    const basicSelect = 'id, item_name, quantity, unit, category'
+    const typedSelect = `${basicSelect}, opportunity_item_type_name:crms_raw->>opportunity_item_type_name, transaction_type_name:crms_raw->>transaction_type_name`
+    supabase.from('crms_job_items').select(typedSelect).eq('job_id', run.jobId).then(async (typed) => {
+      const result = typed.error
+        ? await supabase.from('crms_job_items').select(basicSelect).eq('job_id', run.jobId)
+        : typed
       if (!cancelled) {
-        setItems(data || [])
+        setItems(result.error ? [] : (result.data || []))
+        setItemsError(Boolean(result.error))
         setLoading(false)
       }
     })
@@ -1557,17 +1569,23 @@ function RunDetailItems({ run }) {
     return <div style={{ color: '#6B6860', fontSize: '13px', lineHeight: 1.6 }}>Equipment line items are available for jobs imported from Current RMS.</div>
   }
   if (loading) return <div style={{ color: '#9CA3AF', fontSize: '13px' }}>Loading items…</div>
+  if (itemsError) {
+    return <div style={{ color: '#9CA3AF', fontSize: '13px' }}>No line items synced yet.</div>
+  }
   if (!items.length) return <div style={{ color: '#9CA3AF', fontSize: '13px' }}>No line items synced yet.</div>
   return (
-    <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
-      {items.map(it => (
-        <li key={it.id} style={{ padding: '10px 0', borderBottom: '1px solid #EDE8E0', fontSize: '13px' }}>
-          <span style={{ fontWeight: '600' }}>{it.item_name}</span>
-          <span style={{ color: '#6B6860', marginLeft: '8px' }}>×{it.quantity} {it.unit}</span>
-          {it.category && <span style={{ fontSize: '11px', color: '#9CA3AF', marginLeft: '8px' }}>({it.category})</span>}
-        </li>
-      ))}
-    </ul>
+    <div>
+      <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+        {items.map(it => (
+          <li key={it.id} style={{ padding: '10px 0', borderBottom: '1px solid #EDE8E0', fontSize: '13px' }}>
+            <span style={{ fontWeight: '600' }}>{it.item_name}</span>
+            <span style={{ color: '#6B6860', marginLeft: '8px' }}>×{it.quantity} {it.unit}</span>
+            {it.category && <span style={{ fontSize: '11px', color: '#9CA3AF', marginLeft: '8px' }}>({it.category})</span>}
+          </li>
+        ))}
+      </ul>
+      <OrderWeightSection key={run.jobId} jobId={run.jobId} items={items} itemsError={itemsError} />
+    </div>
   )
 }
 
