@@ -1368,4 +1368,112 @@ describe('photoUploadManager', () => {
     expect(stored.lease_owner).toBeNull()
     expect(stored.lease_generation).toBe(1)
   })
+
+  test('a slot that returns the record to Queued retries once, not immediately', async () => {
+    const db = handles.db(createPhotoUploadDb({ dbName }))
+    const clock = createClock(FIXED_NOW)
+    const queueId = 'queue-office-a-1'
+    await db.putRecord(makeRecord({
+      queue_id: queueId,
+      tus_upload_url: 'https://tus.example/uploads/same-resource',
+      tus_created_at: FIXED_NOW,
+      bytes_uploaded: 4,
+    }))
+    const started = []
+    const manager = handles.manager(createPhotoUploadManager(managerOptions({
+      db,
+      clock,
+      executeClaimedRecord: async (record) => {
+        started.push(record.queue_id)
+        await db.putRecordFenced({
+          record: {
+            ...record,
+            status: PHOTO_UPLOAD_STATUSES.QUEUED,
+            updated_at: clock.now(),
+          },
+          leaseOwner: 'tab-a',
+          leaseGeneration: record.lease_generation,
+        })
+      },
+    })))
+    await manager.pump()
+    await flushMany(12)
+    expect(started).toEqual([queueId])
+    const stored = await db.getRecord({
+      queueId,
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+    })
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.QUEUED)
+    expect(stored.tus_upload_url).toBe('https://tus.example/uploads/same-resource')
+    expect(stored.bytes_uploaded).toBe(4)
+    await manager.pump()
+    await flushMany(8)
+    expect(started).toEqual([queueId])
+    await clock.advance(LEASE_TTL_MS)
+    await flushMany(12)
+    expect(started).toEqual([queueId, queueId])
+  })
+
+  test('a durable read failure defers the queue instead of blocking it', async () => {
+    setPhotoUploadDiagnosticsEnabled(true)
+    clearPhotoUploadDiagnostics()
+    const db = handles.db(createPhotoUploadDb({ dbName }))
+    const clock = createClock(FIXED_NOW)
+    const queueId = 'queue-office-a-1'
+    await db.putRecord(makeRecord({
+      queue_id: queueId,
+      tus_upload_url: 'https://tus.example/uploads/same-resource',
+      tus_created_at: FIXED_NOW,
+      bytes_uploaded: 4,
+      metadata_payload: { nested: 'original' },
+    }))
+    const realGetRecord = db.getRecord.bind(db)
+    db.getRecord = async () => {
+      throw new Error('secret durable read failure must not be stored')
+    }
+    const started = []
+    const manager = handles.manager(createPhotoUploadManager(managerOptions({
+      db,
+      clock,
+      executeClaimedRecord: async (record) => {
+        started.push(record.queue_id)
+        await db.putRecordFenced({
+          record: {
+            ...record,
+            status: PHOTO_UPLOAD_STATUSES.QUEUED,
+            updated_at: clock.now(),
+          },
+          leaseOwner: 'tab-a',
+          leaseGeneration: record.lease_generation,
+        })
+      },
+    })))
+    await manager.pump()
+    await flushMany(12)
+    expect(started).toEqual([queueId])
+    await manager.pump()
+    await flushMany(8)
+    expect(started).toEqual([queueId])
+    db.getRecord = realGetRecord
+    await clock.advance(LEASE_TTL_MS)
+    await flushMany(12)
+    expect(started).toEqual([queueId, queueId])
+    const stored = await db.getRecord({
+      queueId,
+      actorScopeType: 'office_user',
+      actorScopeId: 'office-a',
+    })
+    expect(stored.status).toBe(PHOTO_UPLOAD_STATUSES.QUEUED)
+    expect(stored.actor_scope_id).toBe('office-a')
+    expect(stored.tus_upload_url).toBe('https://tus.example/uploads/same-resource')
+    expect(stored.bytes_uploaded).toBe(4)
+    expect(stored.metadata_payload).toEqual({ nested: 'original' })
+    expect(stored.blob).toBeInstanceOf(Blob)
+    expect(stored.blob.size).toBe(SOURCE_BYTES.length)
+    const serialized = JSON.stringify(readPhotoUploadDiagnostics())
+    expect(serialized).not.toContain('secret durable read failure must not be stored')
+    expect(serialized).not.toContain('https://tus.example/uploads/same-resource')
+    expect(serialized).not.toContain(queueId)
+  })
 })

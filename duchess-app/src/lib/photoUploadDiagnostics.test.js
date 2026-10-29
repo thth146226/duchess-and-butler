@@ -2,9 +2,11 @@ import {
   PHOTO_UPLOAD_DIAGNOSTICS_ENABLED_KEY,
   PHOTO_UPLOAD_DIAGNOSTICS_LIMIT,
   PHOTO_UPLOAD_DIAGNOSTICS_STORAGE_KEY,
+  PHOTO_UPLOAD_DIAGNOSTICS_SUMMARY_KEY,
   clearPhotoUploadDiagnostics,
   enablePhotoUploadDiagnosticsFromSearch,
   isPhotoUploadDiagnosticsEnabled,
+  readPhotoUploadDiagnosticSummary,
   readPhotoUploadDiagnostics,
   recordPhotoUploadDiagnostic,
   setPhotoUploadDiagnosticsEnabled,
@@ -16,6 +18,7 @@ describe('photo upload diagnostics', () => {
     clearPhotoUploadDiagnostics()
     localStorage.removeItem(PHOTO_UPLOAD_DIAGNOSTICS_ENABLED_KEY)
     localStorage.removeItem(PHOTO_UPLOAD_DIAGNOSTICS_STORAGE_KEY)
+    localStorage.removeItem(PHOTO_UPLOAD_DIAGNOSTICS_SUMMARY_KEY)
   })
 
   test('disabled record is a no-op and does not change a lifecycle result', () => {
@@ -70,6 +73,31 @@ describe('photo upload diagnostics', () => {
     expect(stored).toHaveLength(PHOTO_UPLOAD_DIAGNOSTICS_LIMIT)
   })
 
+  test('phase counts survive after the ring drops the original events', () => {
+    setPhotoUploadDiagnosticsEnabled(true)
+    clearPhotoUploadDiagnostics()
+    recordPhotoUploadDiagnostic('TUS_FINISHED', {
+      queue_fragment: 'abc123…xyz789',
+      outcome: 'TUS_COMPLETE',
+      http_status: null,
+      uploadUrl: 'https://secret.example/private-upload',
+    })
+    recordPhotoUploadDiagnostic('RECONCILIATION_FINISHED', {
+      queue_fragment: 'abc123…xyz789',
+      outcome: 'DB_ROW_FOUND',
+    })
+    for (let index = 0; index < PHOTO_UPLOAD_DIAGNOSTICS_LIMIT; index += 1) {
+      recordPhotoUploadDiagnostic('PUMP_BEGIN', { active_slots: 0 })
+    }
+    const events = readPhotoUploadDiagnostics()
+    expect(events.some((event) => event.event === 'TUS_FINISHED')).toBe(false)
+    expect(JSON.stringify(events)).not.toContain('secret.example')
+    expect(readPhotoUploadDiagnosticSummary()).toEqual(expect.objectContaining({
+      tus_finished: { TUS_COMPLETE: 1 },
+      reconciliation: { DB_ROW_FOUND: 1 },
+    }))
+  })
+
   test('clear removes the trace', () => {
     setPhotoUploadDiagnosticsEnabled(true)
     recordPhotoUploadDiagnostic('ONLINE', {})
@@ -77,6 +105,7 @@ describe('photo upload diagnostics', () => {
     clearPhotoUploadDiagnostics()
     expect(readPhotoUploadDiagnostics()).toEqual([])
     expect(localStorage.getItem(PHOTO_UPLOAD_DIAGNOSTICS_STORAGE_KEY)).toBeNull()
+    expect(localStorage.getItem(PHOTO_UPLOAD_DIAGNOSTICS_SUMMARY_KEY)).toBeNull()
     recordPhotoUploadDiagnostic('ONLINE', {})
     expect(readPhotoUploadDiagnostics()[0].sequence).toBe(1)
   })

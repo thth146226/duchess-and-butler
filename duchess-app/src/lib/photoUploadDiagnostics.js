@@ -1,5 +1,6 @@
 export const PHOTO_UPLOAD_DIAGNOSTICS_LIMIT = 250
 export const PHOTO_UPLOAD_DIAGNOSTICS_STORAGE_KEY = 'photo_upload_v1_diagnostics'
+export const PHOTO_UPLOAD_DIAGNOSTICS_SUMMARY_KEY = 'photo_upload_v1_diagnostics_summary'
 export const PHOTO_UPLOAD_DIAGNOSTICS_ENABLED_KEY = 'photo_upload_v1_diagnostics_enabled'
 
 const SAFE_KEYS = new Set([
@@ -48,13 +49,86 @@ const SAFE_KEYS = new Set([
   'rejected_count',
   'rejected_codes',
   'error_class',
+  'has_tus_url',
+  'phase',
+  'outcome',
+  'http_status',
+  'percent',
+  'retry_state',
 ])
 
 let memoryEvents = []
+let memorySummary = emptySummary()
 let memoryEnabled = false
 let sequence = 0
 let sessionStartedAt = Date.now()
 const listeners = new Set()
+
+function emptySummary() {
+  return {
+    worker_finished: {},
+    worker_failed: 0,
+    tus_started: 0,
+    tus_finished: {},
+    reconciliation: {},
+    tus_percent: {},
+    last_retry: [],
+  }
+}
+
+function bumpCount(bucket, key) {
+  if (typeof key !== 'string' || key.length === 0 || key.length > 64) {
+    return
+  }
+  bucket[key] = (Number(bucket[key]) || 0) + 1
+}
+
+function rememberFragment(map, fragment, value) {
+  if (typeof fragment !== 'string' || fragment.length === 0 || fragment.length > 32) {
+    return
+  }
+  map[fragment] = value
+  const keys = Object.keys(map)
+  if (keys.length > 12) {
+    delete map[keys[0]]
+  }
+}
+
+function updateSummary(event, data) {
+  const safe = data || {}
+  if (event === 'WORKER_FINISHED') {
+    bumpCount(memorySummary.worker_finished, safe.outcome)
+  } else if (event === 'WORKER_FAILED') {
+    memorySummary.worker_failed += 1
+  } else if (event === 'TUS_STARTED') {
+    memorySummary.tus_started += 1
+  } else if (event === 'TUS_FINISHED') {
+    bumpCount(memorySummary.tus_finished, safe.outcome)
+  } else if (event === 'TUS_PROGRESS') {
+    if (Number.isInteger(safe.percent)) {
+      rememberFragment(memorySummary.tus_percent, safe.queue_fragment, safe.percent)
+    }
+  } else if (event === 'RECONCILIATION_FINISHED') {
+    bumpCount(memorySummary.reconciliation, safe.outcome)
+  } else if (event === 'WORKER_RETRY_ELIGIBILITY') {
+    memorySummary.last_retry.push({
+      queue_fragment: typeof safe.queue_fragment === 'string' ? safe.queue_fragment.slice(0, 32) : null,
+      retry_state: typeof safe.retry_state === 'string' ? safe.retry_state.slice(0, 32) : null,
+      status: typeof safe.status === 'string' ? safe.status.slice(0, 32) : null,
+    })
+    if (memorySummary.last_retry.length > 12) {
+      memorySummary.last_retry = memorySummary.last_retry.slice(-12)
+    }
+  }
+}
+
+function persistSummary() {
+  const store = storage()
+  if (!store) {
+    return
+  }
+  store.setItem(PHOTO_UPLOAD_DIAGNOSTICS_SUMMARY_KEY, JSON.stringify(memorySummary))
+}
 
 function storage() {
   try {
@@ -83,6 +157,16 @@ function hydrate() {
     }
     memoryEvents = parsed.slice(-PHOTO_UPLOAD_DIAGNOSTICS_LIMIT)
     sequence = memoryEvents.reduce((max, event) => Math.max(max, Number(event && event.sequence) || 0), 0)
+    const summaryRaw = store.getItem(PHOTO_UPLOAD_DIAGNOSTICS_SUMMARY_KEY)
+    if (summaryRaw) {
+      const summary = JSON.parse(summaryRaw)
+      if (summary && typeof summary === 'object' && !Array.isArray(summary)) {
+        memorySummary = {
+          ...emptySummary(),
+          ...summary,
+        }
+      }
+    }
   } catch (_error) {
     return
   }
@@ -198,18 +282,21 @@ export function recordPhotoUploadDiagnostic(event, data) {
     }
     sequence += 1
     const nowMs = Date.now()
+    const safeData = sanitize(data)
+    updateSummary(typeof event === 'string' ? event.slice(0, 80) : '', safeData)
     memoryEvents.push({
       sequence,
       timestamp_ms: nowMs,
       relative_ms: nowMs - sessionStartedAt,
       event: typeof event === 'string' ? event.slice(0, 80) : '',
-      ...sanitize(data),
+      ...safeData,
     })
     if (memoryEvents.length > PHOTO_UPLOAD_DIAGNOSTICS_LIMIT) {
       memoryEvents = memoryEvents.slice(-PHOTO_UPLOAD_DIAGNOSTICS_LIMIT)
     }
     try {
       persist()
+      persistSummary()
     } catch (_error) {
       // Persistence is best-effort. The in-memory trace remains.
     }
@@ -227,14 +314,24 @@ export function readPhotoUploadDiagnostics() {
   }
 }
 
+export function readPhotoUploadDiagnosticSummary() {
+  try {
+    return JSON.parse(JSON.stringify(memorySummary))
+  } catch (_error) {
+    return emptySummary()
+  }
+}
+
 export function clearPhotoUploadDiagnostics() {
   try {
     memoryEvents = []
+    memorySummary = emptySummary()
     sequence = 0
     const store = storage()
     if (store) {
       try {
         store.removeItem(PHOTO_UPLOAD_DIAGNOSTICS_STORAGE_KEY)
+        store.removeItem(PHOTO_UPLOAD_DIAGNOSTICS_SUMMARY_KEY)
       } catch (_error) {
         // Clearing storage is best-effort.
       }
@@ -298,5 +395,8 @@ export function summarizePhotoUploadDiagnostics(events) {
       ? latestSlots.locally_executed
       : (latestSlots && Number.isInteger(latestSlots.locally_executed_after) ? latestSlots.locally_executed_after : null),
     LAST_FREE_SLOTS: latestSlots && Number.isInteger(latestSlots.free_slots) ? latestSlots.free_slots : null,
+    RETAINED_EVENT_COUNT: list.length,
+    RETAINED_EVENT_LIMIT: PHOTO_UPLOAD_DIAGNOSTICS_LIMIT,
+    PHASE_SUMMARY: readPhotoUploadDiagnosticSummary(),
   }
 }

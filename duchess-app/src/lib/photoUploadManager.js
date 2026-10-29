@@ -404,7 +404,13 @@ export function createPhotoUploadManager(options = {}) {
           leaseGeneration: slot.generation,
         })
       }
-    } catch (_error) {
+    } catch (error) {
+      trace('WORKER_FAILED', {
+        queue_fragment: abbreviateQueueId(slot.queueId),
+        error_class: diagnosticErrorClass(error),
+        reason: diagnosticErrorReason(error),
+        phase: 'slot',
+      })
       return
     } finally {
       trace('SLOT_FINALLY_BEGIN', {
@@ -418,6 +424,8 @@ export function createPhotoUploadManager(options = {}) {
       }
       activeSlots.delete(slot.queueId)
       if (!stopped) {
+        let durableStatus = null
+        let retryState = 'blocked'
         try {
           if (typeof db.getRecord === 'function') {
             const durable = await db.getRecord({
@@ -425,17 +433,8 @@ export function createPhotoUploadManager(options = {}) {
               actorScopeType,
               actorScopeId,
             })
-            if (
-              slot.lifecycleRetire
-              && (!durable || durable.status === PHOTO_UPLOAD_STATUSES.UPLOADING)
-            ) {
-              locallyExecuted.delete(slot.queueId)
-            } else if (
-              durable
-              && durable.status === PHOTO_UPLOAD_STATUSES.UPLOAD_PAUSED
-            ) {
-              locallyExecuted.delete(slot.queueId)
-            } else if (
+            durableStatus = durable ? durable.status : null
+            const futureRetry = Boolean(
               durable
               && (
                 durable.status === PHOTO_UPLOAD_STATUSES.UPLOAD_RETRY_WAIT
@@ -443,17 +442,54 @@ export function createPhotoUploadManager(options = {}) {
               )
               && Number.isInteger(durable.next_retry_at)
               && durable.next_retry_at > now()
+            )
+            if (
+              slot.lifecycleRetire
+              && (!durable || durable.status === PHOTO_UPLOAD_STATUSES.UPLOADING)
             ) {
               locallyExecuted.delete(slot.queueId)
+              retryState = 'eligible'
+            } else if (
+              durable
+              && durable.status === PHOTO_UPLOAD_STATUSES.UPLOAD_PAUSED
+            ) {
+              locallyExecuted.delete(slot.queueId)
+              retryState = 'eligible'
+            } else if (futureRetry) {
+              locallyExecuted.delete(slot.queueId)
+              retryState = 'eligible'
+            } else if (
+              durable
+              && (
+                durable.status === PHOTO_UPLOAD_STATUSES.QUEUED
+                || (
+                  durable.status === PHOTO_UPLOAD_STATUSES.UPLOADING
+                  && !slot.lifecycleRetire
+                )
+              )
+            ) {
+              locallyExecuted.delete(slot.queueId)
+              deferredWrites.add(slot.queueId)
+              retryState = 'deferred'
             }
           } else if (slot.lifecycleRetire) {
             locallyExecuted.delete(slot.queueId)
+            retryState = 'eligible'
           }
         } catch (_readError) {
+          locallyExecuted.delete(slot.queueId)
           if (slot.lifecycleRetire) {
-            locallyExecuted.delete(slot.queueId)
+            retryState = 'eligible'
+          } else {
+            deferredWrites.add(slot.queueId)
+            retryState = 'deferred'
           }
         }
+        trace('WORKER_RETRY_ELIGIBILITY', {
+          queue_fragment: abbreviateQueueId(slot.queueId),
+          status: durableStatus,
+          retry_state: retryState,
+        })
         trace('SLOT_FINALLY_END', {
           queue_fragment: abbreviateQueueId(slot.queueId),
           active_slots_after: activeSlots.size,
