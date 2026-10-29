@@ -214,9 +214,11 @@ export function formatKilograms(micro) {
   return fraction ? `${whole.toString()}.${fraction}` : whole.toString()
 }
 
-export function presentOrderWeight(assessment) {
-  const source = assessment || unavailableAssessment()
+export function presentOrderWeight(assessment, options = {}) {
+  const source = options.itemsError ? unavailableAssessment() : (assessment || unavailableAssessment())
+  const reason = options.itemsError ? 'items' : (source.status === 'UNAVAILABLE' ? 'catalog' : null)
   const complete = source.status === 'COMPLETE'
+  const hasConfirmedWeight = complete || (source.status === 'PARTIAL' && source.knownMicro > 0n)
   const overLimit = complete && source.knownMicro > source.limitMicro
   const remainingMicro = complete ? source.limitMicro - source.knownMicro : null
   const percentTenths = complete
@@ -227,7 +229,8 @@ export function presentOrderWeight(assessment) {
     : null
   return {
     status: source.status,
-    knownKg: formatKilograms(source.knownMicro),
+    reason,
+    knownKg: hasConfirmedWeight ? formatKilograms(source.knownMicro) : null,
     calculated: source.calculated || 0,
     missing: source.missing || 0,
     percent: percentTenths == null ? null : (percentTenths / 10).toFixed(1),
@@ -236,6 +239,22 @@ export function presentOrderWeight(assessment) {
     estimateVehicles,
     lines: source.lines || [],
   }
+}
+
+export function orderWeightMessage(view) {
+  if (!view || view.reason === 'items') {
+    return 'The item list could not be loaded. The order weight is not shown.'
+  }
+  if (view.reason === 'catalog' || view.status === 'UNAVAILABLE') {
+    return 'The weight catalog could not be loaded. The order weight is not shown.'
+  }
+  if (view.status === 'PARTIAL' && view.knownKg == null) {
+    return 'No confirmed weight yet. The order total is not available.'
+  }
+  if (view.status === 'PARTIAL') {
+    return 'Some physical lines still need a weight. This is not a vehicle recommendation.'
+  }
+  return 'All physical lines have a validated weight.'
 }
 
 let catalogPromise = null

@@ -4,14 +4,9 @@ import {
   fetchAtaCatalog,
   formatKilograms,
   loadOrderWeight,
+  orderWeightMessage,
   presentOrderWeight,
 } from '../lib/orderWeight'
-
-const STATUS_COPY = {
-  COMPLETE: 'All physical lines have a validated weight.',
-  PARTIAL: 'Some physical lines still need a weight. This is not a vehicle recommendation.',
-  UNAVAILABLE: 'The weight catalog could not be read. The item list is unchanged.',
-}
 
 function ruleText(line) {
   if (line.disposition !== 'calculated') {
@@ -30,7 +25,7 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
     let cancelled = false
     setView(null)
     if (itemsError) {
-      setView(presentOrderWeight({ status: 'UNAVAILABLE', knownMicro: 0n, calculated: 0, missing: 0, lines: [], limitMicro: 1200000000n }))
+      setView(presentOrderWeight(null, { itemsError: true }))
       return undefined
     }
     loadOrderWeight(items, () => fetchAtaCatalog(supabase)).then((result) => {
@@ -62,17 +57,27 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
       <div style={{ background: tone.background, color: tone.color, borderRadius: '8px', padding: '12px 14px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
           <div>
-            <div style={{ fontSize: '20px', fontWeight: '600', color: '#1C1C1E' }}>{view.knownKg} kg</div>
-            <div style={{ fontSize: '12px', marginTop: '2px' }}>
-              {view.status === 'PARTIAL' ? 'Known weight so far' : view.status === 'COMPLETE' ? 'Calculated weight' : 'Weight unavailable'}
+            {view.knownKg != null ? (
+              <>
+                <div style={{ fontSize: '20px', fontWeight: '600', color: '#1C1C1E' }}>{view.knownKg} kg</div>
+                <div style={{ fontSize: '12px', marginTop: '2px' }}>
+                  {view.status === 'PARTIAL' ? 'Known weight so far' : 'Calculated weight'}
+                </div>
+              </>
+            ) : (
+              <div style={{ fontSize: '16px', fontWeight: '600', color: '#1C1C1E' }}>
+                {view.status === 'PARTIAL' ? 'Weight not confirmed' : 'Weight unavailable'}
+              </div>
+            )}
+          </div>
+          {view.reason == null && (
+            <div style={{ fontSize: '12px', textAlign: 'right' }}>
+              <div>{view.calculated} calculated</div>
+              <div>{view.missing} without a confirmed weight</div>
             </div>
-          </div>
-          <div style={{ fontSize: '12px', textAlign: 'right' }}>
-            <div>{view.calculated} calculated</div>
-            <div>{view.missing} without a confirmed weight</div>
-          </div>
+          )}
         </div>
-        <div style={{ fontSize: '12px', marginTop: '8px', lineHeight: 1.5 }}>{STATUS_COPY[view.status]}</div>
+        <div style={{ fontSize: '12px', marginTop: '8px', lineHeight: 1.5 }}>{orderWeightMessage(view)}</div>
         <div style={{ fontSize: '12px', marginTop: '6px' }}>Informed Luton limit: 1,200 kg.</div>
         {view.percent != null && (
           <div style={{ fontSize: '12px', marginTop: '4px' }}>

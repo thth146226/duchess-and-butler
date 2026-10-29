@@ -2,6 +2,7 @@ import {
   assessOrderWeight,
   formatKilograms,
   loadOrderWeight,
+  orderWeightMessage,
   presentOrderWeight,
 } from './orderWeight'
 
@@ -109,9 +110,35 @@ describe('order weight', () => {
     })
     const view = presentOrderWeight(result)
     expect(view.status).toBe('UNAVAILABLE')
-    expect(view.knownKg).toBe('0')
+    expect(view.reason).toBe('catalog')
+    expect(view.knownKg).toBeNull()
+    expect(orderWeightMessage(view)).toBe('The weight catalog could not be loaded. The order weight is not shown.')
     expect(view.remainingKg).toBeNull()
     expect(view.estimateVehicles).toBeNull()
+  })
+
+  test('a physical order with no confirmed weight is not presented as 0 kg', () => {
+    const missing = presentOrderWeight(assessOrderWeight([orderItem({ item_name: 'Unlisted Bowl' })], []))
+    const zero = presentOrderWeight(assessOrderWeight([orderItem()], [catalogItem({ weight_per_unit: '0' })]))
+    const itemsFailed = presentOrderWeight(null, { itemsError: true })
+    expect(missing.status).toBe('PARTIAL')
+    expect(zero.status).toBe('PARTIAL')
+    expect(missing.knownKg).toBeNull()
+    expect(zero.knownKg).toBeNull()
+    expect(itemsFailed.knownKg).toBeNull()
+    expect(orderWeightMessage(missing)).toBe('No confirmed weight yet. The order total is not available.')
+    expect(orderWeightMessage(itemsFailed)).toBe('The item list could not be loaded. The order weight is not shown.')
+    expect(orderWeightMessage(itemsFailed)).not.toBe(orderWeightMessage(presentOrderWeight(null)))
+  })
+
+  test('a complete order can show 0 kg when every physical weight is known', () => {
+    const view = presentOrderWeight(assessOrderWeight(
+      [orderItem({ quantity: 0 })],
+      [catalogItem({ pieces_per_unit: 10, weight_per_unit: '1.25' })],
+    ))
+    expect(view.status).toBe('COMPLETE')
+    expect(view.knownKg).toBe('0')
+    expect(view.reason).toBeNull()
   })
 
   test('reports capacity only when every physical line is validated', () => {

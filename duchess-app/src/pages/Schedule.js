@@ -1570,7 +1570,7 @@ function RunDetailItems({ run }) {
   }
   if (loading) return <div style={{ color: '#9CA3AF', fontSize: '13px' }}>Loading items…</div>
   if (itemsError) {
-    return <div style={{ color: '#9CA3AF', fontSize: '13px' }}>No line items synced yet.</div>
+    return <OrderWeightSection key={run.jobId} jobId={run.jobId} items={[]} itemsError />
   }
   if (!items.length) return <div style={{ color: '#9CA3AF', fontSize: '13px' }}>No line items synced yet.</div>
   return (
