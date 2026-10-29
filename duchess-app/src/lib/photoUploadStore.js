@@ -415,8 +415,12 @@ function createPhotoUploadStore(options = {}) {
     }))
   }
 
-  async function mapRemoteInspectDuringUpload(enqueue, drain, inspectResult) {
+  async function mapRemoteInspectDuringUpload(enqueue, drain, inspectResult, session) {
     if (inspectResult && inspectResult.kind === REMOTE_KINDS.REMOTE_COMPLETE) {
+      trace('RECONCILIATION_FINISHED', {
+        queue_fragment: abbreviateQueueId(session.record.queue_id),
+        outcome: REMOTE_KINDS.REMOTE_COMPLETE,
+      })
       const nowMs = now()
       const persisted = await enqueue((record) => applyEvent(
         record,
@@ -441,6 +445,10 @@ function createPhotoUploadStore(options = {}) {
       return began
     }
     if (inspectResult && inspectResult.kind === REMOTE_KINDS.REMOTE_INCOMPLETE) {
+      trace('RECONCILIATION_FINISHED', {
+        queue_fragment: abbreviateQueueId(session.record.queue_id),
+        outcome: REMOTE_KINDS.REMOTE_INCOMPLETE,
+      })
       const nowMs = now()
       return enqueue((record) => applyEvent(
         record,
@@ -456,8 +464,12 @@ function createPhotoUploadStore(options = {}) {
     return drain()
   }
 
-  async function handleRemoteErrorDuringUpload(enqueue, error) {
+  async function handleRemoteErrorDuringUpload(enqueue, error, session) {
     const code = errorCode(error)
+    trace('RECONCILIATION_FINISHED', {
+      queue_fragment: abbreviateQueueId(session && session.record ? session.record.queue_id : ''),
+      outcome: code || 'UNKNOWN_ERROR',
+    })
     const httpStatus = errorHttpStatus(error)
     if (code === REMOTE_ERROR_CODES.REMOTE_AUTH_OR_PERMISSION) {
       return persistPause(enqueue, code)
@@ -476,6 +488,10 @@ function createPhotoUploadStore(options = {}) {
   }
 
   async function finishDone(enqueue, drain, session, event, dbRowId) {
+    trace('RECONCILIATION_FINISHED', {
+      queue_fragment: abbreviateQueueId(session.record.queue_id),
+      outcome: typeof event === 'string' ? event : 'UNKNOWN_ERROR',
+    })
     const nowMs = now()
     const persisted = await enqueue((record) => applyEvent(record, event, nowMs, {
       db_row_id: dbRowId,
@@ -732,6 +748,15 @@ function createPhotoUploadStore(options = {}) {
         if (!Number.isInteger(bytesUploaded) || !Number.isInteger(bytesTotal)) {
           return
         }
+        const percent = bytesTotal > 0 ? Math.floor((bytesUploaded * 100) / bytesTotal) : 0
+        const bucket = Math.min(100, Math.floor(percent / 25) * 25)
+        if (session.lastProgressBucket !== bucket) {
+          session.lastProgressBucket = bucket
+          trace('TUS_PROGRESS', {
+            queue_fragment: abbreviateQueueId(session.record.queue_id),
+            percent: bucket,
+          })
+        }
         const observedAt = now()
         if (
           session.lastProgressAt != null
@@ -755,6 +780,10 @@ function createPhotoUploadStore(options = {}) {
     })
 
     activeUploads.set(session.record.queue_id, handle)
+    trace('TUS_STARTED', {
+      queue_fragment: abbreviateQueueId(session.record.queue_id),
+      has_tus_url: isNonEmptyString(session.record.tus_upload_url),
+    })
     if (pendingRetire.delete(session.record.queue_id)) {
       abortHandle(handle)
     }
@@ -768,6 +797,13 @@ function createPhotoUploadStore(options = {}) {
     } finally {
       unregisterUpload(session.record.queue_id)
     }
+    trace('TUS_FINISHED', {
+      queue_fragment: abbreviateQueueId(session.record.queue_id),
+      outcome: transportError
+        ? (errorCode(transportError) || 'UNKNOWN_ERROR')
+        : (transportResult && typeof transportResult.kind === 'string' ? transportResult.kind : 'UNKNOWN_ERROR'),
+      http_status: transportError ? errorHttpStatus(transportError) : null,
+    })
 
     const drained = await drain()
     if (drained === PHOTO_UPLOAD_WORKER_OUTCOMES.WORKER_FENCED || session.fenced) {
@@ -847,7 +883,7 @@ function createPhotoUploadStore(options = {}) {
         expectedSize: session.record.file_size,
       })
     } catch (error) {
-      await handleRemoteErrorDuringUpload(enqueue, error)
+      await handleRemoteErrorDuringUpload(enqueue, error, session)
       return drain()
     }
 
@@ -855,7 +891,7 @@ function createPhotoUploadStore(options = {}) {
       return PHOTO_UPLOAD_WORKER_OUTCOMES.WORKER_FENCED
     }
 
-    const mapped = await mapRemoteInspectDuringUpload(enqueue, drain, inspectResult)
+    const mapped = await mapRemoteInspectDuringUpload(enqueue, drain, inspectResult, session)
     if (mapped === PHOTO_UPLOAD_WORKER_OUTCOMES.WORKER_FENCED || session.fenced) {
       return PHOTO_UPLOAD_WORKER_OUTCOMES.WORKER_FENCED
     }
@@ -867,6 +903,7 @@ function createPhotoUploadStore(options = {}) {
 
   async function executeClaimedRecord(record, fence = {}) {
     const { session, enqueue, drain } = createSession(record, fence)
+    const startedAt = now()
     try {
       if (record.status === PHOTO_UPLOAD_STATUSES.UPLOADING) {
         lastWorkerOutcome = await runUploadPhase(enqueue, drain, session)
@@ -875,6 +912,12 @@ function createPhotoUploadStore(options = {}) {
       } else {
         lastWorkerOutcome = await drain()
       }
+      trace('WORKER_FINISHED', {
+        queue_fragment: abbreviateQueueId(record.queue_id),
+        outcome: typeof lastWorkerOutcome === 'string' ? lastWorkerOutcome : 'UNKNOWN_ERROR',
+        status: session.record.status,
+        duration_ms: Math.max(0, now() - startedAt),
+      })
       return lastWorkerOutcome
     } finally {
       unregisterUpload(record.queue_id)

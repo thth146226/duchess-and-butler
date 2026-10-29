@@ -48,7 +48,7 @@ export default function PhotoUploadDiagnosticPanel() {
   async function copyTrace() {
     try {
       if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-        await navigator.clipboard.writeText(trace)
+        await navigator.clipboard.writeText(`${JSON.stringify(summary)}\n${trace}`)
         setCopyNote('Copied')
         return
       }
