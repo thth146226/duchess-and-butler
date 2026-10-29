@@ -13,6 +13,23 @@ export function normalizeCatalogName(value) {
     .replace(/\s+/g, ' ')
 }
 
+// Exact, reviewed alias: the dimensions in inches are the same as the cm name.
+// Do NOT automatically alias different fabric, colour, size, or weight.
+const VERIFIED_ATA_NAME_ALIASES = new Map([
+  [
+    normalizeCatalogName('Duchess Drape Iris White Tablecloth 245cm x 350cm (96" x 137")'),
+    normalizeCatalogName('Duchess Drape Iris White Tablecloth 245cm x 350cm'),
+  ],
+])
+
+function findCatalogRule(index, orderName) {
+  const normalized = normalizeCatalogName(orderName)
+  const direct = index.get(normalized)
+  if (direct) return direct
+  const alias = VERIFIED_ATA_NAME_ALIASES.get(normalized)
+  return alias ? index.get(alias) : undefined
+}
+
 function asNonNegativeInteger(value) {
   if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
     return value
@@ -77,7 +94,10 @@ function packingMode(unitName) {
 function isNonPhysical(item) {
   const opportunity = String(item.opportunity_item_type_name || item.opportunityItemType || '').trim().toLowerCase()
   const transaction = String(item.transaction_type_name || item.transactionType || '').trim().toLowerCase()
-  return opportunity === 'group' || transaction === 'service'
+  // Specifically verified logistics service; other Sale products may be physical.
+  return opportunity === 'group'
+    || transaction === 'service'
+    || (transaction === 'sale' && normalizeCatalogName(item.item_name) === 'delivery collection')
 }
 
 export function indexAtaCatalog(rows) {
@@ -142,7 +162,7 @@ export function assessOrderWeight(items, catalogRows) {
       continue
     }
     const quantity = item ? asNonNegativeInteger(item.quantity) : null
-    const match = index.get(normalizeCatalogName(name))
+    const match = findCatalogRule(index, name)
     if (!match) {
       missing += 1
       lines.push({ id: item && item.id, name, disposition: 'missing', label: 'Weight missing' })
