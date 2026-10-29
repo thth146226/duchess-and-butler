@@ -233,46 +233,37 @@ function sanitize(data) {
   return safe
 }
 
-export function isPhotoUploadDiagnosticsEnabled() {
-  const store = storage()
-  if (store) {
-    try {
-      const flag = store.getItem(PHOTO_UPLOAD_DIAGNOSTICS_ENABLED_KEY)
-      if (flag === '1') {
-        return true
-      }
-      if (flag === '0') {
-        return false
-      }
-    } catch (_error) {
-      return memoryEnabled
-    }
+export function canMaintainPhotoUploadDiagnostics(role) {
+  return role === 'admin' || role === 'operations'
+}
+
+export function isPhotoUploadDebugRequested(search) {
+  try {
+    const params = new URLSearchParams(typeof search === 'string' ? search : '')
+    return params.get('photoUploadDebug') === '1'
+  } catch (_error) {
+    return false
   }
+}
+
+export function isPhotoUploadDiagnosticsVisible({ search, role } = {}) {
+  return canMaintainPhotoUploadDiagnostics(role) && isPhotoUploadDebugRequested(search)
+}
+
+export function isPhotoUploadDiagnosticsEnabled() {
   return memoryEnabled
 }
 
 export function setPhotoUploadDiagnosticsEnabled(enabled) {
   memoryEnabled = Boolean(enabled)
-  const store = storage()
-  if (!store) {
-    return
-  }
-  try {
-    store.setItem(PHOTO_UPLOAD_DIAGNOSTICS_ENABLED_KEY, memoryEnabled ? '1' : '0')
-  } catch (_error) {
-    return
-  }
+}
+
+export function syncPhotoUploadDiagnosticsSession(visible) {
+  memoryEnabled = Boolean(visible)
 }
 
 export function enablePhotoUploadDiagnosticsFromSearch(search) {
-  try {
-    const params = new URLSearchParams(typeof search === 'string' ? search : '')
-    if (params.get('photoUploadDebug') === '1') {
-      setPhotoUploadDiagnosticsEnabled(true)
-    }
-  } catch (_error) {
-    return
-  }
+  memoryEnabled = isPhotoUploadDebugRequested(search)
 }
 
 export function recordPhotoUploadDiagnostic(event, data) {

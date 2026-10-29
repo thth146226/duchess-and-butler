@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
   clearPhotoUploadDiagnostics,
-  isPhotoUploadDiagnosticsEnabled,
   readPhotoUploadDiagnostics,
   subscribePhotoUploadDiagnostics,
   summarizePhotoUploadDiagnostics,
@@ -11,14 +10,7 @@ function formatTrace(events) {
   return events.map((event) => JSON.stringify(event)).join('\n')
 }
 
-export default function PhotoUploadDiagnosticPanel() {
-  const [enabled, setEnabled] = useState(() => {
-    try {
-      return isPhotoUploadDiagnosticsEnabled()
-    } catch (_error) {
-      return false
-    }
-  })
+export default function PhotoUploadDiagnosticPanel({ enabled = false }) {
   const [open, setOpen] = useState(false)
   const [events, setEvents] = useState([])
   const [copyNote, setCopyNote] = useState('')

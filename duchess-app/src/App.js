@@ -6,7 +6,7 @@ import Login from './pages/Login'
 import DriverAccess from './pages/DriverAccess'
 import OfficePhotoUploadRuntime from './components/OfficePhotoUploadRuntime'
 import PhotoUploadDiagnosticPanel from './components/PhotoUploadDiagnosticPanel'
-import { enablePhotoUploadDiagnosticsFromSearch } from './lib/photoUploadDiagnostics'
+import { isPhotoUploadDiagnosticsVisible, syncPhotoUploadDiagnosticsSession } from './lib/photoUploadDiagnostics'
 import Sidebar from './components/Sidebar'
 import Dashboard from './pages/Dashboard'
 import Notifications from './pages/Notifications'
@@ -50,10 +50,12 @@ const pageTitles = {
 }
 
 function AppInner() {
-  enablePhotoUploadDiagnosticsFromSearch(
-    typeof window !== 'undefined' && window.location ? window.location.search : ''
-  )
   const { user, profile, loading } = useAuth()
+  const diagnosticsVisible = isPhotoUploadDiagnosticsVisible({
+    search: typeof window !== 'undefined' && window.location ? window.location.search : '',
+    role: profile && profile.role,
+  })
+  syncPhotoUploadDiagnosticsSession(diagnosticsVisible)
   const [page, setPage] = useState('dashboard')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [scheduleRefreshKey, setScheduleRefreshKey] = useState(0)
@@ -77,7 +79,7 @@ function AppInner() {
     return (
       <>
         <DriverAccess />
-        <PhotoUploadDiagnosticPanel />
+        <PhotoUploadDiagnosticPanel enabled={diagnosticsVisible} />
       </>
     )
   }
@@ -147,7 +149,7 @@ function AppInner() {
   return (
     <>
       <OfficePhotoUploadRuntime />
-      <PhotoUploadDiagnosticPanel />
+      <PhotoUploadDiagnosticPanel enabled={diagnosticsVisible} />
       <style>{`
         @media (max-width: 768px) {
           .sidebar-desktop { transform: translateX(-260px) !important; }
