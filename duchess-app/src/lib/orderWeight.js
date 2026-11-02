@@ -1,3 +1,6 @@
+import { buildAtaCapacityMap, resolveJobItemRule } from './labelGenerator'
+import { planPacking } from './packingPlan'
+
 export const LUTON_LIMIT_KG = 1200
 
 const MICRO_PER_KG = 1000000n
@@ -22,12 +25,16 @@ const VERIFIED_ATA_NAME_ALIASES = new Map([
   ],
 ])
 
-function findCatalogRule(index, orderName) {
+function findCatalogRule(index, orderName, labelsMap) {
   const normalized = normalizeCatalogName(orderName)
   const direct = index.get(normalized)
   if (direct) return direct
   const alias = VERIFIED_ATA_NAME_ALIASES.get(normalized)
-  return alias ? index.get(alias) : undefined
+  if (alias && index.get(alias)) return index.get(alias)
+  if (!labelsMap) return undefined
+  const resolved = resolveJobItemRule({ item_name: orderName }, labelsMap)
+  if (!resolved.matched || !resolved.rule?.name) return undefined
+  return index.get(normalizeCatalogName(resolved.rule.name))
 }
 
 function asNonNegativeInteger(value) {
@@ -205,6 +212,49 @@ function selectedAlternative(alternatives, lineId, selections) {
   return (alternatives || []).find((alternative) => selectionMatches(alternative, choice)) || null
 }
 
+function packingRules(alternatives) {
+  return (alternatives || [])
+    .filter((rule) => packingMode(rule.unitName) === 'container' && rule.piecesPerUnit > 0)
+    .map((rule) => ({
+      id: rule.id,
+      name: rule.name,
+      unitName: rule.unitName,
+      piecesPerUnit: rule.piecesPerUnit,
+      weightKind: rule.weightKind,
+      weightMicro: rule.weightMicro,
+    }))
+}
+
+function ruleFromEntry(entry) {
+  return {
+    id: entry.id,
+    name: entry.name,
+    unitName: entry.unitName,
+    piecesPerUnit: entry.piecesPerUnit,
+    weightKind: entry.weight.kind,
+    weightMicro: entry.weight.kind === 'positive' ? entry.weight.micro : 0n,
+  }
+}
+
+function confirmedPlan(plans, choice, quantity) {
+  if (!choice || typeof choice !== 'object' || !choice.confirmed || choice.quantity !== quantity) {
+    return null
+  }
+  const wanted = Array.isArray(choice.rules) ? choice.rules : []
+  return (plans || []).find((plan) => (
+    plan.fingerprint.rules.length === wanted.length
+    && plan.fingerprint.rules.every((rule, index) => {
+      const other = wanted[index]
+      return other
+        && rule.id === String(other.id)
+        && rule.piecesPerUnit === other.piecesPerUnit
+        && String(rule.unitName || '').toLowerCase() === String(other.unitName || '').toLowerCase()
+        && rule.weightMicro === String(other.weightMicro)
+        && rule.count === other.count
+    })
+  )) || null
+}
+
 function containerCount(quantity, entry) {
   const mode = packingMode(entry.unitName)
   if (mode === 'unknown' || entry.piecesPerUnit == null || quantity == null) {
@@ -218,6 +268,7 @@ function containerCount(quantity, entry) {
 
 export function assessOrderWeight(items, catalogRows, selections) {
   const index = catalogRows instanceof Map ? catalogRows : indexAtaCatalog(catalogRows)
+  const labelsMap = catalogRows instanceof Map ? null : buildAtaCapacityMap(catalogRows)
   const lines = []
   let knownMicro = 0n
   let previewMicro = 0n
@@ -231,48 +282,86 @@ export function assessOrderWeight(items, catalogRows, selections) {
       continue
     }
     const quantity = item ? asNonNegativeInteger(item.quantity) : null
-    const match = findCatalogRule(index, name)
+    const match = findCatalogRule(index, name, labelsMap)
     if (!match) {
       missing += 1
       lines.push({ id: item && item.id, name, disposition: 'missing', label: 'Weight missing' })
       continue
     }
     if (match.status === 'ambiguous') {
-      missing += 1
       const alternatives = match.alternatives || []
-      const chosen = selectedAlternative(alternatives, item && item.id, selections)
-      const chosenEntry = chosen && {
-        unitName: chosen.unitName,
-        piecesPerUnit: chosen.piecesPerUnit,
-        weight: { kind: chosen.weightKind, micro: chosen.weightMicro },
+      const rules = packingRules(alternatives)
+      const planned = planPacking({ quantity, rules })
+      const choice = selections && item && selections[item.id]
+      const accepted = confirmedPlan(planned.plans, choice, quantity)
+      if (accepted && accepted.exact && accepted.weightState === 'calculated') {
+        knownMicro += accepted.calculatedMicro
+        calculated += 1
+        lines.push({
+          id: item.id,
+          name,
+          disposition: 'calculated',
+          label: 'Confirmed weight',
+          alternatives,
+          plans: planned.plans,
+          plan: accepted,
+          planConfirmed: true,
+          weightMicro: accepted.calculatedMicro,
+          containers: accepted.boxCount,
+        })
+        continue
       }
-      const containers = chosenEntry && chosen.weightKind === 'positive'
-        ? containerCount(quantity, chosenEntry)
+      missing += 1
+      if (accepted && accepted.weightState === 'unknown-partial') {
+        const partialBox = accepted.boxes.find((box) => !box.full)
+        lines.push({
+          id: item.id,
+          name,
+          disposition: 'partial_box',
+          label: 'Unknown weight',
+          alternatives,
+          plans: planned.plans,
+          plan: accepted,
+          planConfirmed: true,
+          piecesPerUnit: partialBox ? partialBox.piecesPerUnit : null,
+          unitName: partialBox ? partialBox.unitName : '',
+          partialPieces: partialBox ? partialBox.piecesEach : null,
+          unfilled: partialBox ? partialBox.unfilled : null,
+        })
+        continue
+      }
+      const chosen = selectedAlternative(alternatives, item && item.id, selections)
+      const single = chosen && chosen.weightKind === 'positive'
+        ? planPacking({ quantity, rules: packingRules([chosen]) }).plans[0]
         : null
-      if (!chosen || chosen.weightKind !== 'positive' || containers == null) {
+      if (!single) {
         lines.push({
           id: item && item.id,
           name,
           disposition: 'ambiguous',
           label: 'Needs verification',
           alternatives,
+          plans: planned.plans,
         })
         continue
       }
-      const weightMicro = BigInt(containers) * chosen.weightMicro
-      previewMicro += weightMicro
-      previewCount += 1
+      if (single.exact && single.weightState === 'calculated') {
+        previewMicro += single.calculatedMicro
+        previewCount += 1
+      }
       lines.push({
         id: item.id,
         name,
         disposition: 'preview',
         label: 'Packaging preview',
         alternatives,
+        plans: planned.plans,
+        plan: single,
         selectedId: chosen.id,
-        containers,
+        containers: single.boxCount,
         piecesPerUnit: chosen.piecesPerUnit,
         unitName: chosen.unitName,
-        weightMicro,
+        weightMicro: single.exact ? single.calculatedMicro : 0n,
         containerMicro: chosen.weightMicro,
       })
       continue
@@ -292,8 +381,31 @@ export function assessOrderWeight(items, catalogRows, selections) {
       })
       continue
     }
+    if (mode === 'container' && quantity > 0 && quantity % entry.piecesPerUnit !== 0) {
+      const planned = planPacking({ quantity, rules: [ruleFromEntry(entry)] })
+      const plan = planned.plans[0] || null
+      missing += 1
+      lines.push({
+        id: item.id,
+        name,
+        disposition: 'partial_box',
+        label: 'Unknown weight',
+        plan,
+        plans: planned.plans,
+        containers: plan ? plan.boxes.filter((box) => box.full).reduce((sum, box) => sum + box.count, 0) : 0,
+        piecesPerUnit: entry.piecesPerUnit,
+        unitName: entry.unitName,
+        containerMicro: entry.weight.micro,
+        partialPieces: plan ? plan.boxes.find((box) => !box.full)?.piecesEach : quantity,
+        unfilled: plan ? plan.unfilledPieces : null,
+      })
+      continue
+    }
     const containers = containerCount(quantity, entry)
     const weightMicro = BigInt(containers) * entry.weight.micro
+    const planned = quantity > 0 && quantity / entry.piecesPerUnit <= 30
+      ? planPacking({ quantity, rules: [ruleFromEntry(entry)] })
+      : null
     knownMicro += weightMicro
     calculated += 1
     lines.push({
@@ -306,6 +418,8 @@ export function assessOrderWeight(items, catalogRows, selections) {
       weightMicro,
       containerMicro: entry.weight.micro,
       mode,
+      plan: planned ? planned.plans[0] || null : null,
+      planConfirmed: true,
     })
   }
   const physical = calculated + missing
@@ -344,7 +458,16 @@ export function measurementRequest(line) {
     return 'No catalog packing rule. Do not copy another product weight.'
   }
   if (line.disposition === 'ambiguous') {
-    return 'Choose the packed box used for this order. The choice is a preview and is not saved.'
+    return 'Labels / ATA can suggest a packing plan. The suggestion is a preview and is not saved.'
+  }
+  if (line.disposition === 'partial_box') {
+    const unit = String(line.unitName || 'pack').toLowerCase()
+    const filled = line.partialPieces || line.plan?.boxes?.find((box) => !box.full)?.piecesEach
+    const capacity = line.piecesPerUnit
+    if (filled && capacity) {
+      return `A partly filled ${unit} of ${capacity} holds ${filled}. ATA records the full ${unit} weight, not the weight of ${filled} pieces.`
+    }
+    return 'ATA records the full pack weight, not the weight of a partly filled pack.'
   }
   return ''
 }

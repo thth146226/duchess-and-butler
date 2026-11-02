@@ -11,13 +11,34 @@ import {
 } from '../lib/orderWeight'
 
 function ruleText(line) {
+  if (line.plan && line.plan.weightState === 'unknown-partial') {
+    return 'Partly filled pack. The full pack weight is not an exact weight.'
+  }
   if (line.disposition !== 'calculated' && line.disposition !== 'preview') {
     return line.label || ''
+  }
+  if (!line.unitName || line.containerMicro == null) {
+    return line.plan ? planText(line.plan) : (line.label || '')
   }
   const unit = line.unitName.toLowerCase()
   const container = line.containers === 1 ? unit : `${unit}s`
   const each = formatKilograms(line.containerMicro)
   return `${line.containers} ${container} × ${each} kg`
+}
+
+function planText(plan) {
+  const boxes = (plan.boxes || []).map((box) => {
+    const unit = String(box.unitName || 'pack').toLowerCase()
+    if (!box.full) {
+      return `${box.piecesEach} in a ${unit} of ${box.piecesPerUnit}, ${box.unfilled} empty`
+    }
+    const noun = box.count === 1 ? unit : (unit === 'box' ? 'boxes' : `${unit}s`)
+    return `${box.count} ${noun} of ${box.piecesPerUnit}`
+  }).join(' + ')
+  if (plan.weightState === 'calculated') {
+    return `${boxes} · ${formatKilograms(plan.calculatedMicro)} kg`
+  }
+  return `${boxes} · partly filled, weight unknown`
 }
 
 function alternativeText(alternative) {
@@ -60,19 +81,26 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
     }
   }, [jobId, items, itemsError, packs])
 
-  function choosePack(lineId, alternative) {
+  function confirmPlan(lineId, plan) {
     setPacksByJob((current) => ({
       ...current,
       [jobId]: {
         ...(current[jobId] || {}),
         [lineId]: {
-          id: alternative.id,
-          piecesPerUnit: alternative.piecesPerUnit,
-          unitName: alternative.unitName,
-          weightMicro: alternative.weightMicro == null ? '0' : alternative.weightMicro.toString(),
+          confirmed: true,
+          quantity: plan.fingerprint.quantity,
+          rules: plan.fingerprint.rules,
         },
       },
     }))
+  }
+
+  function clearPlan(lineId) {
+    setPacksByJob((current) => {
+      const jobPacks = { ...(current[jobId] || {}) }
+      delete jobPacks[lineId]
+      return { ...current, [jobId]: jobPacks }
+    })
   }
 
   if (!view) {
@@ -115,6 +143,13 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
           )}
         </div>
         <div style={{ fontSize: '12px', marginTop: '8px', lineHeight: 1.5 }}>{orderWeightMessage(view)}</div>
+        {view.reason == null && (
+          <div style={{ fontSize: '12px', marginTop: '6px', lineHeight: 1.5 }}>
+            <div>Confirmed weight: {view.knownKg != null ? `${view.knownKg} kg` : 'not available'}</div>
+            <div>Packaging preview: {view.previewKg ? `${view.previewKg} kg. This choice is not saved.` : 'not confirmed'}</div>
+            <div>Unknown weight: {view.missing} {view.missing === 1 ? 'line' : 'lines'}</div>
+          </div>
+        )}
         {view.previewKg && (
           <div style={{ fontSize: '12px', marginTop: '6px', lineHeight: 1.5 }}>
             Packaging preview: {view.previewKg} kg. This choice is not saved.
@@ -155,21 +190,44 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
                   </div>
                   {note && <div style={{ color: '#6B6860', marginTop: '4px', lineHeight: 1.45 }}>{note}</div>}
                   {choices.length > 0 && (
-                    <fieldset style={{ margin: '8px 0 0', padding: 0, border: 0, minWidth: 0 }}>
-                      <legend style={{ fontSize: '12px', color: '#6B6860', marginBottom: '4px' }}>Packed box for this order</legend>
+                    <ul style={{ margin: '8px 0 0', padding: 0, listStyle: 'none' }}>
                       {choices.map((alternative) => (
-                        <label key={alternative.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', minHeight: '44px', width: '100%', color: '#1C1C1E' }}>
-                          <input
-                            type="radio"
-                            name={`order-pack-${jobId}-${line.id}`}
-                            value={alternative.id}
-                            checked={line.selectedId === alternative.id}
-                            onChange={() => choosePack(line.id, alternative)}
-                          />
-                          <span>{alternativeText(alternative)}</span>
-                        </label>
+                        <li key={alternative.id} style={{ color: '#1C1C1E', lineHeight: 1.45 }}>{alternativeText(alternative)}</li>
                       ))}
-                    </fieldset>
+                    </ul>
+                  )}
+                  {(line.plans || []).length > 0 && (
+                    <div style={{ marginTop: '8px' }}>
+                      <div style={{ fontSize: '12px', color: '#6B6860', marginBottom: '4px' }}>Labels / ATA packing</div>
+                      {line.plans.map((plan) => {
+                        const selected = line.planConfirmed && line.plan && line.plan.signature === plan.signature
+                        return (
+                          <button
+                            key={plan.signature}
+                            type="button"
+                            onClick={() => confirmPlan(line.id, plan)}
+                            style={{ display: 'block', minHeight: '44px', width: '100%', textAlign: 'left', marginTop: '4px', color: '#1C1C1E' }}
+                          >
+                            {selected ? 'Confirmed' : (plan.role === 'suggestion' ? 'Confirm Labels suggestion' : 'Confirm alternative')}
+                            {' · '}
+                            {plan.origin}
+                            {' · '}
+                            {selected ? (plan.weightState === 'calculated' ? 'confirmed weight' : 'selected, weight unknown') : 'not confirmed'}
+                            {' · '}
+                            {planText(plan)}
+                          </button>
+                        )
+                      })}
+                      {line.planConfirmed && (line.plans || []).length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => clearPlan(line.id)}
+                          style={{ display: 'block', minHeight: '44px', width: '100%', textAlign: 'left', marginTop: '4px' }}
+                        >
+                          Clear plan
+                        </button>
+                      )}
+                    </div>
                   )}
                 </li>
               )

@@ -161,23 +161,71 @@ describe('OrderWeightSection', () => {
     expect(view.text()).toContain('50 per box · 4.1 kg')
     expect(view.text()).toContain('100 per box · 7.9 kg')
     expect(view.text()).toContain('Needs verification')
-    expect(view.text()).not.toContain('Packaging preview')
-    const labels = view.container.querySelectorAll('label')
-    expect(labels[0].style.minHeight).toBe('44px')
-    expect(labels[0].style.width).toBe('100%')
-    const heavy = view.container.querySelector('input[value="heavy"]')
+    expect(view.text()).toContain('Labels / ATA')
+    expect(view.text()).not.toContain('Packaging preview: 7.9 kg')
+    const buttons = [...view.container.querySelectorAll('button')]
+    expect(buttons[0].style.minHeight).toBe('44px')
+    expect(buttons[0].style.width).toBe('100%')
+    const heavy = buttons.find((button) => button.textContent.includes('box of 100'))
     await act(async () => {
       heavy.click()
       await new Promise((done) => setTimeout(done, 0))
     })
-    expect(view.text()).toContain('Packaging preview: 7.9 kg')
-    expect(view.text()).toContain('This choice is not saved')
+    expect(view.text()).toContain('partly filled')
+    expect(view.text()).toContain('not the weight of 20 pieces')
+    expect(view.text()).not.toContain('Packaging preview: 7.9 kg')
     expect(view.text()).not.toContain('Calculated weight')
     expect(view.text()).not.toContain('Remaining capacity')
     view.rerender(<OrderWeightSection jobId="job-2" items={[spoon]} itemsError={false} />)
     await view.settle()
     expect(view.text()).toContain('Needs verification')
     expect(view.text()).not.toContain('Packaging preview: 7.9 kg')
+    view.unmount()
+  })
+
+  test('a dessert-plate suggestion can be confirmed without becoming a vehicle recommendation', async () => {
+    mockCatalog({
+      data: [
+        { id: 'small', name: 'Prima Dessert Plate', unit_name: 'box', pieces_per_unit: 15, weight_per_unit: '6.3', active: true },
+        { id: 'large', name: 'Prima Dessert Plate', unit_name: 'box', pieces_per_unit: 30, weight_per_unit: '16.1', active: true },
+      ],
+      error: null,
+    })
+    const plate = {
+      id: 'plate',
+      item_name: 'Prima Dessert Plate',
+      quantity: 30,
+      opportunity_item_type_name: 'Principal',
+      transaction_type_name: 'Rental',
+    }
+    const view = await render(
+      <OrderWeightSection
+        jobId="job-1"
+        items={[plate, { ...plate, id: 'gap', item_name: 'Unlisted Bowl', quantity: 4 }]}
+        itemsError={false}
+      />,
+    )
+    await view.settle()
+    expect(view.text()).toContain('Confirm Labels suggestion')
+    expect(view.text()).toContain('1 box of 30')
+    expect(view.text()).toContain('2 boxes of 15')
+    expect(view.text()).toContain('not confirmed')
+    expect(view.text()).not.toContain('Remaining capacity')
+    const suggestion = [...view.container.querySelectorAll('button')].find((button) => button.textContent.includes('1 box of 30'))
+    await act(async () => {
+      suggestion.click()
+      await new Promise((done) => setTimeout(done, 0))
+    })
+    expect(view.text()).toContain('Confirmed weight: 16.1 kg')
+    expect(view.text()).not.toContain('Confirmed weight: 12.6 kg')
+    expect(view.text()).not.toContain('Remaining capacity')
+    const clear = [...view.container.querySelectorAll('button')].find((button) => button.textContent.includes('Clear plan'))
+    await act(async () => {
+      clear.click()
+      await new Promise((done) => setTimeout(done, 0))
+    })
+    expect(view.text()).toContain('Confirmed weight: not available')
+    expect(view.text()).not.toContain('Remaining capacity')
     view.unmount()
   })
 })

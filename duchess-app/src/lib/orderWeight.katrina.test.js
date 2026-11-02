@@ -33,9 +33,13 @@ const KATRINA = [
   ['Platters & Serviceware', 0],
 ]
 
-const positiveNames = [
-  'Prima Dinner Plate', 'Lily Water / Grand Vin Glass', 'Lily Flute Glass',
-  'Lily Red Wine Glass', 'Tulip Water Glass - Dusty Rose', 'Perlette Napkin - Cream',
+const positiveRules = [
+  ['Prima Dinner Plate', 15, '1.5'],
+  ['Lily Water / Grand Vin Glass', 15, '1.5'],
+  ['Lily Flute Glass', 28, '3'],
+  ['Lily Red Wine Glass', 24, '3'],
+  ['Tulip Water Glass - Dusty Rose', 15, '1.5'],
+  ['Perlette Napkin - Cream', 20, '2'],
 ]
 const zeroNames = [
   ['Canvas Dinner Plate - Linen', 15],
@@ -54,7 +58,7 @@ const ambiguousNames = [
 const testCatalog = [
   // Synthetic fixture weights. These are NOT real ATA measurements, and must
   // never be copied to production records or presented as Katrina's real total.
-  ...positiveNames.map(name => ({ name, unit_name: 'box', pieces_per_unit: 10, weight_per_unit: '1', active: true })),
+  ...positiveRules.map(([name, pieces, weight]) => ({ name, unit_name: 'box', pieces_per_unit: pieces, weight_per_unit: weight, active: true })),
   ...zeroNames.map(([name, pieces]) => ({ name, unit_name: name.includes('Tablecloth') ? 'bag' : 'box', pieces_per_unit: pieces, weight_per_unit: '0', active: true })),
   ...ambiguousNames.flatMap(name => [
     { name, unit_name: 'box', pieces_per_unit: 50, weight_per_unit: '4', active: true },
@@ -99,7 +103,7 @@ describe('Katrina QDB08128 full order: 30 line regression', () => {
       { ...line('Prima Dinner Plate', 3, 3), transaction_type_name: 'Sale' },
     ]
     const assessed = assessOrderWeight(items, testCatalog)
-    expect(assessed.lines.map(l => l.disposition)).toEqual(['not_physical', 'missing', 'calculated'])
+    expect(assessed.lines.map(l => l.disposition)).toEqual(['not_physical', 'missing', 'partial_box'])
   })
 
   test('Iris White exact alias never borrows Magnolia weight or a different size', () => {
@@ -139,10 +143,17 @@ describe('Katrina QDB08128 read-only ATA figures', () => {
     const catalog = REAL_CONFIRMED.map(([name, , unit, pieces, weight]) => ({
       name, unit_name: unit, pieces_per_unit: pieces, weight_per_unit: weight, active: true,
     }))
+    const audit = assessOrderWeight(items.map((item) => (
+      item.item_name === 'Perlette Napkin - Cream' ? { ...item, quantity: 70 } : item
+    )), catalog)
+    expect(audit.status).toBe('COMPLETE')
+    expect(formatKilograms(audit.knownMicro)).toBe('63.8')
+    expect(audit.previewMicro).toBe(0n)
     const assessed = assessOrderWeight(items, catalog)
-    expect(assessed.status).toBe('COMPLETE')
-    expect(formatKilograms(assessed.knownMicro)).toBe('63.8')
-    expect(assessed.previewMicro).toBe(0n)
+    expect(assessed.status).toBe('PARTIAL')
+    expect(assessed.lines.find((entry) => entry.name === 'Perlette Napkin - Cream').disposition).toBe('partial_box')
+    expect(formatKilograms(assessed.knownMicro)).toBe('59.1')
+    expect(presentOrderWeight(assessed).estimateVehicles).toBeNull()
   })
 
   test('seven ambiguous packs stay pending until the heavier recorded box is chosen', () => {
@@ -183,7 +194,8 @@ describe('Katrina QDB08128 read-only ATA figures', () => {
     expect(preview.lines.map((entry) => entry.piecesPerUnit)).toEqual([100, 90, 90, 100, 100, 150, 30])
     expect(view.knownKg).toBeNull()
     expect(view.estimateVehicles).toBeNull()
-    expect(view.previewKg).toBe('59.6')
+    expect(view.previewKg).toBe('16.1')
+    expect(preview.lines.filter((entry) => entry.plan && !entry.plan.exact)).toHaveLength(6)
     expect(measurementRequest(pending.lines[0])).toContain('preview')
   })
 })

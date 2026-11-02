@@ -78,12 +78,19 @@ describe('order weight', () => {
     expect(result.status).toBe('PARTIAL')
   })
 
-  test('rounds a partial container up and keeps an exact container whole', () => {
+  test('does not treat a partly filled container as a full container weight', () => {
     const catalog = [catalogItem({ pieces_per_unit: 15, weight_per_unit: '2' })]
     const partial = assessOrderWeight([orderItem({ quantity: 16 })], catalog)
     const exact = assessOrderWeight([orderItem({ quantity: 15 })], catalog)
-    expect(partial.lines[0].containers).toBe(2)
+    expect(partial.lines[0].disposition).toBe('partial_box')
+    expect(partial.lines[0].containers).toBe(1)
+    expect(partial.lines[0].unfilled).toBe(14)
+    expect(partial.knownMicro).toBe(0n)
+    expect(partial.status).toBe('PARTIAL')
+    expect(presentOrderWeight(partial).estimateVehicles).toBeNull()
     expect(exact.lines[0].containers).toBe(1)
+    expect(exact.status).toBe('COMPLETE')
+    expect(formatKilograms(exact.knownMicro)).toBe('2')
   })
 
   test('handles a large quantity and a zero quantity without losing the rule', () => {
@@ -202,7 +209,8 @@ describe('order weight', () => {
       catalogItem({ id: 'heavy', weight_per_unit: '9', pieces_per_unit: 100 }),
     ]
     const missingChoice = assessOrderWeight([orderItem({ id: 'spoon' })], catalog, { spoon: 'missing-pack' })
-    const heavier = assessOrderWeight([orderItem({ id: 'spoon', quantity: 20 })], catalog, { spoon: 'heavy' })
+    const heavier = assessOrderWeight([orderItem({ id: 'spoon', quantity: 100 })], catalog, { spoon: 'heavy' })
+    const partial = assessOrderWeight([orderItem({ id: 'spoon', quantity: 20 })], catalog, { spoon: 'heavy' })
     const view = presentOrderWeight(heavier)
     expect(missingChoice.lines[0].disposition).toBe('ambiguous')
     expect(heavier.lines[0].disposition).toBe('preview')
@@ -214,6 +222,10 @@ describe('order weight', () => {
     expect(view.knownKg).toBeNull()
     expect(view.estimateVehicles).toBeNull()
     expect(view.remainingKg).toBeNull()
+    expect(partial.previewMicro).toBe(0n)
+    expect(partial.lines[0].plan.exact).toBe(false)
+    expect(partial.lines[0].plan.missingInformation).toContain('partly filled')
+    expect(presentOrderWeight(partial).estimateVehicles).toBeNull()
   })
 
   test('a line without type metadata stays physical', () => {
@@ -349,5 +361,43 @@ describe('ATA catalog cache', () => {
     expect(removed.lines[0].disposition).toBe('ambiguous')
     expect(removed.previewMicro).toBe(0n)
     expect(presentOrderWeight(removed).estimateVehicles).toBeNull()
+  })
+
+  test('confirming an exact dessert-plate plan does not confirm a different combination or a changed rule', () => {
+    const catalog = [
+      catalogItem({ id: 'small', name: 'Prima Dessert Plate', pieces_per_unit: 15, weight_per_unit: '6.3' }),
+      catalogItem({ id: 'large', name: 'Prima Dessert Plate', pieces_per_unit: 30, weight_per_unit: '16.1' }),
+      catalogItem({ id: 'dinner', name: 'Prima Dinner Plate', pieces_per_unit: 15, weight_per_unit: '9' }),
+    ]
+    const plate = orderItem({ id: 'plate', item_name: 'Prima Dessert Plate', quantity: 30 })
+    const suggested = assessOrderWeight([plate], catalog)
+    expect(suggested.lines[0].disposition).toBe('ambiguous')
+    expect(suggested.lines[0].plans[0].origin).toBe('Labels / ATA')
+    expect(suggested.lines[0].plans[0].boxes.map((box) => [box.piecesPerUnit, box.count])).toEqual([[30, 1]])
+    expect(suggested.lines[0].plans.some((plan) => plan.boxes.some((box) => box.id === 'dinner'))).toBe(false)
+    expect(suggested.lines[0].plans.some((plan) => plan.boxes.some((box) => box.piecesPerUnit === 15 && box.count === 2))).toBe(true)
+    expect(suggested.knownMicro).toBe(0n)
+    const confirmation = {
+      confirmed: true,
+      quantity: 30,
+      rules: suggested.lines[0].plans[0].fingerprint.rules,
+    }
+    const confirmed = assessOrderWeight([
+      plate,
+      orderItem({ id: 'gap', item_name: 'Unlisted Bowl', quantity: 4 }),
+    ], catalog, { plate: confirmation })
+    const view = presentOrderWeight(confirmed)
+    expect(confirmed.lines[0].disposition).toBe('calculated')
+    expect(formatKilograms(confirmed.knownMicro)).toBe('16.1')
+    expect(confirmed.status).toBe('PARTIAL')
+    expect(view.estimateVehicles).toBeNull()
+    expect(view.remainingKg).toBeNull()
+    const changedWeight = catalog.map((row) => (
+      row.id === 'large' ? { ...row, weight_per_unit: '10' } : row
+    ))
+    expect(assessOrderWeight([plate], changedWeight, { plate: confirmation }).lines[0].disposition).toBe('ambiguous')
+    expect(assessOrderWeight([
+      orderItem({ id: 'plate', item_name: 'Prima Dessert Plate', quantity: 20 }),
+    ], catalog, { plate: confirmation }).lines[0].disposition).toBe('ambiguous')
   })
 })
