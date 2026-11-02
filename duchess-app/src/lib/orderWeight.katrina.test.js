@@ -1,4 +1,4 @@
-import { assessOrderWeight, presentOrderWeight } from './orderWeight'
+import { assessOrderWeight, formatKilograms, measurementRequest, presentOrderWeight } from './orderWeight'
 
 const KATRINA = [
   ['Prima Dinner Plate', 30],
@@ -88,6 +88,8 @@ describe('Katrina QDB08128 full order: 30 line regression', () => {
     expect(view.estimateVehicles).toBeNull()
     expect(assessed.lines.find(l => l.name === 'Dali Dining Chair').disposition).toBe('missing')
     expect(assessed.lines.find(l => l.name.includes('Iris White')).disposition).toBe('zero_weight')
+    expect(formatKilograms(assessed.knownMicro)).toBe('17')
+    expect(formatKilograms(assessed.knownMicro)).not.toBe('63.8')
   })
 
   test('only the verified Delivery & Collection Sale line is excluded', () => {
@@ -109,5 +111,79 @@ describe('Katrina QDB08128 full order: 30 line regression', () => {
     expect(assessed.lines[0].disposition).toBe('zero_weight')
     const different = assessOrderWeight([line('Duchess Drape Iris White Tablecloth 245cm x 300cm (96" x 118")', 4, 1)], testCatalog)
     expect(different.lines[0].disposition).toBe('missing')
+  })
+})
+
+const REAL_CONFIRMED = [
+  ['Prima Dinner Plate', 30, 'box', 15, '9'],
+  ['Lily Water / Grand Vin Glass', 30, 'crate', 15, '6.9'],
+  ['Lily Flute Glass', 28, 'crate', 28, '9.2'],
+  ['Lily Red Wine Glass', 24, 'crate', 24, '8.1'],
+  ['Tulip Water Glass - Dusty Rose', 30, 'crate', 15, '5'],
+  ['Perlette Napkin - Cream', 20, 'box', 70, '4.7'],
+]
+
+const REAL_ALTERNATIVES = [
+  ['Piccadilly Polished Dessert Spoon', 20, [['spoon-50', 50, '4.1'], ['spoon-100', 100, '7.9']]],
+  ['Piccadilly Polished Dinner Fork', 20, [['fork-50', 50, '4.7'], ['fork-90', 90, '8.4']]],
+  ['Piccadilly Polished Dinner Knife', 20, [['knife-50', 50, '3.9'], ['knife-90', 90, '7.4']]],
+  ['Piccadilly Polished Starter Knife', 20, [['starter-50', 50, '3.5'], ['starter-100', 100, '6.2']]],
+  ['Piccadilly Polished Starter/ Dessert Fork', 40, [['starter-fork-50', 50, '3.8'], ['starter-fork-100', 100, '7.2']]],
+  ['Piccadilly Polished Tea Spoon', 20, [['tea-80', 80, '3.6'], ['tea-150', 150, '6.4']]],
+  ['Prima Dessert Plate', 30, [['dessert-15', 15, '6.3'], ['dessert-30', 30, '16.1']]],
+]
+
+describe('Katrina QDB08128 read-only ATA figures', () => {
+  test('the six confirmed catalog rules still total 63.8 kg and are not the synthetic fixture', () => {
+    const items = REAL_CONFIRMED.map(([name, quantity], idx) => line(name, quantity, idx))
+    const catalog = REAL_CONFIRMED.map(([name, , unit, pieces, weight]) => ({
+      name, unit_name: unit, pieces_per_unit: pieces, weight_per_unit: weight, active: true,
+    }))
+    const assessed = assessOrderWeight(items, catalog)
+    expect(assessed.status).toBe('COMPLETE')
+    expect(formatKilograms(assessed.knownMicro)).toBe('63.8')
+    expect(assessed.previewMicro).toBe(0n)
+  })
+
+  test('seven ambiguous packs stay pending until the heavier recorded box is chosen', () => {
+    const items = REAL_ALTERNATIVES.map(([name, quantity], idx) => line(name, quantity, idx))
+    const catalog = REAL_ALTERNATIVES.flatMap(([name, , packs]) => packs.map(([id, pieces, weight]) => ({
+      id, name, unit_name: 'box', pieces_per_unit: pieces, weight_per_unit: weight, active: true,
+    })))
+    const pending = assessOrderWeight(items, catalog)
+    expect(pending.status).toBe('PARTIAL')
+    expect(pending.calculated).toBe(0)
+    expect(pending.missing).toBe(7)
+    expect(pending.knownMicro).toBe(0n)
+    expect(pending.lines.every((entry) => entry.disposition === 'ambiguous')).toBe(true)
+    expect(pending.lines.map((entry) => entry.alternatives.map((alternative) => (
+      `${alternative.piecesPerUnit}:${formatKilograms(alternative.weightMicro)}`
+    )))).toEqual([
+      ['50:4.1', '100:7.9'],
+      ['50:4.7', '90:8.4'],
+      ['50:3.9', '90:7.4'],
+      ['50:3.5', '100:6.2'],
+      ['50:3.8', '100:7.2'],
+      ['80:3.6', '150:6.4'],
+      ['15:6.3', '30:16.1'],
+    ])
+    const selections = {
+      'KAT-0': 'spoon-100',
+      'KAT-1': 'fork-90',
+      'KAT-2': 'knife-90',
+      'KAT-3': 'starter-100',
+      'KAT-4': 'starter-fork-100',
+      'KAT-5': 'tea-150',
+      'KAT-6': 'dessert-30',
+    }
+    const preview = assessOrderWeight(items, catalog, selections)
+    const view = presentOrderWeight(preview)
+    expect(preview.status).toBe('PARTIAL')
+    expect(preview.lines.every((entry) => entry.disposition === 'preview')).toBe(true)
+    expect(preview.lines.map((entry) => entry.piecesPerUnit)).toEqual([100, 90, 90, 100, 100, 150, 30])
+    expect(view.knownKg).toBeNull()
+    expect(view.estimateVehicles).toBeNull()
+    expect(view.previewKg).toBe('59.6')
+    expect(measurementRequest(pending.lines[0])).toContain('preview')
   })
 })

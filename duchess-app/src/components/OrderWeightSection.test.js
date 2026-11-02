@@ -34,6 +34,11 @@ function render(element) {
           await new Promise((done) => setTimeout(done, 0))
         })
       },
+      rerender(next) {
+        act(() => {
+          root.render(next)
+        })
+      },
       unmount() {
         act(() => {
           root.unmount()
@@ -133,6 +138,46 @@ describe('OrderWeightSection', () => {
     expect(view.text()).toContain('Some physical lines still need a weight.')
     expect(view.text()).not.toContain('Remaining capacity')
     expect(view.text()).not.toContain('Calculated weight')
+    view.unmount()
+  })
+
+  test('an ambiguous pack stays pending until that order chooses one, and the choice does not follow another order', async () => {
+    mockCatalog({
+      data: [
+        { id: 'light', name: 'Piccadilly Polished Dessert Spoon', unit_name: 'box', pieces_per_unit: 50, weight_per_unit: '4.1', active: true },
+        { id: 'heavy', name: 'Piccadilly Polished Dessert Spoon', unit_name: 'box', pieces_per_unit: 100, weight_per_unit: '7.9', active: true },
+      ],
+      error: null,
+    })
+    const spoon = {
+      id: 'spoon',
+      item_name: 'Piccadilly Polished Dessert Spoon',
+      quantity: 20,
+      opportunity_item_type_name: 'Principal',
+      transaction_type_name: 'Rental',
+    }
+    const view = await render(<OrderWeightSection jobId="job-1" items={[spoon]} itemsError={false} />)
+    await view.settle()
+    expect(view.text()).toContain('50 per box · 4.1 kg')
+    expect(view.text()).toContain('100 per box · 7.9 kg')
+    expect(view.text()).toContain('Needs verification')
+    expect(view.text()).not.toContain('Packaging preview')
+    const labels = view.container.querySelectorAll('label')
+    expect(labels[0].style.minHeight).toBe('44px')
+    expect(labels[0].style.width).toBe('100%')
+    const heavy = view.container.querySelector('input[value="heavy"]')
+    await act(async () => {
+      heavy.click()
+      await new Promise((done) => setTimeout(done, 0))
+    })
+    expect(view.text()).toContain('Packaging preview: 7.9 kg')
+    expect(view.text()).toContain('This choice is not saved')
+    expect(view.text()).not.toContain('Calculated weight')
+    expect(view.text()).not.toContain('Remaining capacity')
+    view.rerender(<OrderWeightSection jobId="job-2" items={[spoon]} itemsError={false} />)
+    await view.settle()
+    expect(view.text()).toContain('Needs verification')
+    expect(view.text()).not.toContain('Packaging preview: 7.9 kg')
     view.unmount()
   })
 })

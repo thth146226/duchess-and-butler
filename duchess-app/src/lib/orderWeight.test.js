@@ -2,6 +2,7 @@ import {
   assessOrderWeight,
   formatKilograms,
   loadOrderWeight,
+  measurementRequest,
   orderWeightMessage,
   presentOrderWeight,
 } from './orderWeight'
@@ -182,10 +183,52 @@ describe('order weight', () => {
 
   test('conflicting catalog rows for one name are not averaged', () => {
     const result = assessOrderWeight([orderItem()], [
-      catalogItem({ weight_per_unit: '4' }),
-      catalogItem({ weight_per_unit: '9' }),
+      catalogItem({ id: 'light', weight_per_unit: '4', pieces_per_unit: 50 }),
+      catalogItem({ id: 'heavy', weight_per_unit: '9', pieces_per_unit: 100 }),
     ])
     expect(result.lines[0].label).toBe('Needs verification')
+    expect(result.lines[0].alternatives.map((alternative) => alternative.id)).toEqual(['light', 'heavy'])
     expect(result.knownMicro).toBe(0n)
+    expect(result.previewMicro).toBe(0n)
+    expect(result.status).toBe('PARTIAL')
+  })
+
+  test('a selected heavier box is a preview and does not complete the order', () => {
+    const catalog = [
+      catalogItem({ id: 'light', weight_per_unit: '4', pieces_per_unit: 50 }),
+      catalogItem({ id: 'heavy', weight_per_unit: '9', pieces_per_unit: 100 }),
+    ]
+    const missingChoice = assessOrderWeight([orderItem({ id: 'spoon' })], catalog, { spoon: 'missing-pack' })
+    const heavier = assessOrderWeight([orderItem({ id: 'spoon', quantity: 20 })], catalog, { spoon: 'heavy' })
+    const view = presentOrderWeight(heavier)
+    expect(missingChoice.lines[0].disposition).toBe('ambiguous')
+    expect(heavier.lines[0].disposition).toBe('preview')
+    expect(heavier.lines[0].piecesPerUnit).toBe(100)
+    expect(formatKilograms(heavier.previewMicro)).toBe('9')
+    expect(heavier.knownMicro).toBe(0n)
+    expect(heavier.status).toBe('PARTIAL')
+    expect(view.previewKg).toBe('9')
+    expect(view.knownKg).toBeNull()
+    expect(view.estimateVehicles).toBeNull()
+    expect(view.remainingKg).toBeNull()
+  })
+
+  test('a line without type metadata stays physical', () => {
+    const result = assessOrderWeight([
+      orderItem({
+        item_name: 'Delivery & Collection',
+        quantity: 1,
+        opportunity_item_type_name: '',
+        transaction_type_name: '',
+      }),
+    ], [])
+    expect(result.lines[0].disposition).toBe('missing')
+    expect(measurementRequest(result.lines[0])).toBe('No catalog packing rule. Do not copy another product weight.')
+  })
+
+  test('a zero catalog weight names the pack that still has to be weighed', () => {
+    const result = assessOrderWeight([orderItem()], [catalogItem({ unit_name: 'box', pieces_per_unit: 15, weight_per_unit: '0' })])
+    expect(result.lines[0].disposition).toBe('zero_weight')
+    expect(measurementRequest(result.lines[0])).toBe('Weigh one packed box of 15. Do not copy another product.')
   })
 })

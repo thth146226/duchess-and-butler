@@ -113,6 +113,7 @@ export function indexAtaCatalog(rows) {
     const pieces = asPositiveInteger(row.pieces_per_unit)
     const weight = weightMicrograms(row.weight_per_unit)
     const entry = {
+      id: row.id == null || String(row.id).trim() === '' ? `${key}#${listLength(grouped, key)}` : String(row.id),
       name: row.name,
       unitName: String(row.unit_name || '').trim(),
       piecesPerUnit: pieces,
@@ -131,29 +132,83 @@ export function indexAtaCatalog(rows) {
       && entry.weight.kind === first.weight.kind
       && entry.weight.micro === first.weight.micro
     ))
+    const alternatives = list
+      .map(presentAlternative)
+      .sort(compareAlternatives)
     index.set(key, sameRule
-      ? { status: 'unique', entry: first }
-      : { status: 'ambiguous' })
+      ? { status: 'unique', entry: first, alternatives }
+      : { status: 'ambiguous', alternatives })
   }
   return index
+}
+
+function listLength(grouped, key) {
+  const list = grouped.get(key)
+  return list ? list.length : 0
+}
+
+function presentAlternative(entry) {
+  return {
+    id: entry.id,
+    name: entry.name,
+    unitName: entry.unitName,
+    piecesPerUnit: entry.piecesPerUnit,
+    weightKind: entry.weight.kind,
+    weightMicro: entry.weight.kind === 'positive' ? entry.weight.micro : 0n,
+  }
+}
+
+function compareAlternatives(left, right) {
+  const leftPieces = left.piecesPerUnit == null ? Number.MAX_SAFE_INTEGER : left.piecesPerUnit
+  const rightPieces = right.piecesPerUnit == null ? Number.MAX_SAFE_INTEGER : right.piecesPerUnit
+  if (leftPieces !== rightPieces) {
+    return leftPieces - rightPieces
+  }
+  return String(left.id).localeCompare(String(right.id))
 }
 
 function unavailableAssessment() {
   return {
     status: 'UNAVAILABLE',
     knownMicro: 0n,
+    previewMicro: 0n,
     calculated: 0,
+    previewCount: 0,
     missing: 0,
     lines: [],
     limitMicro: LIMIT_MICRO,
   }
 }
 
-export function assessOrderWeight(items, catalogRows) {
+function selectedAlternative(alternatives, lineId, selections) {
+  if (!lineId || !selections || typeof selections !== 'object') {
+    return null
+  }
+  const choice = selections[lineId]
+  if (choice == null || String(choice).trim() === '') {
+    return null
+  }
+  return (alternatives || []).find((alternative) => alternative.id === String(choice)) || null
+}
+
+function containerCount(quantity, entry) {
+  const mode = packingMode(entry.unitName)
+  if (mode === 'unknown' || entry.piecesPerUnit == null || quantity == null) {
+    return null
+  }
+  if (mode === 'piece' || quantity === 0) {
+    return quantity
+  }
+  return Math.ceil(quantity / entry.piecesPerUnit)
+}
+
+export function assessOrderWeight(items, catalogRows, selections) {
   const index = catalogRows instanceof Map ? catalogRows : indexAtaCatalog(catalogRows)
   const lines = []
   let knownMicro = 0n
+  let previewMicro = 0n
   let calculated = 0
+  let previewCount = 0
   let missing = 0
   for (const item of Array.isArray(items) ? items : []) {
     const name = item && item.item_name ? item.item_name : ''
@@ -170,7 +225,42 @@ export function assessOrderWeight(items, catalogRows) {
     }
     if (match.status === 'ambiguous') {
       missing += 1
-      lines.push({ id: item && item.id, name, disposition: 'ambiguous', label: 'Needs verification' })
+      const alternatives = match.alternatives || []
+      const chosen = selectedAlternative(alternatives, item && item.id, selections)
+      const chosenEntry = chosen && {
+        unitName: chosen.unitName,
+        piecesPerUnit: chosen.piecesPerUnit,
+        weight: { kind: chosen.weightKind, micro: chosen.weightMicro },
+      }
+      const containers = chosenEntry && chosen.weightKind === 'positive'
+        ? containerCount(quantity, chosenEntry)
+        : null
+      if (!chosen || chosen.weightKind !== 'positive' || containers == null) {
+        lines.push({
+          id: item && item.id,
+          name,
+          disposition: 'ambiguous',
+          label: 'Needs verification',
+          alternatives,
+        })
+        continue
+      }
+      const weightMicro = BigInt(containers) * chosen.weightMicro
+      previewMicro += weightMicro
+      previewCount += 1
+      lines.push({
+        id: item.id,
+        name,
+        disposition: 'preview',
+        label: 'Packaging preview',
+        alternatives,
+        selectedId: chosen.id,
+        containers,
+        piecesPerUnit: chosen.piecesPerUnit,
+        unitName: chosen.unitName,
+        weightMicro,
+        containerMicro: chosen.weightMicro,
+      })
       continue
     }
     const entry = match.entry
@@ -183,12 +273,12 @@ export function assessOrderWeight(items, catalogRows) {
         name,
         disposition: weightMissing ? 'zero_weight' : 'unknown_unit',
         label: weightMissing ? 'Weight missing' : 'Needs verification',
+        unitName: entry.unitName,
+        piecesPerUnit: entry.piecesPerUnit,
       })
       continue
     }
-    const containers = mode === 'piece' || quantity === 0
-      ? quantity
-      : Math.ceil(quantity / entry.piecesPerUnit)
+    const containers = containerCount(quantity, entry)
     const weightMicro = BigInt(containers) * entry.weight.micro
     knownMicro += weightMicro
     calculated += 1
@@ -208,23 +298,41 @@ export function assessOrderWeight(items, catalogRows) {
   return {
     status: physical === 0 ? 'UNAVAILABLE' : (missing === 0 ? 'COMPLETE' : 'PARTIAL'),
     knownMicro,
+    previewMicro,
     calculated,
+    previewCount,
     missing,
     lines,
     limitMicro: LIMIT_MICRO,
   }
 }
 
-export async function loadOrderWeight(items, loadCatalog) {
+export async function loadOrderWeight(items, loadCatalog, selections) {
   try {
     const rows = await loadCatalog()
     if (!Array.isArray(rows)) {
       return unavailableAssessment()
     }
-    return assessOrderWeight(items, rows)
+    return assessOrderWeight(items, rows, selections)
   } catch (_error) {
     return unavailableAssessment()
   }
+}
+
+export function measurementRequest(line) {
+  if (!line) {
+    return ''
+  }
+  if (line.disposition === 'zero_weight' && line.piecesPerUnit && line.unitName) {
+    return `Weigh one packed ${line.unitName.toLowerCase()} of ${line.piecesPerUnit}. Do not copy another product.`
+  }
+  if (line.disposition === 'missing') {
+    return 'No catalog packing rule. Do not copy another product weight.'
+  }
+  if (line.disposition === 'ambiguous') {
+    return 'Choose the packed box used for this order. The choice is a preview and is not saved.'
+  }
+  return ''
 }
 
 export function formatKilograms(micro) {
@@ -238,6 +346,7 @@ export function presentOrderWeight(assessment, options = {}) {
   const source = options.itemsError ? unavailableAssessment() : (assessment || unavailableAssessment())
   const reason = options.itemsError ? 'items' : (source.status === 'UNAVAILABLE' ? 'catalog' : null)
   const complete = source.status === 'COMPLETE'
+  const previewMicro = source.previewMicro || 0n
   const hasConfirmedWeight = complete || (source.status === 'PARTIAL' && source.knownMicro > 0n)
   const overLimit = complete && source.knownMicro > source.limitMicro
   const remainingMicro = complete ? source.limitMicro - source.knownMicro : null
@@ -251,6 +360,8 @@ export function presentOrderWeight(assessment, options = {}) {
     status: source.status,
     reason,
     knownKg: hasConfirmedWeight ? formatKilograms(source.knownMicro) : null,
+    previewKg: previewMicro > 0n ? formatKilograms(previewMicro) : null,
+    previewCount: source.previewCount || 0,
     calculated: source.calculated || 0,
     missing: source.missing || 0,
     percent: percentTenths == null ? null : (percentTenths / 10).toFixed(1),
@@ -270,6 +381,9 @@ export function orderWeightMessage(view) {
   }
   if (view.status === 'PARTIAL' && view.knownKg == null) {
     return 'No confirmed weight yet. The order total is not available.'
+  }
+  if (view.status === 'PARTIAL' && view.previewKg) {
+    return 'Some physical lines still need a weight. A selected box is only a preview: it is not saved and it is not a vehicle recommendation.'
   }
   if (view.status === 'PARTIAL') {
     return 'Some physical lines still need a weight. This is not a vehicle recommendation.'

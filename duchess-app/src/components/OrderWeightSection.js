@@ -4,12 +4,13 @@ import {
   fetchAtaCatalog,
   formatKilograms,
   loadOrderWeight,
+  measurementRequest,
   orderWeightMessage,
   presentOrderWeight,
 } from '../lib/orderWeight'
 
 function ruleText(line) {
-  if (line.disposition !== 'calculated') {
+  if (line.disposition !== 'calculated' && line.disposition !== 'preview') {
     return line.label || ''
   }
   const unit = line.unitName.toLowerCase()
@@ -18,8 +19,16 @@ function ruleText(line) {
   return `${line.containers} ${container} × ${each} kg`
 }
 
+function alternativeText(alternative) {
+  const pieces = alternative.piecesPerUnit == null ? 'unknown pack' : `${alternative.piecesPerUnit} per ${alternative.unitName.toLowerCase()}`
+  const weight = alternative.weightKind === 'positive' ? `${formatKilograms(alternative.weightMicro)} kg` : 'weight not confirmed'
+  return `${alternative.name} · ${pieces} · ${weight}`
+}
+
 export default function OrderWeightSection({ jobId, items, itemsError }) {
+  const [packsByJob, setPacksByJob] = useState({})
   const [view, setView] = useState(null)
+  const packs = packsByJob[jobId]
 
   useEffect(() => {
     let cancelled = false
@@ -28,7 +37,7 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
       setView(presentOrderWeight(null, { itemsError: true }))
       return undefined
     }
-    loadOrderWeight(items, () => fetchAtaCatalog(supabase)).then((result) => {
+    loadOrderWeight(items, () => fetchAtaCatalog(supabase), packs || {}).then((result) => {
       if (!cancelled) {
         setView(presentOrderWeight(result))
       }
@@ -36,7 +45,14 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
     return () => {
       cancelled = true
     }
-  }, [jobId, items, itemsError])
+  }, [jobId, items, itemsError, packs])
+
+  function choosePack(lineId, alternativeId) {
+    setPacksByJob((current) => ({
+      ...current,
+      [jobId]: { ...(current[jobId] || {}), [lineId]: alternativeId },
+    }))
+  }
 
   if (!view) {
     return null
@@ -78,6 +94,11 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
           )}
         </div>
         <div style={{ fontSize: '12px', marginTop: '8px', lineHeight: 1.5 }}>{orderWeightMessage(view)}</div>
+        {view.previewKg && (
+          <div style={{ fontSize: '12px', marginTop: '6px', lineHeight: 1.5 }}>
+            Packaging preview: {view.previewKg} kg. This choice is not saved.
+          </div>
+        )}
         <div style={{ fontSize: '12px', marginTop: '6px' }}>Informed Luton limit: 1,200 kg.</div>
         {view.percent != null && (
           <div style={{ fontSize: '12px', marginTop: '4px' }}>
@@ -97,17 +118,41 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
         )}
       </div>
       {details.length > 0 && (
-        <details style={{ marginTop: '10px' }}>
-          <summary style={{ fontSize: '12px', color: '#6B6860', cursor: 'pointer' }}>Line weights and packing rules</summary>
+        <details style={{ marginTop: '10px' }} open>
+          <summary style={{ fontSize: '12px', color: '#6B6860', cursor: 'pointer', minHeight: '44px', display: 'flex', alignItems: 'center' }}>Line weights and packing rules</summary>
           <ul style={{ margin: '8px 0 0', padding: 0, listStyle: 'none' }}>
-            {details.map((line) => (
-              <li key={line.id || line.name} style={{ padding: '8px 0', borderBottom: '1px solid #EDE8E0', fontSize: '12px' }}>
-                <div style={{ fontWeight: '600', color: '#1C1C1E' }}>{line.name}</div>
-                <div style={{ color: '#6B6860', marginTop: '2px' }}>
-                  {line.disposition === 'calculated' ? `${formatKilograms(line.weightMicro)} kg · ${ruleText(line)}` : line.label}
-                </div>
-              </li>
-            ))}
+            {details.map((line) => {
+              const note = measurementRequest(line)
+              const choices = line.alternatives || []
+              return (
+                <li key={line.id || line.name} style={{ padding: '8px 0', borderBottom: '1px solid #EDE8E0', fontSize: '12px' }}>
+                  <div style={{ fontWeight: '600', color: '#1C1C1E' }}>{line.name}</div>
+                  <div style={{ color: '#6B6860', marginTop: '2px', lineHeight: 1.45 }}>
+                    {line.disposition === 'calculated' || line.disposition === 'preview'
+                      ? `${formatKilograms(line.weightMicro)} kg · ${ruleText(line)}${line.disposition === 'preview' ? ' · preview' : ''}`
+                      : line.label}
+                  </div>
+                  {note && <div style={{ color: '#6B6860', marginTop: '4px', lineHeight: 1.45 }}>{note}</div>}
+                  {choices.length > 0 && (
+                    <fieldset style={{ margin: '8px 0 0', padding: 0, border: 0, minWidth: 0 }}>
+                      <legend style={{ fontSize: '12px', color: '#6B6860', marginBottom: '4px' }}>Packed box for this order</legend>
+                      {choices.map((alternative) => (
+                        <label key={alternative.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', minHeight: '44px', width: '100%', color: '#1C1C1E' }}>
+                          <input
+                            type="radio"
+                            name={`order-pack-${jobId}-${line.id}`}
+                            value={alternative.id}
+                            checked={line.selectedId === alternative.id}
+                            onChange={() => choosePack(line.id, alternative.id)}
+                          />
+                          <span>{alternativeText(alternative)}</span>
+                        </label>
+                      ))}
+                    </fieldset>
+                  )}
+                </li>
+              )
+            })}
           </ul>
         </details>
       )}
