@@ -6,6 +6,7 @@ import {
   clearPhotoUploadDiagnostics,
   enablePhotoUploadDiagnosticsFromSearch,
   isPhotoUploadDiagnosticsEnabled,
+  isPhotoUploadDiagnosticsVisible,
   readPhotoUploadDiagnosticSummary,
   readPhotoUploadDiagnostics,
   recordPhotoUploadDiagnostic,
@@ -110,17 +111,19 @@ describe('photo upload diagnostics', () => {
     expect(readPhotoUploadDiagnostics()[0].sequence).toBe(1)
   })
 
-  test('enabled flag persists and stays on without the query parameter', () => {
-    setPhotoUploadDiagnosticsEnabled(false)
+  test('a stored flag does not keep Upload Debug visible in a normal session', () => {
+    localStorage.setItem(PHOTO_UPLOAD_DIAGNOSTICS_ENABLED_KEY, '1')
     expect(isPhotoUploadDiagnosticsEnabled()).toBe(false)
+    expect(isPhotoUploadDiagnosticsVisible({ search: '', role: 'admin' })).toBe(false)
+    expect(isPhotoUploadDiagnosticsVisible({ search: '?photoUploadDebug=1', role: 'driver' })).toBe(false)
+    expect(isPhotoUploadDiagnosticsVisible({ search: '?photoUploadDebug=1', role: 'admin' })).toBe(true)
+    expect(isPhotoUploadDiagnosticsVisible({ search: '?photoUploadDebug=1', role: 'operations' })).toBe(true)
     enablePhotoUploadDiagnosticsFromSearch('?photoUploadDebug=1')
     expect(isPhotoUploadDiagnosticsEnabled()).toBe(true)
     expect(localStorage.getItem(PHOTO_UPLOAD_DIAGNOSTICS_ENABLED_KEY)).toBe('1')
     enablePhotoUploadDiagnosticsFromSearch('')
-    expect(isPhotoUploadDiagnosticsEnabled()).toBe(true)
-    setPhotoUploadDiagnosticsEnabled(false)
-    expect(localStorage.getItem(PHOTO_UPLOAD_DIAGNOSTICS_ENABLED_KEY)).toBe('0')
     expect(isPhotoUploadDiagnosticsEnabled()).toBe(false)
+    expect(localStorage.getItem(PHOTO_UPLOAD_DIAGNOSTICS_ENABLED_KEY)).toBe('1')
   })
 
   test('record drops identifiers that are not on the safe field list', () => {
