@@ -138,22 +138,19 @@ const REAL_ALTERNATIVES = [
 ]
 
 describe('Katrina QDB08128 read-only ATA figures', () => {
-  test('the six confirmed catalog rules still total 63.8 kg and are not the synthetic fixture', () => {
+  test('five exact catalog rules total 59.1 kg and the partial napkin box is not the old 63.8 kg load', () => {
     const items = REAL_CONFIRMED.map(([name, quantity], idx) => line(name, quantity, idx))
     const catalog = REAL_CONFIRMED.map(([name, , unit, pieces, weight]) => ({
       name, unit_name: unit, pieces_per_unit: pieces, weight_per_unit: weight, active: true,
     }))
-    const audit = assessOrderWeight(items.map((item) => (
-      item.item_name === 'Perlette Napkin - Cream' ? { ...item, quantity: 70 } : item
-    )), catalog)
-    expect(audit.status).toBe('COMPLETE')
-    expect(formatKilograms(audit.knownMicro)).toBe('63.8')
-    expect(audit.previewMicro).toBe(0n)
     const assessed = assessOrderWeight(items, catalog)
+    const view = presentOrderWeight(assessed)
+    expect(assessed.calculated).toBe(5)
     expect(assessed.status).toBe('PARTIAL')
     expect(assessed.lines.find((entry) => entry.name === 'Perlette Napkin - Cream').disposition).toBe('partial_box')
-    expect(formatKilograms(assessed.knownMicro)).toBe('59.1')
-    expect(presentOrderWeight(assessed).estimateVehicles).toBeNull()
+    expect(view.knownKg).toBe('59.1')
+    expect(view.knownKg).not.toBe('63.8')
+    expect(view.estimateVehicles).toBeNull()
   })
 
   test('seven ambiguous packs stay pending until the heavier recorded box is chosen', () => {

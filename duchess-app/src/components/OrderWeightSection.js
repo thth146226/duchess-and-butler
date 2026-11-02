@@ -218,6 +218,9 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
                           </button>
                         )
                       })}
+                      {(line.packingTruncation || []).map((reason) => (
+                        <div key={reason} style={{ color: '#854F0B', marginTop: '4px', lineHeight: 1.45 }}>{reason}</div>
+                      ))}
                       {line.planConfirmed && (line.plans || []).length > 1 && (
                         <button
                           type="button"

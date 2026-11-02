@@ -304,6 +304,7 @@ export function assessOrderWeight(items, catalogRows, selections) {
           label: 'Confirmed weight',
           alternatives,
           plans: planned.plans,
+          packingTruncation: planned.truncation,
           plan: accepted,
           planConfirmed: true,
           weightMicro: accepted.calculatedMicro,
@@ -321,6 +322,7 @@ export function assessOrderWeight(items, catalogRows, selections) {
           label: 'Unknown weight',
           alternatives,
           plans: planned.plans,
+          packingTruncation: planned.truncation,
           plan: accepted,
           planConfirmed: true,
           piecesPerUnit: partialBox ? partialBox.piecesPerUnit : null,
@@ -342,6 +344,7 @@ export function assessOrderWeight(items, catalogRows, selections) {
           label: 'Needs verification',
           alternatives,
           plans: planned.plans,
+          packingTruncation: planned.truncation,
         })
         continue
       }
@@ -356,6 +359,7 @@ export function assessOrderWeight(items, catalogRows, selections) {
         label: 'Packaging preview',
         alternatives,
         plans: planned.plans,
+        packingTruncation: planned.truncation,
         plan: single,
         selectedId: chosen.id,
         containers: single.boxCount,
@@ -392,6 +396,7 @@ export function assessOrderWeight(items, catalogRows, selections) {
         label: 'Unknown weight',
         plan,
         plans: planned.plans,
+        packingTruncation: planned.truncation,
         containers: plan ? plan.boxes.filter((box) => box.full).reduce((sum, box) => sum + box.count, 0) : 0,
         piecesPerUnit: entry.piecesPerUnit,
         unitName: entry.unitName,
@@ -403,7 +408,7 @@ export function assessOrderWeight(items, catalogRows, selections) {
     }
     const containers = containerCount(quantity, entry)
     const weightMicro = BigInt(containers) * entry.weight.micro
-    const planned = quantity > 0 && quantity / entry.piecesPerUnit <= 30
+    const planned = mode === 'container'
       ? planPacking({ quantity, rules: [ruleFromEntry(entry)] })
       : null
     knownMicro += weightMicro
@@ -419,6 +424,7 @@ export function assessOrderWeight(items, catalogRows, selections) {
       containerMicro: entry.weight.micro,
       mode,
       plan: planned ? planned.plans[0] || null : null,
+      packingTruncation: planned ? planned.truncation : [],
       planConfirmed: true,
     })
   }

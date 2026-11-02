@@ -65,6 +65,30 @@ describe('shared packing plans', () => {
     ])
   })
 
+  test('a search that passes a limit says that the list was cut', () => {
+    const result = planPacking({
+      quantity: 12,
+      rules: [8, 7, 6, 5, 4, 3, 2, 1].map((pieces) => rule({
+        id: `box-${pieces}`,
+        name: 'Mixed Capacity Plate',
+        piecesPerUnit: pieces,
+        weightMicro: BigInt(pieces) * 1000000n,
+      })),
+    })
+    expect(result.truncated).toBe(true)
+    expect(result.plans.length).toBeLessThanOrEqual(4)
+    expect(result.truncation.join(' ')).toContain('limit')
+    const exact = planPacking({
+      quantity: 30,
+      rules: [
+        rule({ id: 'small', name: 'Prima Dessert Plate', piecesPerUnit: 15, weightMicro: 6300000n }),
+        rule({ id: 'large', name: 'Prima Dessert Plate', piecesPerUnit: 30, weightMicro: 16100000n }),
+      ],
+    })
+    expect(exact.truncated).toBe(false)
+    expect(exact.truncation).toEqual([])
+  })
+
   test('a product without a positive weight does not receive an invented weight', () => {
     const result = planPacking({
       quantity: 15,

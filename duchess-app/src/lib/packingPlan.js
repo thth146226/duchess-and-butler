@@ -39,16 +39,14 @@ function weightKnown(rule) {
 }
 
 function splitQuantity(quantity, capacity) {
-  if (quantity / capacity <= 30) {
-    const generated = generateLabelsForQuantity(quantity, capacity)
-    return {
-      full: generated.filter((part) => part === capacity).length,
-      remainder: generated.find((part) => part !== capacity) || 0,
-    }
+  if (Math.ceil(quantity / capacity) > PACKING_PLAN_LIMITS.maxBoxes) {
+    return { truncated: true, full: 0, remainder: 0 }
   }
+  const generated = generateLabelsForQuantity(quantity, capacity)
   return {
-    full: Math.floor(quantity / capacity),
-    remainder: quantity % capacity,
+    truncated: false,
+    full: generated.filter((part) => part === capacity).length,
+    remainder: generated.find((part) => part !== capacity) || 0,
   }
 }
 
@@ -132,8 +130,10 @@ function exactCombinations(rules, quantity) {
   const found = []
   const counts = rules.map(() => 0)
   let nodes = 0
+  let truncated = false
   function walk(index, remaining, boxes) {
-    if (found.length >= 12 || nodes > PACKING_PLAN_LIMITS.maxNodes) {
+    if (nodes > PACKING_PLAN_LIMITS.maxNodes) {
+      truncated = true
       return
     }
     nodes += 1
@@ -156,24 +156,31 @@ function exactCombinations(rules, quantity) {
     counts[index] = 0
   }
   walk(0, quantity, 0)
-  return found
+  return { found, truncated }
 }
 
 export function planPacking({ quantity, rules }) {
   const qty = Number(quantity)
-  const empty = { priority: PACKING_PRIORITY, plans: [] }
+  const empty = { priority: PACKING_PRIORITY, plans: [], truncated: false, truncation: [] }
   if (!Number.isInteger(qty) || qty <= 0) {
     return empty
   }
   const source = Array.isArray(rules) ? rules : []
   const productName = source.find((rule) => rule && rule.name)?.name
-  const usable = source
+  const matched = source
     .filter((rule) => rule && productKey(rule.name) === productKey(productName) && containerRule(rule))
     .sort((left, right) => (
       right.piecesPerUnit - left.piecesPerUnit
       || String(left.id).localeCompare(String(right.id))
     ))
-    .slice(0, PACKING_PLAN_LIMITS.maxRules)
+  const usable = matched.slice(0, PACKING_PLAN_LIMITS.maxRules)
+  const limits = {
+    rules: matched.length > usable.length,
+    search: false,
+    plans: false,
+    boxes: false,
+    labels: false,
+  }
   if (!usable.length) {
     return empty
   }
@@ -184,18 +191,33 @@ export function planPacking({ quantity, rules }) {
   const plans = []
   const seen = new Set()
   function add(groups, role) {
-    if (!groups.length || plans.length >= PACKING_PLAN_LIMITS.maxPlans) {
+    if (!groups.length) {
       return
     }
     const plan = decorate(groups, qty, role)
-    if (!plan.signature || seen.has(plan.signature) || plan.boxCount > PACKING_PLAN_LIMITS.maxBoxes) {
+    if (!plan.signature || seen.has(plan.signature)) {
+      return
+    }
+    if (plan.boxCount > PACKING_PLAN_LIMITS.maxBoxes) {
+      limits.boxes = true
+      return
+    }
+    if (plans.length >= PACKING_PLAN_LIMITS.maxPlans) {
+      limits.plans = true
       return
     }
     seen.add(plan.signature)
     plans.push(plan)
   }
-  add(groupsFromSplit(selected, splitQuantity(qty, selected.piecesPerUnit)), 'suggestion')
-  for (const counts of exactCombinations(usable, qty)) {
+  const selectedSplit = splitQuantity(qty, selected.piecesPerUnit)
+  if (selectedSplit.truncated) {
+    limits.labels = true
+  } else {
+    add(groupsFromSplit(selected, selectedSplit), 'suggestion')
+  }
+  const combinations = exactCombinations(usable, qty)
+  limits.search = combinations.truncated
+  for (const counts of combinations.found) {
     const groups = usable
       .map((rule, index) => (counts[index] > 0 ? boxGroup(rule, counts[index], rule.piecesPerUnit, true) : null))
       .filter(Boolean)
@@ -206,8 +228,19 @@ export function planPacking({ quantity, rules }) {
       if (rule.id === selected.id) {
         continue
       }
-      add(groupsFromSplit(rule, splitQuantity(qty, rule.piecesPerUnit)), 'alternative')
+      const split = splitQuantity(qty, rule.piecesPerUnit)
+      if (split.truncated) {
+        limits.labels = true
+        continue
+      }
+      add(groupsFromSplit(rule, split), 'alternative')
     }
   }
-  return { priority: PACKING_PRIORITY, plans }
+  const truncation = []
+  if (limits.rules) truncation.push('Some packing rules were omitted because the rule limit was reached.')
+  if (limits.search) truncation.push('The combination search stopped at its step limit.')
+  if (limits.plans) truncation.push('Some exact combinations are not listed because the plan limit was reached.')
+  if (limits.boxes) truncation.push('A combination was omitted because it needs more boxes than the limit.')
+  if (limits.labels) truncation.push('The Labels split was not listed because it needs more boxes than the limit.')
+  return { priority: PACKING_PRIORITY, plans, truncated: truncation.length > 0, truncation }
 }
