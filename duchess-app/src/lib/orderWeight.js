@@ -180,15 +180,29 @@ function unavailableAssessment() {
   }
 }
 
+function selectionMatches(alternative, choice) {
+  if (typeof choice === 'string') {
+    return choice.trim() !== '' && alternative.id === choice
+  }
+  if (!choice || typeof choice !== 'object' || choice.id == null) {
+    return false
+  }
+  const weight = alternative.weightMicro == null ? '0' : alternative.weightMicro.toString()
+  return alternative.id === String(choice.id)
+    && alternative.piecesPerUnit === choice.piecesPerUnit
+    && String(alternative.unitName || '').toLowerCase() === String(choice.unitName || '').toLowerCase()
+    && weight === String(choice.weightMicro)
+}
+
 function selectedAlternative(alternatives, lineId, selections) {
   if (!lineId || !selections || typeof selections !== 'object') {
     return null
   }
   const choice = selections[lineId]
-  if (choice == null || String(choice).trim() === '') {
+  if (choice == null || choice === '') {
     return null
   }
-  return (alternatives || []).find((alternative) => alternative.id === String(choice)) || null
+  return (alternatives || []).find((alternative) => selectionMatches(alternative, choice)) || null
 }
 
 function containerCount(quantity, entry) {
@@ -398,13 +412,25 @@ export function resetAtaCatalogCache() {
 }
 
 export function fetchAtaCatalog(client) {
-  if (!catalogPromise) {
-    catalogPromise = readAtaCatalog(client).catch((error) => {
-      catalogPromise = null
-      throw error
-    })
+  if (catalogPromise) {
+    return catalogPromise
   }
-  return catalogPromise
+  const pending = readAtaCatalog(client).then(
+    (rows) => rows,
+    (error) => {
+      if (catalogPromise === pending) {
+        catalogPromise = null
+      }
+      throw error
+    },
+  )
+  catalogPromise = pending
+  return pending
+}
+
+export function refreshAtaCatalog(client) {
+  catalogPromise = null
+  return fetchAtaCatalog(client)
 }
 
 async function readAtaCatalog(client) {

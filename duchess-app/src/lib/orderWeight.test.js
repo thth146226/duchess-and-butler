@@ -1,10 +1,13 @@
 import {
   assessOrderWeight,
+  fetchAtaCatalog,
   formatKilograms,
   loadOrderWeight,
   measurementRequest,
   orderWeightMessage,
   presentOrderWeight,
+  refreshAtaCatalog,
+  resetAtaCatalogCache,
 } from './orderWeight'
 
 function catalogItem(overrides) {
@@ -230,5 +233,121 @@ describe('order weight', () => {
     const result = assessOrderWeight([orderItem()], [catalogItem({ unit_name: 'box', pieces_per_unit: 15, weight_per_unit: '0' })])
     expect(result.lines[0].disposition).toBe('zero_weight')
     expect(measurementRequest(result.lines[0])).toBe('Weigh one packed box of 15. Do not copy another product.')
+  })
+})
+
+function pagingClient(sequence) {
+  const state = { calls: 0 }
+  return {
+    calls: () => state.calls,
+    from() {
+      return {
+        select() { return this },
+        eq() { return this },
+        range() {
+          state.calls += 1
+          const step = sequence[Math.min(state.calls, sequence.length) - 1]
+          return Promise.resolve(step)
+        },
+      }
+    },
+  }
+}
+
+describe('ATA catalog cache', () => {
+  beforeEach(() => {
+    resetAtaCatalogCache()
+  })
+
+  test('a corrected catalog weight is used on the next controlled re-read and then cached', async () => {
+    const plate = {
+      id: 'plate',
+      name: 'Canvas Dinner Plate - Linen',
+      unit_name: 'box',
+      pieces_per_unit: 15,
+      weight_per_unit: '0',
+      active: true,
+    }
+    const client = pagingClient([
+      { data: [plate], error: null },
+      { data: [{ ...plate, weight_per_unit: '4.5' }], error: null },
+    ])
+    const item = orderItem({ item_name: 'Canvas Dinner Plate - Linen', quantity: 15 })
+    const first = await fetchAtaCatalog(client)
+    const repeated = await fetchAtaCatalog(client)
+    expect(repeated).toBe(first)
+    expect(client.calls()).toBe(1)
+    expect(assessOrderWeight([item], first).lines[0].disposition).toBe('zero_weight')
+    const refreshed = await refreshAtaCatalog(client)
+    const corrected = assessOrderWeight([item], refreshed)
+    expect(client.calls()).toBe(2)
+    expect(corrected.lines[0].disposition).toBe('calculated')
+    expect(formatKilograms(corrected.knownMicro)).toBe('4.5')
+    await fetchAtaCatalog(client)
+    expect(client.calls()).toBe(2)
+  })
+
+  test('a temporary catalog failure is not cached and the next read can succeed', async () => {
+    const client = pagingClient([
+      { data: null, error: { message: 'timeout' } },
+      { data: [catalogItem({ weight_per_unit: '4.5', pieces_per_unit: 15 })], error: null },
+    ])
+    await expect(fetchAtaCatalog(client)).rejects.toEqual({ message: 'timeout' })
+    const rows = await fetchAtaCatalog(client)
+    expect(client.calls()).toBe(2)
+    expect(rows[0].weight_per_unit).toBe('4.5')
+    const view = presentOrderWeight(await loadOrderWeight(
+      [orderItem({ quantity: 15 })],
+      () => fetchAtaCatalog(client),
+    ))
+    expect(view.knownKg).toBe('4.5')
+    expect(client.calls()).toBe(2)
+  })
+
+  test('a later order does not reuse another order preview from the shared catalog', async () => {
+    const client = pagingClient([{
+      data: [catalogItem({ id: 'box', pieces_per_unit: 15, weight_per_unit: '4.5' })],
+      error: null,
+    }])
+    const rows = await fetchAtaCatalog(client)
+    const first = assessOrderWeight([orderItem({ id: 'order-a', quantity: 15 })], rows)
+    const second = assessOrderWeight([
+      orderItem({ id: 'order-b', item_name: 'Unlisted Bowl', quantity: 4 }),
+    ], rows)
+    expect(formatKilograms(first.knownMicro)).toBe('4.5')
+    expect(second.knownMicro).toBe(0n)
+    expect(second.previewMicro).toBe(0n)
+    expect(second.missing).toBe(1)
+    expect(client.calls()).toBe(1)
+  })
+
+  test('a changed or removed pack invalidates the earlier preview choice', () => {
+    const item = orderItem({ id: 'spoon', item_name: 'Piccadilly Polished Dessert Spoon', quantity: 20 })
+    const packs = [
+      catalogItem({ id: 'box', name: item.item_name, pieces_per_unit: 50, weight_per_unit: '4.1' }),
+      catalogItem({ id: 'crate', name: item.item_name, pieces_per_unit: 100, weight_per_unit: '7.9' }),
+    ]
+    const chosen = assessOrderWeight([item], packs, { spoon: 'box' })
+    const recorded = {
+      id: chosen.lines[0].selectedId,
+      piecesPerUnit: chosen.lines[0].piecesPerUnit,
+      unitName: chosen.lines[0].unitName,
+      weightMicro: chosen.lines[0].containerMicro.toString(),
+    }
+    expect(chosen.lines[0].disposition).toBe('preview')
+    const changed = assessOrderWeight([item], [
+      catalogItem({ id: 'box', name: item.item_name, pieces_per_unit: 40, weight_per_unit: '5' }),
+      catalogItem({ id: 'crate', name: item.item_name, pieces_per_unit: 100, weight_per_unit: '7.9' }),
+    ], { spoon: recorded })
+    expect(changed.lines[0].disposition).toBe('ambiguous')
+    expect(changed.previewMicro).toBe(0n)
+    expect(changed.status).toBe('PARTIAL')
+    const removed = assessOrderWeight([item], [
+      catalogItem({ id: 'other', name: item.item_name, pieces_per_unit: 80, weight_per_unit: '6' }),
+      catalogItem({ id: 'crate', name: item.item_name, pieces_per_unit: 100, weight_per_unit: '7.9' }),
+    ], { spoon: recorded })
+    expect(removed.lines[0].disposition).toBe('ambiguous')
+    expect(removed.previewMicro).toBe(0n)
+    expect(presentOrderWeight(removed).estimateVehicles).toBeNull()
   })
 })

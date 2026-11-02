@@ -7,6 +7,7 @@ import {
   measurementRequest,
   orderWeightMessage,
   presentOrderWeight,
+  refreshAtaCatalog,
 } from '../lib/orderWeight'
 
 function ruleText(line) {
@@ -32,6 +33,18 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
 
   useEffect(() => {
     let cancelled = false
+    refreshAtaCatalog(supabase).catch(() => {
+      if (cancelled) {
+        return
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [jobId])
+
+  useEffect(() => {
+    let cancelled = false
     setView(null)
     if (itemsError) {
       setView(presentOrderWeight(null, { itemsError: true }))
@@ -47,10 +60,18 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
     }
   }, [jobId, items, itemsError, packs])
 
-  function choosePack(lineId, alternativeId) {
+  function choosePack(lineId, alternative) {
     setPacksByJob((current) => ({
       ...current,
-      [jobId]: { ...(current[jobId] || {}), [lineId]: alternativeId },
+      [jobId]: {
+        ...(current[jobId] || {}),
+        [lineId]: {
+          id: alternative.id,
+          piecesPerUnit: alternative.piecesPerUnit,
+          unitName: alternative.unitName,
+          weightMicro: alternative.weightMicro == null ? '0' : alternative.weightMicro.toString(),
+        },
+      },
     }))
   }
 
@@ -143,7 +164,7 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
                             name={`order-pack-${jobId}-${line.id}`}
                             value={alternative.id}
                             checked={line.selectedId === alternative.id}
-                            onChange={() => choosePack(line.id, alternative.id)}
+                            onChange={() => choosePack(line.id, alternative)}
                           />
                           <span>{alternativeText(alternative)}</span>
                         </label>
