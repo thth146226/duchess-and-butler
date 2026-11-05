@@ -69,6 +69,7 @@ function labelsRuleFor(rules) {
 }
 
 function boxGroup(rule, count, piecesEach, full) {
+  const grossKnown = weightKnown(rule)
   return {
     id: String(rule.id),
     piecesPerUnit: rule.piecesPerUnit,
@@ -78,7 +79,8 @@ function boxGroup(rule, count, piecesEach, full) {
     full,
     unfilled: full ? 0 : rule.piecesPerUnit - piecesEach,
     weightMicro: rule.weightMicro == null ? '0' : rule.weightMicro.toString(),
-    weightKnown: full && weightKnown(rule),
+    weightKnown: full && grossKnown,
+    grossWeightKnown: grossKnown,
   }
 }
 
@@ -93,14 +95,19 @@ function groupsFromSplit(rule, split) {
   return groups
 }
 
+function grossTotal(groups) {
+  return groups.reduce((sum, group) => sum + BigInt(group.count) * BigInt(group.weightMicro), 0n)
+}
+
 function decorate(groups, quantity, role) {
-  const fullGroups = groups.filter((group) => group.full)
   const partial = groups.some((group) => !group.full)
-  const unknownFull = fullGroups.some((group) => !group.weightKnown)
-  const calculatedMicro = unknownFull
-    ? 0n
-    : fullGroups.reduce((sum, group) => sum + BigInt(group.count) * BigInt(group.weightMicro), 0n)
-  const weightState = partial ? 'unknown-partial' : (unknownFull ? 'unknown-weight' : 'calculated')
+  const unknownGross = groups.some((group) => !group.grossWeightKnown)
+  // Confirmed weight exists only when every selected box is full and its ATA weight is known.
+  // A partial box keeps the exact weight unknown. Its planning allowance is the registered
+  // gross weight of a full box of that capacity, not a piece weight derived by division.
+  const weightState = partial ? 'unknown-partial' : (unknownGross ? 'unknown-weight' : 'calculated')
+  const calculatedMicro = weightState === 'calculated' ? grossTotal(groups) : 0n
+  const allowance = !unknownGross && weightState !== 'calculated' ? grossTotal(groups) : 0n
   const fingerprintRules = groups.map((group) => ({
     id: group.id,
     piecesPerUnit: group.piecesPerUnit,
@@ -111,18 +118,22 @@ function decorate(groups, quantity, role) {
   return {
     role,
     origin: 'Labels / ATA',
-    exact: !partial && !unknownFull,
+    exact: weightState === 'calculated',
     boxes: groups,
     boxCount: groups.reduce((sum, group) => sum + group.count, 0),
     coveredPieces: quantity,
     unfilledPieces: groups.reduce((sum, group) => sum + group.unfilled, 0),
     calculatedMicro,
+    planningAllowanceMicro: allowance > 0n ? allowance : null,
     weightState,
     missingInformation: partial
-      ? 'ATA records the full pack weight, not the weight of a partly filled pack.'
-      : (unknownFull ? 'ATA does not have a confirmed weight for every pack in this plan.' : null),
+      ? 'ATA records the full pack weight, not the weight of a partly filled pack. The planning allowance uses that full gross weight and is not a confirmed weight.'
+      : (unknownGross ? 'ATA does not have a confirmed weight for every pack in this plan.' : null),
     fingerprint: { quantity, rules: fingerprintRules },
     signature: fingerprintRules.map((rule) => `${rule.id}:${rule.count}`).join('|'),
+    physicalSignature: groups
+      .map((group) => `${group.piecesPerUnit}:${group.count}:${group.piecesEach}:${group.full}:${group.weightMicro}`)
+      .join('|'),
   }
 }
 
@@ -195,7 +206,7 @@ export function planPacking({ quantity, rules }) {
       return
     }
     const plan = decorate(groups, qty, role)
-    if (!plan.signature || seen.has(plan.signature)) {
+    if (!plan.signature || seen.has(plan.signature) || seen.has(plan.physicalSignature)) {
       return
     }
     if (plan.boxCount > PACKING_PLAN_LIMITS.maxBoxes) {
@@ -207,6 +218,7 @@ export function planPacking({ quantity, rules }) {
       return
     }
     seen.add(plan.signature)
+    seen.add(plan.physicalSignature)
     plans.push(plan)
   }
   const selectedSplit = splitQuantity(qty, selected.piecesPerUnit)

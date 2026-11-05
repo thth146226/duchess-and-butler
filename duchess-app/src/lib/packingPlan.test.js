@@ -57,6 +57,8 @@ describe('shared packing plans', () => {
     expect(result.plans).toHaveLength(1)
     expect(result.plans[0].exact).toBe(false)
     expect(result.plans[0].weightState).toBe('unknown-partial')
+    expect(result.plans[0].calculatedMicro).toBe(0n)
+    expect(result.plans[0].planningAllowanceMicro).toBe(4000000n)
     expect(result.plans[0].unfilledPieces).toBe(14)
     expect(result.plans[0].missingInformation).toContain('partly filled')
     expect(result.plans[0].boxes.map((box) => [box.full, box.piecesEach, box.unfilled])).toEqual([
@@ -103,6 +105,74 @@ describe('shared packing plans', () => {
     })
     expect(result.plans[0].weightState).toBe('unknown-weight')
     expect(result.plans[0].calculatedMicro).toBe(0n)
+    expect(result.plans[0].planningAllowanceMicro).toBeNull()
     expect(result.plans[0].missingInformation).toContain('confirmed weight')
+    const partial = planPacking({
+      quantity: 16,
+      rules: [{
+        id: 'linen',
+        name: 'Canvas Dinner Plate - Linen',
+        unitName: 'box',
+        piecesPerUnit: 15,
+        weightKind: 'zero',
+        weightMicro: 0n,
+      }],
+    })
+    expect(partial.plans[0].planningAllowanceMicro).toBeNull()
+    expect(partial.plans[0].calculatedMicro).toBe(0n)
+  })
+})
+
+describe('cutlery and Eclipse packing allowances', () => {
+  test('70 dinner knives keep both partial configurations unknown and use full-box gross weight', () => {
+    const result = planPacking({
+      quantity: 70,
+      rules: [
+        rule({ id: 'knife-50', name: 'Piccadilly Polished Dinner Knife', piecesPerUnit: 50, weightMicro: 3800000n }),
+        rule({ id: 'knife-90', name: 'Piccadilly Polished Dinner Knife', piecesPerUnit: 90, weightMicro: 7400000n }),
+      ],
+    })
+    expect(result.plans[0].role).toBe('suggestion')
+    expect(result.plans[0].boxes.map((box) => [box.piecesPerUnit, box.piecesEach, box.full])).toEqual([[90, 70, false]])
+    expect(result.plans[0].exact).toBe(false)
+    expect(result.plans[0].calculatedMicro).toBe(0n)
+    expect(result.plans[0].planningAllowanceMicro).toBe(7400000n)
+    const smaller = result.plans.find((plan) => plan.boxes.some((box) => box.piecesPerUnit === 50))
+    expect(smaller.boxes.map((box) => [box.piecesPerUnit, box.piecesEach, box.full])).toEqual([
+      [50, 50, true],
+      [50, 20, false],
+    ])
+    expect(smaller.calculatedMicro).toBe(0n)
+    expect(smaller.planningAllowanceMicro).toBe(7600000n)
+    expect(smaller.planningAllowanceMicro).not.toBe(7400000n)
+  })
+
+  test('150 Eclipse dessert plates keep every listed combination at 107 kg', () => {
+    const result = planPacking({
+      quantity: 150,
+      rules: [
+        rule({ id: 'fifteen', name: 'Eclipse Dessert Plate', piecesPerUnit: 15, weightMicro: 10700000n }),
+        rule({ id: 'thirty', name: 'Eclipse Dessert Plate', piecesPerUnit: 30, weightMicro: 21400000n }),
+      ],
+    })
+    expect(result.plans).toHaveLength(4)
+    expect(result.plans.every((plan) => plan.exact && plan.calculatedMicro === 107000000n)).toBe(true)
+    expect(result.plans.every((plan) => plan.planningAllowanceMicro == null)).toBe(true)
+    expect(result.plans.map((plan) => plan.boxes.map((box) => [box.piecesPerUnit, box.count]))).toEqual([
+      [[30, 5]],
+      [[30, 4], [15, 2]],
+      [[30, 3], [15, 4]],
+      [[30, 2], [15, 6]],
+    ])
+    const twenty = planPacking({
+      quantity: 20,
+      rules: [
+        rule({ id: 'fifteen', name: 'Eclipse Dessert Plate', piecesPerUnit: 15, weightMicro: 10700000n }),
+        rule({ id: 'thirty', name: 'Eclipse Dessert Plate', piecesPerUnit: 30, weightMicro: 21400000n }),
+      ],
+    })
+    expect(twenty.plans).toHaveLength(2)
+    expect(twenty.plans.every((plan) => plan.calculatedMicro === 0n && plan.planningAllowanceMicro === 21400000n)).toBe(true)
+    expect(new Set(twenty.plans.map((plan) => plan.physicalSignature)).size).toBe(2)
   })
 })

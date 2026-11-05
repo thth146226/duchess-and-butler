@@ -86,6 +86,9 @@ describe('order weight', () => {
     expect(partial.lines[0].containers).toBe(1)
     expect(partial.lines[0].unfilled).toBe(14)
     expect(partial.knownMicro).toBe(0n)
+    expect(formatKilograms(partial.planningMicro)).toBe('4')
+    expect(presentOrderWeight(partial).knownKg).toBeNull()
+    expect(presentOrderWeight(partial).planningKg).toBe('4')
     expect(partial.status).toBe('PARTIAL')
     expect(presentOrderWeight(partial).estimateVehicles).toBeNull()
     expect(exact.lines[0].containers).toBe(1)
@@ -170,6 +173,7 @@ describe('order weight', () => {
     ], [catalogItem()]))
     expect(under.percent).toBe('50.0')
     expect(under.remainingKg).toBe('600')
+    expect(orderWeightMessage(under)).toBe('All physical lines have an ATA full-pack total. This is not a scale measurement of this order.')
     expect(under.overLimit).toBe(false)
     expect(under.estimateVehicles).toBeNull()
     expect(equal.remainingKg).toBe('0')
@@ -223,9 +227,12 @@ describe('order weight', () => {
     expect(view.estimateVehicles).toBeNull()
     expect(view.remainingKg).toBeNull()
     expect(partial.previewMicro).toBe(0n)
+    expect(partial.knownMicro).toBe(0n)
+    expect(formatKilograms(partial.planningMicro)).toBe('9')
     expect(partial.lines[0].plan.exact).toBe(false)
     expect(partial.lines[0].plan.missingInformation).toContain('partly filled')
     expect(presentOrderWeight(partial).estimateVehicles).toBeNull()
+    expect(presentOrderWeight(partial).planningKg).toBe('9')
   })
 
   test('a line without type metadata stays physical', () => {
@@ -399,5 +406,150 @@ describe('ATA catalog cache', () => {
     expect(assessOrderWeight([
       orderItem({ id: 'plate', item_name: 'Prima Dessert Plate', quantity: 20 }),
     ], catalog, { plate: confirmation }).lines[0].disposition).toBe('ambiguous')
+    const selectedOnly = {
+      selected: true,
+      weightConfirmed: false,
+      quantity: 30,
+      rules: suggested.lines[0].plans[0].fingerprint.rules,
+    }
+    const selected = assessOrderWeight([plate], catalog, { plate: selectedOnly })
+    expect(selected.lines[0].disposition).toBe('pack_selected')
+    expect(selected.knownMicro).toBe(0n)
+    expect(selected.planningMicro).toBe(0n)
+    expect(formatKilograms(selected.lines[0].verifiedMicro)).toBe('16.1')
+  })
+})
+
+describe('partial packs stay out of the confirmed total', () => {
+  test('70 dinner knives can select either allowance without confirming a weight', () => {
+    const item = orderItem({ id: 'knife', item_name: 'Piccadilly Polished Dinner Knife', quantity: 70 })
+    const catalog = [
+      catalogItem({ id: 'knife-50', name: item.item_name, pieces_per_unit: 50, weight_per_unit: '3.8' }),
+      catalogItem({ id: 'knife-90', name: item.item_name, pieces_per_unit: 90, weight_per_unit: '7.4' }),
+    ]
+    const pending = assessOrderWeight([item], catalog)
+    const labels = pending.lines[0].plans[0]
+    const other = pending.lines[0].plans.find((plan) => plan.signature !== labels.signature)
+    const choose = (plan) => assessOrderWeight([item], catalog, {
+      knife: { selected: true, weightConfirmed: true, quantity: 70, rules: plan.fingerprint.rules },
+    })
+    const suggested = choose(labels)
+    const alternative = choose(other)
+    expect(suggested.lines[0].disposition).toBe('partial_box')
+    expect(suggested.knownMicro).toBe(0n)
+    expect(formatKilograms(suggested.planningMicro)).toBe('7.4')
+    expect(alternative.knownMicro).toBe(0n)
+    expect(formatKilograms(alternative.planningMicro)).toBe('7.6')
+    expect(presentOrderWeight(suggested).estimateVehicles).toBeNull()
+    expect(presentOrderWeight(suggested).knownKg).toBeNull()
+    const changedQuantity = assessOrderWeight([
+      orderItem({ id: 'knife', item_name: item.item_name, quantity: 71 }),
+    ], catalog, {
+      knife: { selected: true, quantity: 70, rules: labels.fingerprint.rules },
+    })
+    expect(changedQuantity.lines[0].disposition).toBe('ambiguous')
+    expect(changedQuantity.planningMicro).toBe(0n)
+    const changedRule = assessOrderWeight([item], [
+      catalogItem({ id: 'knife-50', name: item.item_name, pieces_per_unit: 50, weight_per_unit: '3.8' }),
+      catalogItem({ id: 'knife-90', name: item.item_name, pieces_per_unit: 90, weight_per_unit: '8' }),
+    ], {
+      knife: { selected: true, quantity: 70, rules: labels.fingerprint.rules },
+    })
+    expect(changedRule.planningMicro).toBe(0n)
+    expect(changedRule.knownMicro).toBe(0n)
+  })
+
+  test('the recorded 3.9 kg box of 50 gives a 7.8 kg allowance and no measured weight', () => {
+    const item = orderItem({ id: 'knife', item_name: 'Piccadilly Polished Dinner Knife', quantity: 70 })
+    const catalog = [
+      catalogItem({ id: 'knife-50', name: item.item_name, pieces_per_unit: 50, weight_per_unit: '3.9' }),
+      catalogItem({ id: 'knife-90', name: item.item_name, pieces_per_unit: 90, weight_per_unit: '7.4' }),
+    ]
+    const pending = assessOrderWeight([item], catalog)
+    const labels = pending.lines[0].plans[0]
+    const other = pending.lines[0].plans.find((plan) => plan.signature !== labels.signature)
+    const choose = (plan) => assessOrderWeight([item], catalog, {
+      knife: { selected: true, weightConfirmed: true, quantity: 70, rules: plan.fingerprint.rules },
+    })
+    expect(formatKilograms(choose(labels).planningMicro)).toBe('7.4')
+    expect(formatKilograms(choose(other).planningMicro)).toBe('7.8')
+    expect(choose(labels).knownMicro).toBe(0n)
+    expect(choose(other).knownMicro).toBe(0n)
+    expect(presentOrderWeight(choose(labels)).estimateVehicles).toBeNull()
+  })
+
+  test('Eclipse dessert plates confirm 107 kg only after the verified weight is confirmed', () => {
+    const item = orderItem({ id: 'plate', item_name: 'Eclipse Dessert Plate', quantity: 150 })
+    const catalog = [
+      catalogItem({ id: 'fifteen', name: item.item_name, pieces_per_unit: 15, weight_per_unit: '10.7' }),
+      catalogItem({ id: 'thirty', name: item.item_name, pieces_per_unit: 30, weight_per_unit: '21.4' }),
+    ]
+    const pending = assessOrderWeight([item], catalog)
+    expect(pending.knownMicro).toBe(0n)
+    expect(pending.lines[0].plans).toHaveLength(4)
+    expect(pending.lines[0].plans.every((plan) => formatKilograms(plan.calculatedMicro) === '107')).toBe(true)
+    const choice = pending.lines[0].plans[1]
+    const selected = assessOrderWeight([item], catalog, {
+      plate: { selected: true, weightConfirmed: false, quantity: 150, rules: choice.fingerprint.rules },
+    })
+    expect(selected.lines[0].disposition).toBe('pack_selected')
+    expect(selected.knownMicro).toBe(0n)
+    expect(measurementRequest(selected.lines[0])).toBe('The weight is calculated from ATA full-pack records. It is not a scale measurement of this order.')
+    const confirmed = assessOrderWeight([
+      item,
+      orderItem({ id: 'gap', item_name: 'Unlisted Bowl', quantity: 1 }),
+    ], catalog, {
+      plate: { selected: true, weightConfirmed: true, quantity: 150, rules: choice.fingerprint.rules },
+    })
+    const view = presentOrderWeight(confirmed)
+    expect(formatKilograms(confirmed.knownMicro)).toBe('107')
+    expect(confirmed.calculated).toBe(1)
+    expect(confirmed.missing).toBe(1)
+    expect(view.estimateVehicles).toBeNull()
+    expect(view.remainingKg).toBeNull()
+    const partial = assessOrderWeight([
+      orderItem({ id: 'plate', item_name: item.item_name, quantity: 20 }),
+    ], catalog)
+    expect(partial.knownMicro).toBe(0n)
+    expect(partial.lines[0].plans.every((plan) => formatKilograms(plan.planningAllowanceMicro) === '21.4')).toBe(true)
+    expect(partial.lines[0].plans.some((plan) => formatKilograms(plan.planningAllowanceMicro) === '14.267')).toBe(false)
+  })
+
+  test('the Royal Academy order keeps 75.5 kg confirmed while ambiguous packs stay pending', () => {
+    const dinner = orderItem({ id: 'dinner', item_name: 'Eclipse Dinner Plate', quantity: 75 })
+    const dessert = orderItem({ id: 'dessert', item_name: 'Eclipse Dessert Plate', quantity: 150 })
+    const cutlery = [
+      ['Piccadilly Polished Dinner Knife', '3.9', '7.4'],
+      ['Piccadilly Polished Dinner Fork', '4.7', '8.4'],
+      ['Piccadilly Polished Dessert Spoon', '4.1', '7.9'],
+      ['Piccadilly Polished Starter Knife', '3.5', '6.2'],
+      ['Piccadilly Polished Starter/ Dessert Fork', '3.8', '7.2'],
+      ['Piccadilly Polished Tea Spoon', '3.6', '6.4'],
+    ].map(([name], index) => orderItem({ id: `cutlery-${index}`, item_name: name, quantity: 70 }))
+    const catalog = [
+      catalogItem({ id: 'dinner', name: dinner.item_name, pieces_per_unit: 15, weight_per_unit: '15.1' }),
+      catalogItem({ id: 'dessert-15', name: dessert.item_name, pieces_per_unit: 15, weight_per_unit: '10.7' }),
+      catalogItem({ id: 'dessert-30', name: dessert.item_name, pieces_per_unit: 30, weight_per_unit: '21.4' }),
+      ...[
+        ['Piccadilly Polished Dinner Knife', '3.9', '7.4', 50, 90],
+        ['Piccadilly Polished Dinner Fork', '4.7', '8.4', 50, 90],
+        ['Piccadilly Polished Dessert Spoon', '4.1', '7.9', 50, 100],
+        ['Piccadilly Polished Starter Knife', '3.5', '6.2', 50, 100],
+        ['Piccadilly Polished Starter/ Dessert Fork', '3.8', '7.2', 50, 100],
+        ['Piccadilly Polished Tea Spoon', '3.6', '6.4', 80, 150],
+      ].flatMap(([name, light, heavy, small, large]) => [
+        catalogItem({ id: `${name}-small`, name, pieces_per_unit: small, weight_per_unit: light }),
+        catalogItem({ id: `${name}-large`, name, pieces_per_unit: large, weight_per_unit: heavy }),
+      ]),
+    ]
+    const result = assessOrderWeight([dinner, dessert, ...cutlery], catalog)
+    const view = presentOrderWeight(result)
+    expect(view.knownKg).toBe('75.5')
+    expect(result.calculated).toBe(1)
+    expect(result.missing).toBe(7)
+    expect(result.planningMicro).toBe(0n)
+    expect(result.status).toBe('PARTIAL')
+    expect(view.estimateVehicles).toBeNull()
+    expect(view.planningKg).toBeNull()
   })
 })

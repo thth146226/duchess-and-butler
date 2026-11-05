@@ -10,6 +10,15 @@ import {
   refreshAtaCatalog,
 } from '../lib/orderWeight'
 
+const buttonStyle = {
+  display: 'block',
+  minHeight: '44px',
+  width: '100%',
+  textAlign: 'left',
+  marginTop: '4px',
+  color: '#1C1C1E',
+}
+
 function ruleText(line) {
   if (line.plan && line.plan.weightState === 'unknown-partial') {
     return 'Partly filled pack. The full pack weight is not an exact weight.'
@@ -18,7 +27,7 @@ function ruleText(line) {
     return line.label || ''
   }
   if (!line.unitName || line.containerMicro == null) {
-    return line.plan ? planText(line.plan) : (line.label || '')
+    return line.plan ? boxDescription(line.plan) : (line.label || '')
   }
   const unit = line.unitName.toLowerCase()
   const container = line.containers === 1 ? unit : `${unit}s`
@@ -26,8 +35,8 @@ function ruleText(line) {
   return `${line.containers} ${container} × ${each} kg`
 }
 
-function planText(plan) {
-  const boxes = (plan.boxes || []).map((box) => {
+function boxDescription(plan) {
+  return (plan.boxes || []).map((box) => {
     const unit = String(box.unitName || 'pack').toLowerCase()
     if (!box.full) {
       return `${box.piecesEach} in a ${unit} of ${box.piecesPerUnit}, ${box.unfilled} empty`
@@ -35,10 +44,141 @@ function planText(plan) {
     const noun = box.count === 1 ? unit : (unit === 'box' ? 'boxes' : `${unit}s`)
     return `${box.count} ${noun} of ${box.piecesPerUnit}`
   }).join(' + ')
-  if (plan.weightState === 'calculated') {
-    return `${boxes} · ${formatKilograms(plan.calculatedMicro)} kg`
+}
+
+function weightKey(plan) {
+  if (plan.weightState === 'calculated') return `verified:${plan.calculatedMicro.toString()}`
+  if (plan.planningAllowanceMicro != null) return `allowance:${plan.planningAllowanceMicro.toString()}`
+  return `unknown:${plan.weightState}`
+}
+
+function groupPlans(plans) {
+  const groups = []
+  for (const plan of plans) {
+    const key = weightKey(plan)
+    const existing = groups.find((group) => group.key === key)
+    if (existing) existing.plans.push(plan)
+    else groups.push({ key, plans: [plan] })
   }
-  return `${boxes} · partly filled, weight unknown`
+  return groups
+}
+
+function weightCaption(plan, sameAsSuggestion, confirmed) {
+  if (plan.weightState === 'calculated') {
+    const kg = formatKilograms(plan.calculatedMicro)
+    if (confirmed) return `ATA full-pack total included: ${kg} kg.`
+    const prefix = sameAsSuggestion ? 'Same ATA full-pack total' : 'ATA full-pack total'
+    return `${prefix}: ${kg} kg. The weight is calculated from ATA full-pack records. It is not a scale measurement of this order.`
+  }
+  if (plan.planningAllowanceMicro != null) {
+    const kg = formatKilograms(plan.planningAllowanceMicro)
+    const prefix = sameAsSuggestion ? 'Same planning allowance' : 'Planning allowance'
+    return `${prefix}: ${kg} kg. This is the gross weight of the full boxes, not a confirmed weight. It is not a scale measurement of this order.`
+  }
+  return 'Exact weight unknown. No planning allowance is available.'
+}
+
+function planIsSelected(line, plan) {
+  return Boolean((line.planSelected || line.planConfirmed) && line.plan && line.plan.signature === plan.signature)
+}
+
+function PlanOption({ line, plan, onSelect, onConfirmWeight, hideCaption }) {
+  const selected = planIsSelected(line, plan)
+  const confirmed = selected && line.planConfirmed && plan.weightState === 'calculated'
+  return (
+    <div>
+      {(!hideCaption || confirmed) && (
+        <div style={{ color: '#6B6860', marginTop: '4px', lineHeight: 1.45 }}>
+          {weightCaption(plan, false, confirmed)}
+        </div>
+      )}
+      <button type="button" onClick={() => onSelect(plan)} style={buttonStyle}>
+        {selected ? 'Selected packing' : (plan.role === 'suggestion' ? 'Select Labels packing' : 'Select this packing')}
+        {' · '}
+        {plan.origin}
+        {' · '}
+        {confirmed ? 'ATA full-pack total included' : (selected ? (plan.weightState === 'calculated' ? 'weight not confirmed' : 'exact weight unknown') : 'not confirmed')}
+        {' · '}
+        {boxDescription(plan)}
+      </button>
+      {selected && plan.weightState === 'calculated' && !line.planConfirmed && (
+        <button type="button" onClick={() => onConfirmWeight(plan)} style={buttonStyle}>
+          Include ATA full-pack total
+        </button>
+      )}
+    </div>
+  )
+}
+
+function PackingChoices({ line, onSelect, onConfirmWeight, onClear }) {
+  const plans = line.plans || []
+  if (!plans.length) return null
+  const choosable = plans.length > 1
+    || line.disposition === 'ambiguous'
+    || line.disposition === 'pack_selected'
+    || line.planSelected
+    || line.planConfirmed
+  const truncation = (line.packingTruncation || []).map((reason) => (
+    <div key={reason} style={{ color: '#854F0B', marginTop: '4px', lineHeight: 1.45 }}>{reason}</div>
+  ))
+  if (!choosable) {
+    if (!line.plan) return null
+    return (
+      <div style={{ marginTop: '8px', color: '#6B6860', lineHeight: 1.45 }}>
+        <div>{boxDescription(line.plan)}</div>
+        {truncation}
+      </div>
+    )
+  }
+  const suggestion = plans.find((plan) => plan.role === 'suggestion') || plans[0]
+  const others = plans.filter((plan) => plan.signature !== suggestion.signature)
+  const showAllowanceNote = plans.some((plan) => plan.weightState === 'unknown-partial' || plan.planningAllowanceMicro != null)
+  return (
+    <div style={{ marginTop: '8px' }}>
+      <div style={{ fontSize: '12px', color: '#6B6860', marginBottom: '4px' }}>Labels suggestion</div>
+      <PlanOption
+        line={line}
+        plan={suggestion}
+        onSelect={onSelect}
+        onConfirmWeight={onConfirmWeight}
+      />
+      {showAllowanceNote && (
+        <div style={{ color: '#6B6860', marginTop: '4px', lineHeight: 1.45 }}>
+          A planning allowance counts every box at the full gross weight recorded for that box size. It does not divide that weight by the number of pieces.
+        </div>
+      )}
+      {others.length > 0 && (
+        <details style={{ marginTop: '8px' }}>
+          <summary style={{ fontSize: '12px', color: '#6B6860', cursor: 'pointer', minHeight: '44px', display: 'flex', alignItems: 'center' }}>
+            Other packing options
+          </summary>
+          {groupPlans(others).map((group) => (
+            <div key={group.key} style={{ marginTop: '8px' }}>
+              <div style={{ color: '#6B6860', lineHeight: 1.45 }}>
+                {weightCaption(group.plans[0], weightKey(group.plans[0]) === weightKey(suggestion))}
+              </div>
+              {group.plans.map((plan) => (
+                <PlanOption
+                  key={plan.signature}
+                  line={line}
+                  plan={plan}
+                  onSelect={onSelect}
+                  onConfirmWeight={onConfirmWeight}
+                  hideCaption
+                />
+              ))}
+            </div>
+          ))}
+        </details>
+      )}
+      {truncation}
+      {(line.planSelected || line.planConfirmed) && (
+        <button type="button" onClick={onClear} style={buttonStyle}>
+          Clear packing
+        </button>
+      )}
+    </div>
+  )
 }
 
 function alternativeText(alternative) {
@@ -81,13 +221,14 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
     }
   }, [jobId, items, itemsError, packs])
 
-  function confirmPlan(lineId, plan) {
+  function writePack(lineId, plan, weightConfirmed) {
     setPacksByJob((current) => ({
       ...current,
       [jobId]: {
         ...(current[jobId] || {}),
         [lineId]: {
-          confirmed: true,
+          selected: true,
+          weightConfirmed: Boolean(weightConfirmed),
           quantity: plan.fingerprint.quantity,
           rules: plan.fingerprint.rules,
         },
@@ -126,7 +267,7 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
               <>
                 <div style={{ fontSize: '20px', fontWeight: '600', color: '#1C1C1E' }}>{view.knownKg} kg</div>
                 <div style={{ fontSize: '12px', marginTop: '2px' }}>
-                  {view.status === 'PARTIAL' ? 'Known weight so far' : 'Calculated weight'}
+                  {view.status === 'PARTIAL' ? 'ATA total so far' : 'Calculated weight'}
                 </div>
               </>
             ) : (
@@ -138,21 +279,21 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
           {view.reason == null && (
             <div style={{ fontSize: '12px', textAlign: 'right' }}>
               <div>{view.calculated} calculated</div>
-              <div>{view.missing} without a confirmed weight</div>
+              <div>{view.missing} without an ATA total</div>
             </div>
           )}
         </div>
         <div style={{ fontSize: '12px', marginTop: '8px', lineHeight: 1.5 }}>{orderWeightMessage(view)}</div>
         {view.reason == null && (
           <div style={{ fontSize: '12px', marginTop: '6px', lineHeight: 1.5 }}>
-            <div>Confirmed weight: {view.knownKg != null ? `${view.knownKg} kg` : 'not available'}</div>
+            <div>ATA full-pack total: {view.knownKg != null ? `${view.knownKg} kg` : 'not included'}</div>
+            <div>
+              Planning allowance: {view.planningKg
+                ? `${view.planningKg} kg. Provisional full-box gross weight. Not a confirmed weight. It is not a scale measurement of this order.`
+                : 'not selected'}
+            </div>
             <div>Packaging preview: {view.previewKg ? `${view.previewKg} kg. This choice is not saved.` : 'not confirmed'}</div>
             <div>Unknown weight: {view.missing} {view.missing === 1 ? 'line' : 'lines'}</div>
-          </div>
-        )}
-        {view.previewKg && (
-          <div style={{ fontSize: '12px', marginTop: '6px', lineHeight: 1.5 }}>
-            Packaging preview: {view.previewKg} kg. This choice is not saved.
           </div>
         )}
         <div style={{ fontSize: '12px', marginTop: '6px' }}>Informed Luton limit: 1,200 kg.</div>
@@ -184,9 +325,11 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
                 <li key={line.id || line.name} style={{ padding: '8px 0', borderBottom: '1px solid #EDE8E0', fontSize: '12px' }}>
                   <div style={{ fontWeight: '600', color: '#1C1C1E' }}>{line.name}</div>
                   <div style={{ color: '#6B6860', marginTop: '2px', lineHeight: 1.45 }}>
-                    {line.disposition === 'calculated' || line.disposition === 'preview'
-                      ? `${formatKilograms(line.weightMicro)} kg · ${ruleText(line)}${line.disposition === 'preview' ? ' · preview' : ''}`
-                      : line.label}
+                    {line.disposition === 'pack_selected' && line.plan && line.plan.weightState === 'calculated'
+                      ? `Selected packing · ATA full-pack total ${formatKilograms(line.verifiedMicro)} kg · not included yet`
+                      : (line.disposition === 'calculated' || line.disposition === 'preview'
+                        ? `${formatKilograms(line.weightMicro)} kg · ${ruleText(line)}${line.disposition === 'preview' ? ' · preview' : ''}`
+                        : line.label)}
                   </div>
                   {note && <div style={{ color: '#6B6860', marginTop: '4px', lineHeight: 1.45 }}>{note}</div>}
                   {choices.length > 0 && (
@@ -196,42 +339,12 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
                       ))}
                     </ul>
                   )}
-                  {(line.plans || []).length > 0 && (
-                    <div style={{ marginTop: '8px' }}>
-                      <div style={{ fontSize: '12px', color: '#6B6860', marginBottom: '4px' }}>Labels / ATA packing</div>
-                      {line.plans.map((plan) => {
-                        const selected = line.planConfirmed && line.plan && line.plan.signature === plan.signature
-                        return (
-                          <button
-                            key={plan.signature}
-                            type="button"
-                            onClick={() => confirmPlan(line.id, plan)}
-                            style={{ display: 'block', minHeight: '44px', width: '100%', textAlign: 'left', marginTop: '4px', color: '#1C1C1E' }}
-                          >
-                            {selected ? 'Confirmed' : (plan.role === 'suggestion' ? 'Confirm Labels suggestion' : 'Confirm alternative')}
-                            {' · '}
-                            {plan.origin}
-                            {' · '}
-                            {selected ? (plan.weightState === 'calculated' ? 'confirmed weight' : 'selected, weight unknown') : 'not confirmed'}
-                            {' · '}
-                            {planText(plan)}
-                          </button>
-                        )
-                      })}
-                      {(line.packingTruncation || []).map((reason) => (
-                        <div key={reason} style={{ color: '#854F0B', marginTop: '4px', lineHeight: 1.45 }}>{reason}</div>
-                      ))}
-                      {line.planConfirmed && (line.plans || []).length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => clearPlan(line.id)}
-                          style={{ display: 'block', minHeight: '44px', width: '100%', textAlign: 'left', marginTop: '4px' }}
-                        >
-                          Clear plan
-                        </button>
-                      )}
-                    </div>
-                  )}
+                  <PackingChoices
+                    line={line}
+                    onSelect={(plan) => writePack(line.id, plan, false)}
+                    onConfirmWeight={(plan) => writePack(line.id, plan, true)}
+                    onClear={() => clearPlan(line.id)}
+                  />
                 </li>
               )
             })}

@@ -16,4 +16,6 @@ test('printed labels still use the largest capacity and the existing remainder s
   expect(generateLabelsForQuantity(30, 30)).toEqual([30])
   expect(generateLabelsForQuantity(30, 15)).toEqual([15, 15])
   expect(generateLabelsForQuantity(16, 15)).toEqual([15, 1])
+  expect(generateLabelsForQuantity(70, 90)).toEqual([70])
+  expect(generateLabelsForQuantity(70, 50)).toEqual([50, 20])
 })

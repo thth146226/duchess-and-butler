@@ -197,8 +197,10 @@ function unavailableAssessment() {
     status: 'UNAVAILABLE',
     knownMicro: 0n,
     previewMicro: 0n,
+    planningMicro: 0n,
     calculated: 0,
     previewCount: 0,
+    planningCount: 0,
     missing: 0,
     lines: [],
     limitMicro: LIMIT_MICRO,
@@ -254,8 +256,16 @@ function ruleFromEntry(entry) {
   }
 }
 
-function confirmedPlan(plans, choice, quantity) {
-  if (!choice || typeof choice !== 'object' || !choice.confirmed || choice.quantity !== quantity) {
+function choiceSelectsPack(choice) {
+  return Boolean(choice && typeof choice === 'object' && (choice.selected || choice.confirmed || choice.weightConfirmed))
+}
+
+function choiceConfirmsWeight(choice) {
+  return Boolean(choice && typeof choice === 'object' && (choice.confirmed || choice.weightConfirmed))
+}
+
+function matchedPlan(plans, choice, quantity) {
+  if (!choiceSelectsPack(choice) || choice.quantity !== quantity) {
     return null
   }
   const wanted = Array.isArray(choice.rules) ? choice.rules : []
@@ -290,8 +300,10 @@ export function assessOrderWeight(items, catalogRows, selections) {
   const lines = []
   let knownMicro = 0n
   let previewMicro = 0n
+  let planningMicro = 0n
   let calculated = 0
   let previewCount = 0
+  let planningCount = 0
   let missing = 0
   for (const item of Array.isArray(items) ? items : []) {
     const name = item && item.item_name ? item.item_name : ''
@@ -311,27 +323,15 @@ export function assessOrderWeight(items, catalogRows, selections) {
       const rules = packingRules(alternatives)
       const planned = planPacking({ quantity, rules })
       const choice = selections && item && selections[item.id]
-      const accepted = confirmedPlan(planned.plans, choice, quantity)
-      if (accepted && accepted.exact && accepted.weightState === 'calculated') {
-        knownMicro += accepted.calculatedMicro
-        calculated += 1
-        lines.push({
-          id: item.id,
-          name,
-          disposition: 'calculated',
-          label: 'Confirmed weight',
-          alternatives,
-          plans: planned.plans,
-          packingTruncation: planned.truncation,
-          plan: accepted,
-          planConfirmed: true,
-          weightMicro: accepted.calculatedMicro,
-          containers: accepted.boxCount,
-        })
-        continue
-      }
-      missing += 1
+      const accepted = matchedPlan(planned.plans, choice, quantity)
+      const weightConfirmed = choiceConfirmsWeight(choice)
       if (accepted && accepted.weightState === 'unknown-partial') {
+        const allowance = accepted.planningAllowanceMicro
+        if (allowance != null && allowance > 0n) {
+          planningMicro += allowance
+          planningCount += 1
+        }
+        missing += 1
         const partialBox = accepted.boxes.find((box) => !box.full)
         lines.push({
           id: item.id,
@@ -342,7 +342,9 @@ export function assessOrderWeight(items, catalogRows, selections) {
           plans: planned.plans,
           packingTruncation: planned.truncation,
           plan: accepted,
-          planConfirmed: true,
+          planSelected: true,
+          planConfirmed: false,
+          planningAllowanceMicro: allowance,
           piecesPerUnit: partialBox ? partialBox.piecesPerUnit : null,
           unitName: partialBox ? partialBox.unitName : '',
           partialPieces: partialBox ? partialBox.piecesEach : null,
@@ -350,6 +352,44 @@ export function assessOrderWeight(items, catalogRows, selections) {
         })
         continue
       }
+      if (accepted && accepted.exact && accepted.weightState === 'calculated' && weightConfirmed) {
+        knownMicro += accepted.calculatedMicro
+        calculated += 1
+        lines.push({
+          id: item.id,
+          name,
+          disposition: 'calculated',
+          label: 'ATA full-pack total',
+          alternatives,
+          plans: planned.plans,
+          packingTruncation: planned.truncation,
+          plan: accepted,
+          planSelected: true,
+          planConfirmed: true,
+          weightMicro: accepted.calculatedMicro,
+          containers: accepted.boxCount,
+        })
+        continue
+      }
+      if (accepted) {
+        missing += 1
+        lines.push({
+          id: item.id,
+          name,
+          disposition: 'pack_selected',
+          label: accepted.weightState === 'calculated' ? 'Packing selected' : 'Needs verification',
+          alternatives,
+          plans: planned.plans,
+          packingTruncation: planned.truncation,
+          plan: accepted,
+          planSelected: true,
+          planConfirmed: false,
+          verifiedMicro: accepted.weightState === 'calculated' ? accepted.calculatedMicro : 0n,
+          weightMicro: accepted.weightState === 'calculated' ? accepted.calculatedMicro : 0n,
+        })
+        continue
+      }
+      missing += 1
       const chosen = selectedAlternative(alternatives, item && item.id, selections)
       const single = chosen && chosen.weightKind === 'positive'
         ? planPacking({ quantity, rules: packingRules([chosen]) }).plans[0]
@@ -369,6 +409,9 @@ export function assessOrderWeight(items, catalogRows, selections) {
       if (single.exact && single.weightState === 'calculated') {
         previewMicro += single.calculatedMicro
         previewCount += 1
+      } else if (single.planningAllowanceMicro != null && single.planningAllowanceMicro > 0n) {
+        planningMicro += single.planningAllowanceMicro
+        planningCount += 1
       }
       lines.push({
         id: item.id,
@@ -407,6 +450,13 @@ export function assessOrderWeight(items, catalogRows, selections) {
       const planned = planPacking({ quantity, rules: [ruleFromEntry(entry)] })
       const plan = planned.plans[0] || null
       missing += 1
+      const allowance = plan && plan.planningAllowanceMicro != null && plan.planningAllowanceMicro > 0n
+        ? plan.planningAllowanceMicro
+        : null
+      if (allowance != null) {
+        planningMicro += allowance
+        planningCount += 1
+      }
       lines.push({
         id: item.id,
         name,
@@ -418,7 +468,8 @@ export function assessOrderWeight(items, catalogRows, selections) {
         containers: plan ? plan.boxes.filter((box) => box.full).reduce((sum, box) => sum + box.count, 0) : 0,
         piecesPerUnit: entry.piecesPerUnit,
         unitName: entry.unitName,
-        containerMicro: entry.weight.micro,
+        containerMicro: entry.weight.kind === 'positive' ? entry.weight.micro : 0n,
+        planningAllowanceMicro: allowance,
         partialPieces: plan ? plan.boxes.find((box) => !box.full)?.piecesEach : quantity,
         unfilled: plan ? plan.unfilledPieces : null,
       })
@@ -451,8 +502,10 @@ export function assessOrderWeight(items, catalogRows, selections) {
     status: physical === 0 ? 'UNAVAILABLE' : (missing === 0 ? 'COMPLETE' : 'PARTIAL'),
     knownMicro,
     previewMicro,
+    planningMicro,
     calculated,
     previewCount,
+    planningCount,
     missing,
     lines,
     limitMicro: LIMIT_MICRO,
@@ -482,16 +535,22 @@ export function measurementRequest(line) {
     return 'No catalog packing rule. Do not copy another product weight.'
   }
   if (line.disposition === 'ambiguous') {
-    return 'Labels / ATA can suggest a packing plan. The suggestion is a preview and is not saved.'
+    return 'Labels / ATA can suggest a packing plan. The suggestion is a preview and is not saved. A planning allowance is not a confirmed weight.'
+  }
+  if (line.disposition === 'pack_selected') {
+    return 'The weight is calculated from ATA full-pack records. It is not a scale measurement of this order.'
   }
   if (line.disposition === 'partial_box') {
-    const unit = String(line.unitName || 'pack').toLowerCase()
+    const unit = String(line.unitName || line.plan?.boxes?.find((box) => !box.full)?.unitName || 'pack').toLowerCase()
     const filled = line.partialPieces || line.plan?.boxes?.find((box) => !box.full)?.piecesEach
-    const capacity = line.piecesPerUnit
+    const capacity = line.piecesPerUnit || line.plan?.boxes?.find((box) => !box.full)?.piecesPerUnit
+    const allowance = line.planningAllowanceMicro != null
+      ? ` Planning allowance: ${formatKilograms(line.planningAllowanceMicro)} kg, the gross weight of the full packs in this configuration. It is not a confirmed weight.`
+      : ''
     if (filled && capacity) {
-      return `A partly filled ${unit} of ${capacity} holds ${filled}. ATA records the full ${unit} weight, not the weight of ${filled} pieces.`
+      return `A partly filled ${unit} of ${capacity} holds ${filled}. ATA records the full ${unit} weight, not the weight of ${filled} pieces.${allowance}`
     }
-    return 'ATA records the full pack weight, not the weight of a partly filled pack.'
+    return `ATA records the full pack weight, not the weight of a partly filled pack.${allowance}`
   }
   return ''
 }
@@ -508,6 +567,7 @@ export function presentOrderWeight(assessment, options = {}) {
   const reason = options.itemsError ? 'items' : (source.status === 'UNAVAILABLE' ? 'catalog' : null)
   const complete = source.status === 'COMPLETE'
   const previewMicro = source.previewMicro || 0n
+  const planningMicro = source.planningMicro || 0n
   const hasConfirmedWeight = complete || (source.status === 'PARTIAL' && source.knownMicro > 0n)
   const overLimit = complete && source.knownMicro > source.limitMicro
   const remainingMicro = complete ? source.limitMicro - source.knownMicro : null
@@ -522,7 +582,9 @@ export function presentOrderWeight(assessment, options = {}) {
     reason,
     knownKg: hasConfirmedWeight ? formatKilograms(source.knownMicro) : null,
     previewKg: previewMicro > 0n ? formatKilograms(previewMicro) : null,
+    planningKg: planningMicro > 0n ? formatKilograms(planningMicro) : null,
     previewCount: source.previewCount || 0,
+    planningCount: source.planningCount || 0,
     calculated: source.calculated || 0,
     missing: source.missing || 0,
     percent: percentTenths == null ? null : (percentTenths / 10).toFixed(1),
@@ -540,8 +602,11 @@ export function orderWeightMessage(view) {
   if (view.reason === 'catalog' || view.status === 'UNAVAILABLE') {
     return 'The weight catalog could not be loaded. The order weight is not shown.'
   }
-  if (view.status === 'PARTIAL' && view.knownKg == null) {
+  if (view.status === 'PARTIAL' && view.knownKg == null && !view.previewKg && !view.planningKg) {
     return 'No confirmed weight yet. The order total is not available.'
+  }
+  if (view.status === 'PARTIAL' && view.planningKg) {
+    return 'Some physical lines still need a weight. A planning allowance is provisional and is not a confirmed weight or a vehicle recommendation.'
   }
   if (view.status === 'PARTIAL' && view.previewKg) {
     return 'Some physical lines still need a weight. A selected box is only a preview: it is not saved and it is not a vehicle recommendation.'
@@ -549,7 +614,7 @@ export function orderWeightMessage(view) {
   if (view.status === 'PARTIAL') {
     return 'Some physical lines still need a weight. This is not a vehicle recommendation.'
   }
-  return 'All physical lines have a validated weight.'
+  return 'All physical lines have an ATA full-pack total. This is not a scale measurement of this order.'
 }
 
 let catalogPromise = null
