@@ -23,6 +23,10 @@ const VERIFIED_ATA_NAME_ALIASES = new Map([
     normalizeCatalogName('Duchess Drape Iris White Tablecloth 245cm x 350cm (96" x 137")'),
     normalizeCatalogName('Duchess Drape Iris White Tablecloth 245cm x 350cm'),
   ],
+  [
+    normalizeCatalogName('Dali Dining Chair'),
+    normalizeCatalogName('Dali Black and White Boucle Chair'),
+  ],
 ])
 
 function findCatalogRule(index, orderName, labelsMap) {
@@ -30,7 +34,21 @@ function findCatalogRule(index, orderName, labelsMap) {
   const direct = index.get(normalized)
   if (direct) return direct
   const alias = VERIFIED_ATA_NAME_ALIASES.get(normalized)
-  if (alias && index.get(alias)) return index.get(alias)
+  if (alias && index.get(alias)) {
+    const matched = index.get(alias)
+
+    if (normalized === normalizeCatalogName('Dali Dining Chair')) {
+      const chair = matched.status === 'unique' ? matched.entry : null
+      const unit = String(chair?.unitName || '').trim().toLowerCase()
+
+      // Only match a validated individual chair, never an unknown pack.
+      if (!chair || chair.piecesPerUnit !== 1 || !PIECE_UNITS.has(unit)) {
+        return undefined
+      }
+    }
+
+    return matched
+  }
   if (!labelsMap) return undefined
   const resolved = resolveJobItemRule({ item_name: orderName }, labelsMap)
   if (!resolved.matched || !resolved.rule?.name) return undefined

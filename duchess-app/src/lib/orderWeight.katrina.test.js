@@ -196,3 +196,108 @@ describe('Katrina QDB08128 read-only ATA figures', () => {
     expect(measurementRequest(pending.lines[0])).toContain('preview')
   })
 })
+
+describe('Dali chair verified ATA mapping', () => {
+  const item = {
+    id: 'KATRINA-DALI',
+    item_name: 'Dali Dining Chair',
+    quantity: 18,
+    opportunity_item_type_name: 'Principal',
+    transaction_type_name: 'Rental',
+  }
+
+  const ata = {
+    id: '525089d2-f4f8-49dc-98bd-63ac8e2f225d',
+    name: 'Dali Black and White Boucle Chair',
+    unit_name: 'individual',
+    pieces_per_unit: 1,
+    weight_per_unit: '7.000',
+    active: true,
+  }
+
+  test('calculates 18 chairs at 7 kg each', () => {
+    const result = assessOrderWeight([item], [ata])
+    expect(result.status).toBe('COMPLETE')
+    expect(result.calculated).toBe(1)
+    expect(formatKilograms(result.knownMicro)).toBe('126')
+  })
+
+  test('refuses blank unit, container unit and wrong capacity', () => {
+    const invalid = [
+      { ...ata, unit_name: '' },
+      { ...ata, unit_name: 'box' },
+      { ...ata, pieces_per_unit: 2 },
+      { ...ata, active: false },
+      { ...ata, weight_per_unit: '0' },
+    ]
+
+    for (const row of invalid) {
+      const result = assessOrderWeight([item], [row])
+      expect(result.calculated).toBe(0)
+      expect(result.knownMicro).toBe(0n)
+      expect(result.status).toBe('PARTIAL')
+    }
+  })
+
+  test('does not match another Dali variant', () => {
+    const other = {
+      ...item,
+      item_name: 'Dali Dining Chair Different Model',
+    }
+    const result = assessOrderWeight([other], [ata])
+    expect(result.calculated).toBe(0)
+  })
+
+  test('direct ATA name match takes precedence', () => {
+    const direct = {
+      ...ata,
+      id: 'DIRECT-DALI',
+      name: 'Dali Dining Chair',
+      weight_per_unit: '8.000',
+    }
+    const result = assessOrderWeight([item], [ata, direct])
+    expect(formatKilograms(result.knownMicro)).toBe('144')
+  })
+
+  test('Katrina known subtotal becomes 185.1 kg', () => {
+    const five = REAL_CONFIRMED.filter(
+      ([name]) => name !== 'Perlette Napkin - Cream'
+    )
+    const items = five.map(
+      ([name, quantity], index) => line(name, quantity, index)
+    )
+    const catalog = five.map(
+      ([name, , unit, pieces, weight]) => ({
+        name,
+        unit_name: unit,
+        pieces_per_unit: pieces,
+        weight_per_unit: weight,
+        active: true,
+      })
+    )
+
+    const result = assessOrderWeight(
+      [
+        ...items,
+        item,
+        line('Perlette Napkin - Cream', 20, 99),
+      ],
+      [
+        ...catalog,
+        ata,
+        {
+          name: 'Perlette Napkin - Cream',
+          unit_name: 'box',
+          pieces_per_unit: 70,
+          weight_per_unit: '4.7',
+          active: true,
+        },
+      ]
+    )
+
+    expect(result.status).toBe('PARTIAL')
+    expect(result.calculated).toBe(6)
+    expect(result.missing).toBe(1)
+    expect(formatKilograms(result.knownMicro)).toBe('185.1')
+  })
+})
