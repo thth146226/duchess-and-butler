@@ -715,34 +715,84 @@ export function formatKilograms(micro, denominator = 1n) {
   return negative && rounded !== 0n ? `-${text}` : text
 }
 
+function allowanceMicro(line) {
+  if (line && typeof line.planningAllowanceMicro === 'bigint' && line.planningAllowanceMicro > 0n) {
+    return line.planningAllowanceMicro
+  }
+  const planAllowance = line && line.plan ? line.plan.planningAllowanceMicro : null
+  if (typeof planAllowance === 'bigint' && planAllowance > 0n) {
+    return planAllowance
+  }
+  return null
+}
+
+function lineEstimateKind(line) {
+  if (!line || line.disposition === 'not_physical') {
+    return 'ignored'
+  }
+  if (line.disposition === 'calculated') {
+    return 'ata'
+  }
+  if (line.disposition === 'derived' && typeof line.derivedNumerator === 'bigint' && line.derivedNumerator > 0n) {
+    return 'derived'
+  }
+  if (line.disposition === 'measured' && typeof line.measuredMicro === 'bigint' && line.measuredMicro > 0n) {
+    return 'measured'
+  }
+  if ((line.disposition === 'partial_box' || line.disposition === 'preview') && allowanceMicro(line)) {
+    return 'allowance'
+  }
+  return 'none'
+}
+
 export function presentOrderWeight(assessment, options = {}) {
   const source = options.itemsError ? unavailableAssessment() : (assessment || unavailableAssessment())
   const reason = options.itemsError ? 'items' : (source.status === 'UNAVAILABLE' ? 'catalog' : null)
   const complete = source.status === 'COMPLETE'
   const previewMicro = source.previewMicro || 0n
   const planningMicro = source.planningMicro || 0n
+  const knownMicro = source.knownMicro || 0n
   const derivedNumerator = typeof source.derivedNumerator === 'bigint' ? source.derivedNumerator : 0n
   const derivedDenominator = typeof source.derivedDenominator === 'bigint' && source.derivedDenominator > 0n
     ? source.derivedDenominator
     : 1n
   const measuredMicro = source.measuredMicro || 0n
-  const hasConfirmedWeight = complete || (source.status === 'PARTIAL' && source.knownMicro > 0n)
-  const overLimit = complete && source.knownMicro > source.limitMicro
-  const remainingMicro = complete ? source.limitMicro - source.knownMicro : null
+  const hasConfirmedWeight = complete || (source.status === 'PARTIAL' && knownMicro > 0n)
+  const overLimit = complete && knownMicro > source.limitMicro
+  const remainingMicro = complete ? source.limitMicro - knownMicro : null
   const percentTenths = complete
-    ? Number((source.knownMicro * 1000n) / source.limitMicro)
+    ? Number((knownMicro * 1000n) / source.limitMicro)
     : null
   const estimateVehicles = overLimit && !source.configurationOpen
-    ? Number((source.knownMicro + source.limitMicro - 1n) / source.limitMicro)
+    ? Number((knownMicro + source.limitMicro - 1n) / source.limitMicro)
     : null
+  let estimated = null
+  function include(numerator, denominator) {
+    if (typeof numerator !== 'bigint' || numerator === 0n) {
+      return
+    }
+    estimated = addRational(estimated, { numerator, denominator })
+  }
+  include(knownMicro, 1n)
+  include(derivedNumerator, derivedDenominator)
+  include(planningMicro, 1n)
+  include(measuredMicro, 1n)
+  const unestimatedCount = (source.lines || []).filter((line) => lineEstimateKind(line) === 'none').length
+  const estimatedProvisional = planningMicro > 0n || derivedNumerator > 0n
+  const estimatedCoverage = estimated == null ? null : (unestimatedCount > 0 ? 'partial' : 'complete')
   return {
     status: source.status,
     reason,
-    knownKg: hasConfirmedWeight ? formatKilograms(source.knownMicro) : null,
+    knownKg: hasConfirmedWeight ? formatKilograms(knownMicro) : null,
     previewKg: previewMicro > 0n ? formatKilograms(previewMicro) : null,
     planningKg: planningMicro > 0n ? formatKilograms(planningMicro) : null,
     derivedKg: derivedNumerator > 0n ? formatKilograms(derivedNumerator, derivedDenominator) : null,
     measuredKg: measuredMicro > 0n ? formatKilograms(measuredMicro) : null,
+    estimatedTotalKg: estimated ? formatKilograms(estimated.numerator, estimated.denominator) : null,
+    estimatedCoverage,
+    estimatedProvisional,
+    showEstimatedHeadline: Boolean(estimated) && (estimatedProvisional || unestimatedCount > 0),
+    unestimatedCount,
     previewCount: source.previewCount || 0,
     planningCount: source.planningCount || 0,
     derivedCount: source.derivedCount || 0,
@@ -762,6 +812,12 @@ export function orderWeightMessage(view) {
   }
   if (view.reason === 'catalog' || view.status === 'UNAVAILABLE') {
     return 'The weight catalog could not be loaded. The order weight is not shown.'
+  }
+  if (view.showEstimatedHeadline) {
+    const gap = view.estimatedCoverage === 'partial'
+      ? ` ${view.unestimatedCount} ${view.unestimatedCount === 1 ? 'line has' : 'lines have'} no usable weight.`
+      : ''
+    return `Planning estimate based on ATA packing records. Not a scale measurement or a vehicle loading approval.${gap}`
   }
   if (view.status === 'PARTIAL' && view.knownKg == null && !view.previewKg && !view.planningKg && !view.derivedKg && !view.measuredKg) {
     return 'No confirmed weight yet. The order total is not available.'

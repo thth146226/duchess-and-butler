@@ -252,9 +252,16 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
         Order weight
       </div>
       <div style={{ background: tone.background, color: tone.color, borderRadius: '8px', padding: '12px 14px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minWidth: '0px' }}>
           <div>
-            {view.knownKg != null ? (
+            {view.showEstimatedHeadline ? (
+              <>
+                <div style={{ fontSize: '20px', fontWeight: '600', color: '#1C1C1E' }}>{view.estimatedTotalKg} kg</div>
+                <div style={{ fontSize: '12px', marginTop: '2px' }}>
+                  {view.estimatedCoverage === 'partial' ? 'Estimated planning subtotal' : 'Estimated planning total'}
+                </div>
+              </>
+            ) : view.knownKg != null ? (
               <>
                 <div style={{ fontSize: '20px', fontWeight: '600', color: '#1C1C1E' }}>{view.knownKg} kg</div>
                 <div style={{ fontSize: '12px', marginTop: '2px' }}>
@@ -268,9 +275,11 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
             )}
           </div>
           {view.reason == null && (
-            <div style={{ fontSize: '12px', textAlign: 'right' }}>
-              <div>{view.calculated} calculated</div>
-              <div>{view.missing} without an ATA total</div>
+            <div style={{ fontSize: '12px' }}>
+              <div>{view.calculated} with an ATA full-pack total</div>
+              {view.planningCount > 0 && <div>{view.planningCount} with a planning allowance</div>}
+              {view.derivedCount > 0 && <div>{view.derivedCount} with a derived gross</div>}
+              {view.unestimatedCount > 0 && <div>{view.unestimatedCount} without a usable weight</div>}
             </div>
           )}
         </div>
@@ -278,18 +287,19 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
         {view.reason == null && (
           <div style={{ fontSize: '12px', marginTop: '6px', lineHeight: 1.5 }}>
             <div>ATA full-pack total: {view.knownKg != null ? `${view.knownKg} kg` : 'not included'}</div>
-            <div>
-              Derived gross: {view.derivedKg
-                ? `${view.derivedKg} kg. From tare and net content. It is not a scale measurement of this order.`
-                : 'not available'}
-            </div>
-            <div>
-              Planning allowance: {view.planningKg
-                ? `${view.planningKg} kg. Provisional full-box gross weight. Not a confirmed weight. It is not a scale measurement of this order.`
-                : 'not available'}
-            </div>
-            <div>Packaging preview: {view.previewKg ? `${view.previewKg} kg. This choice is not saved.` : 'not confirmed'}</div>
-            <div>Unknown weight: {view.missing} {view.missing === 1 ? 'line' : 'lines'}</div>
+            {view.derivedKg && (
+              <div>ATA-derived gross: {view.derivedKg} kg. From tare and net content. It is not a scale measurement of this order.</div>
+            )}
+            {view.planningKg && (
+              <div>Planning allowance: {view.planningKg} kg. Provisional full-box gross weight. Not a confirmed weight. It is not a scale measurement of this order.</div>
+            )}
+            {view.measuredKg && (
+              <div>Measured weight: {view.measuredKg} kg. Recorded on a scale for this order.</div>
+            )}
+            {view.previewKg && <div>Packaging preview: {view.previewKg} kg. This choice is not saved.</div>}
+            {view.unestimatedCount > 0 && (
+              <div>Unestimated lines: {view.unestimatedCount}. The figure above does not cover them.</div>
+            )}
           </div>
         )}
         <div style={{ fontSize: '12px', marginTop: '6px' }}>Informed Luton limit: 1,200 kg.</div>

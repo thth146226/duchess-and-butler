@@ -134,8 +134,9 @@ describe('OrderWeightSection', () => {
     )
     await view.settle()
     expect(view.text()).toContain('4.5 kg')
-    expect(view.text()).toContain('ATA total so far')
-    expect(view.text()).toContain('Some physical lines still need a weight.')
+    expect(view.text()).toContain('Estimated planning subtotal')
+    expect(view.text()).toContain('1 line has no usable weight.')
+    expect(view.text()).toContain('Unestimated lines: 1')
     expect(view.text()).not.toContain('Remaining capacity')
     expect(view.text()).not.toContain('Calculated weight')
     view.unmount()
@@ -268,15 +269,21 @@ describe('OrderWeightSection', () => {
     expect(view.text()).not.toContain('Remaining capacity')
     expect(view.text()).toContain('Planning allowance: 7.4 kg. Provisional full-box gross weight.')
     expect(view.text()).toContain('ATA full-pack total: not included')
+    expect(view.text()).toContain('Estimated planning total')
+    expect(view.text()).toContain('Planning estimate based on ATA packing records. Not a scale measurement or a vehicle loading approval.')
     expect(view.text()).not.toContain('Calculated weight')
+    expect(view.text()).not.toContain('One Luton')
+    expect(headlineKg(view)).toBe('7.4 kg')
     const alternative = [...view.container.querySelectorAll('button')].find((button) => button.textContent.includes('box of 50'))
     await act(async () => {
       alternative.click()
       await new Promise((done) => setTimeout(done, 0))
     })
     expect(view.text()).toContain('Planning allowance: 7.6 kg. Provisional full-box gross weight.')
+    expect(headlineKg(view)).toBe('7.6 kg')
     expect(view.text()).toContain('ATA full-pack total: not included')
     expect(view.text()).not.toContain('Planning allowance: 7.4 kg. Provisional full-box gross weight.')
+    expect(view.text()).not.toContain('One Luton')
     view.unmount()
   })
 
@@ -309,7 +316,11 @@ describe('OrderWeightSection', () => {
     expect(view.text()).toContain('4 boxes of 30')
     expect(view.text()).toContain('2 boxes of 15')
     expect(view.text()).toContain('ATA full-pack total: 107 kg')
+    expect(view.text()).toContain('Estimated planning subtotal')
+    expect(headlineKg(view)).toBe('107 kg')
     expect(view.text()).not.toContain('Remaining capacity')
+    expect(narrowStack(view).style.flexDirection).toBe('column')
+    expect(narrowStack(view).style.minWidth).toBe('0px')
     const other = [...view.container.querySelectorAll('summary')].find((summary) => summary.textContent.includes('Change packing'))
     expect(other.parentElement.open).toBe(false)
     const alternate = [...view.container.querySelectorAll('button')].find((button) => button.textContent.includes('4 boxes of 30'))
@@ -332,7 +343,68 @@ describe('OrderWeightSection', () => {
     await view.settle()
     expect(view.text()).not.toContain('Confirmed weight: 107 kg')
     expect(view.text()).toContain('Planning allowance: 21.4 kg')
+    expect(view.text()).toContain('Estimated planning subtotal')
+    expect(headlineKg(view)).toBe('21.4 kg')
+    expect(view.text()).toContain('1 line has no usable weight.')
     expect(view.text()).not.toContain('14.267')
+    expect(view.text()).not.toContain('One Luton')
+    view.unmount()
+  })
+
+  test('the Royal Academy mix shows the planning total instead of the ATA full-pack alone', async () => {
+    const cutlery = [
+      ['Piccadilly Polished Dinner Knife', '3.9', '7.4', 50, 90],
+      ['Piccadilly Polished Dinner Fork', '4.7', '8.4', 50, 90],
+      ['Piccadilly Polished Dessert Spoon', '4.1', '7.9', 50, 100],
+      ['Piccadilly Polished Starter Knife', '3.5', '6.2', 50, 100],
+      ['Piccadilly Polished Starter/ Dessert Fork', '3.8', '7.2', 50, 100],
+      ['Piccadilly Polished Tea Spoon', '3.6', '6.4', 80, 150],
+    ]
+    mockCatalog({
+      data: [
+        { id: 'dinner', name: 'Eclipse Dinner Plate', unit_name: 'box', pieces_per_unit: 15, weight_per_unit: '15.1', active: true },
+        { id: 'dessert-15', name: 'Eclipse Dessert Plate', unit_name: 'box', pieces_per_unit: 15, weight_per_unit: '10.7', active: true },
+        { id: 'dessert-30', name: 'Eclipse Dessert Plate', unit_name: 'box', pieces_per_unit: 30, weight_per_unit: '21.4', active: true },
+        ...cutlery.flatMap(([name, light, heavy, small, large]) => [
+          { id: `${name}-small`, name, unit_name: 'box', pieces_per_unit: small, weight_per_unit: light, active: true },
+          { id: `${name}-large`, name, unit_name: 'box', pieces_per_unit: large, weight_per_unit: heavy, active: true },
+        ]),
+      ],
+      error: null,
+    })
+    const items = [
+      { id: 'dinner', item_name: 'Eclipse Dinner Plate', quantity: 75, opportunity_item_type_name: 'Principal', transaction_type_name: 'Rental' },
+      { id: 'dessert', item_name: 'Eclipse Dessert Plate', quantity: 150, opportunity_item_type_name: 'Principal', transaction_type_name: 'Rental' },
+      ...cutlery.map(([name], index) => ({
+        id: `cutlery-${index}`,
+        item_name: name,
+        quantity: 70,
+        opportunity_item_type_name: 'Principal',
+        transaction_type_name: 'Rental',
+      })),
+    ]
+    const view = await render(<OrderWeightSection jobId="job-1" items={items} itemsError={false} />)
+    await view.settle()
+    expect(headlineKg(view)).toBe('223.2 kg')
+    expect(view.text()).toContain('Estimated planning total')
+    expect(view.text()).toContain('ATA full-pack total: 182.5 kg')
+    expect(view.text()).toContain('Planning allowance: 40.7 kg')
+    expect(view.text()).toContain('2 with an ATA full-pack total')
+    expect(view.text()).toContain('6 with a planning allowance')
+    expect(view.text()).not.toContain('without a usable weight')
+    expect(view.text()).not.toContain('Measured weight')
+    expect(view.text()).toContain('Planning estimate based on ATA packing records. Not a scale measurement or a vehicle loading approval.')
+    expect(view.text()).not.toContain('One Luton')
+    expect(narrowStack(view).style.flexDirection).toBe('column')
+    expect(narrowStack(view).style.minWidth).toBe('0px')
     view.unmount()
   })
 })
+
+function headlineKg(view) {
+  return [...view.container.querySelectorAll('div')].find((node) => node.style.fontSize === '20px').textContent
+}
+
+function narrowStack(view) {
+  return [...view.container.querySelectorAll('div')].find((node) => node.style.flexDirection === 'column' && node.style.gap === '8px')
+}

@@ -441,8 +441,10 @@ describe('partial packs stay out of the confirmed total', () => {
     expect(suggested.lines[0].disposition).toBe('partial_box')
     expect(suggested.knownMicro).toBe(0n)
     expect(formatKilograms(suggested.planningMicro)).toBe('7.4')
+    expect(presentOrderWeight(suggested).estimatedTotalKg).toBe('7.4')
     expect(alternative.knownMicro).toBe(0n)
     expect(formatKilograms(alternative.planningMicro)).toBe('7.6')
+    expect(presentOrderWeight(alternative).estimatedTotalKg).toBe('7.6')
     expect(presentOrderWeight(suggested).estimateVehicles).toBeNull()
     expect(presentOrderWeight(suggested).knownKg).toBeNull()
     const changedQuantity = assessOrderWeight([
@@ -519,6 +521,8 @@ describe('partial packs stay out of the confirmed total', () => {
     expect(partial.knownMicro).toBe(0n)
     expect(partial.lines[0].plans.every((plan) => formatKilograms(plan.planningAllowanceMicro) === '21.4')).toBe(true)
     expect(partial.lines[0].plans.some((plan) => formatKilograms(plan.planningAllowanceMicro) === '14.267')).toBe(false)
+    expect(presentOrderWeight(partial).estimatedTotalKg).toBe('21.4')
+    expect(presentOrderWeight(partial).estimateVehicles).toBeNull()
   })
 
   test('the Royal Academy order keeps 75.5 kg confirmed while ambiguous packs stay pending', () => {
@@ -554,8 +558,166 @@ describe('partial packs stay out of the confirmed total', () => {
     expect(result.calculated).toBe(2)
     expect(result.missing).toBe(6)
     expect(view.planningKg).toBe('40.7')
+    expect(view.estimatedTotalKg).toBe('223.2')
+    expect(view.measuredKg).toBeNull()
+    expect(view.unestimatedCount).toBe(0)
+    expect(view.planningCount).toBe(6)
+    expect(view.showEstimatedHeadline).toBe(true)
+    expect(orderWeightMessage(view)).toBe('Planning estimate based on ATA packing records. Not a scale measurement or a vehicle loading approval.')
     expect(result.status).toBe('PARTIAL')
     expect(view.estimateVehicles).toBeNull()
     expect(view.derivedKg).toBeNull()
+    expect(result.knownMicro).toBe(182500000n)
+    expect(result.planningMicro).toBe(40700000n)
+  })
+})
+
+describe('estimated planning total', () => {
+  function presented(overrides) {
+    return presentOrderWeight({
+      status: 'PARTIAL',
+      knownMicro: 0n,
+      planningMicro: 0n,
+      previewMicro: 0n,
+      derivedNumerator: 0n,
+      derivedDenominator: 1n,
+      measuredMicro: 0n,
+      limitMicro: 1200000000n,
+      lines: [],
+      ...overrides,
+    })
+  }
+
+  test('an ATA-only order keeps the full-pack total and does not add a second estimate', () => {
+    const view = presentOrderWeight(assessOrderWeight(
+      [orderItem({ quantity: 30 })],
+      [catalogItem()],
+    ))
+    expect(view.status).toBe('COMPLETE')
+    expect(view.knownKg).toBe('9')
+    expect(view.estimatedTotalKg).toBe('9')
+    expect(view.showEstimatedHeadline).toBe(false)
+    expect(view.estimateVehicles).toBeNull()
+  })
+
+  test('ATA full-pack plus a planning allowance is one total and stays short of a vehicle recommendation', () => {
+    const view = presented({
+      knownMicro: 182500000n,
+      planningMicro: 40700000n,
+      previewMicro: 40700000n,
+      lines: [
+        { disposition: 'calculated', weightMicro: 182500000n },
+        { disposition: 'partial_box', planningAllowanceMicro: 40700000n },
+      ],
+    })
+    expect(view.knownKg).toBe('182.5')
+    expect(view.planningKg).toBe('40.7')
+    expect(view.estimatedTotalKg).toBe('223.2')
+    expect(view.estimatedTotalKg).not.toBe('264')
+    expect(view.unestimatedCount).toBe(0)
+    expect(view.estimateVehicles).toBeNull()
+    expect(orderWeightMessage(view)).toBe('Planning estimate based on ATA packing records. Not a scale measurement or a vehicle loading approval.')
+  })
+
+  test('a rational derived gross is added before the display rounding', () => {
+    const view = presented({
+      knownMicro: 500n,
+      planningMicro: 500n,
+      lines: [
+        { disposition: 'calculated', weightMicro: 500n },
+        { disposition: 'partial_box', planningAllowanceMicro: 500n },
+      ],
+    })
+    expect(formatKilograms(500n)).toBe('0.001')
+    expect(view.estimatedTotalKg).toBe('0.001')
+    const mixed = presented({
+      status: 'PARTIAL',
+      knownMicro: 10000000n,
+      derivedNumerator: 851500000n,
+      derivedDenominator: 90n,
+      lines: [
+        { disposition: 'calculated', weightMicro: 10000000n },
+        { disposition: 'derived', derivedNumerator: 851500000n, derivedDenominator: 90n },
+      ],
+    })
+    expect(mixed.derivedKg).toBe('9.461')
+    expect(mixed.estimatedTotalKg).toBe('19.461')
+    expect(mixed.estimateVehicles).toBeNull()
+  })
+
+  test('each distinct source is included once and a line with no weight stays outside the subtotal', () => {
+    const view = presented({
+      knownMicro: 10000000n,
+      planningMicro: 2000000n,
+      derivedNumerator: 1000000n,
+      derivedDenominator: 1n,
+      measuredMicro: 500000n,
+      previewMicro: 10000000n,
+      lines: [
+        { disposition: 'calculated', weightMicro: 10000000n },
+        { disposition: 'derived', derivedNumerator: 1000000n, derivedDenominator: 1n },
+        { disposition: 'partial_box', planningAllowanceMicro: 2000000n },
+        { disposition: 'measured', measuredMicro: 500000n },
+        { disposition: 'missing' },
+      ],
+    })
+    expect(view.estimatedTotalKg).toBe('13.5')
+    expect(view.measuredKg).toBe('0.5')
+    expect(view.unestimatedCount).toBe(1)
+    expect(view.estimatedCoverage).toBe('partial')
+    expect(view.estimateVehicles).toBeNull()
+    expect(orderWeightMessage(view)).toContain('1 line has no usable weight.')
+  })
+
+  test('ATA full-pack plus a rational derived gross is summed once and follows the quantity', () => {
+    const plate = orderItem({ id: 'plate', quantity: 30 })
+    const fork = orderItem({ id: 'fork', item_name: 'Synthetic Dinner Fork', quantity: 85 })
+    const catalog = [
+      catalogItem(),
+      catalogItem({
+        id: 'fork',
+        name: 'Synthetic Dinner Fork',
+        pieces_per_unit: 100,
+        weight_per_unit: '10',
+        tare_kg: '0.300',
+      }),
+    ]
+    const view = presentOrderWeight(assessOrderWeight([plate, fork], catalog))
+    expect(view.knownKg).toBe('9')
+    expect(view.derivedKg).toBe('8.545')
+    expect(view.estimatedTotalKg).toBe('17.545')
+    expect(view.planningKg).toBeNull()
+    expect(view.unestimatedCount).toBe(0)
+    expect(view.estimateVehicles).toBeNull()
+    const fewer = presentOrderWeight(assessOrderWeight([
+      plate,
+      orderItem({ id: 'fork', item_name: 'Synthetic Dinner Fork', quantity: 80 }),
+    ], catalog))
+    expect(fewer.derivedKg).toBe('8.06')
+    expect(fewer.estimatedTotalKg).toBe('17.06')
+  })
+
+  test('lines with no usable weight stay outside the estimate', () => {
+    const view = presentOrderWeight(assessOrderWeight([
+      orderItem({ id: 'bowl', item_name: 'Unknown Bowl', quantity: 2 }),
+      orderItem({ id: 'plate', item_name: 'Unknown Plate', quantity: 1 }),
+    ], []))
+    expect(view.estimatedTotalKg).toBeNull()
+    expect(view.knownKg).toBeNull()
+    expect(view.showEstimatedHeadline).toBe(false)
+    expect(view.unestimatedCount).toBe(2)
+    expect(view.estimateVehicles).toBeNull()
+    expect(orderWeightMessage(view)).toBe('No confirmed weight yet. The order total is not available.')
+  })
+
+  test('an allowance above the Luton limit does not recommend a vehicle', () => {
+    const view = presented({
+      planningMicro: 1300000000n,
+      lines: [{ disposition: 'partial_box', planningAllowanceMicro: 1300000000n }],
+    })
+    expect(view.estimatedTotalKg).toBe('1300')
+    expect(view.knownKg).toBeNull()
+    expect(view.estimateVehicles).toBeNull()
+    expect(view.overLimit).toBe(false)
   })
 })
