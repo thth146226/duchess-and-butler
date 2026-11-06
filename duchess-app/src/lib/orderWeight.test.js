@@ -200,7 +200,8 @@ describe('order weight', () => {
       catalogItem({ id: 'light', weight_per_unit: '4', pieces_per_unit: 50 }),
       catalogItem({ id: 'heavy', weight_per_unit: '9', pieces_per_unit: 100 }),
     ])
-    expect(result.lines[0].label).toBe('Needs verification')
+    expect(result.lines[0].label).toBe('Planning allowance')
+    expect(result.lines[0].plan.boxes.map((box) => box.piecesPerUnit)).toEqual([50])
     expect(result.lines[0].alternatives.map((alternative) => alternative.id)).toEqual(['light', 'heavy'])
     expect(result.knownMicro).toBe(0n)
     expect(result.previewMicro).toBe(0n)
@@ -216,7 +217,8 @@ describe('order weight', () => {
     const heavier = assessOrderWeight([orderItem({ id: 'spoon', quantity: 100 })], catalog, { spoon: 'heavy' })
     const partial = assessOrderWeight([orderItem({ id: 'spoon', quantity: 20 })], catalog, { spoon: 'heavy' })
     const view = presentOrderWeight(heavier)
-    expect(missingChoice.lines[0].disposition).toBe('ambiguous')
+    expect(missingChoice.lines[0].disposition).toBe('partial_box')
+    expect(missingChoice.knownMicro).toBe(0n)
     expect(heavier.lines[0].disposition).toBe('preview')
     expect(heavier.lines[0].piecesPerUnit).toBe(100)
     expect(formatKilograms(heavier.previewMicro)).toBe('9')
@@ -358,15 +360,17 @@ describe('ATA catalog cache', () => {
       catalogItem({ id: 'box', name: item.item_name, pieces_per_unit: 40, weight_per_unit: '5' }),
       catalogItem({ id: 'crate', name: item.item_name, pieces_per_unit: 100, weight_per_unit: '7.9' }),
     ], { spoon: recorded })
-    expect(changed.lines[0].disposition).toBe('ambiguous')
+    expect(changed.lines[0].disposition).toBe('partial_box')
     expect(changed.previewMicro).toBe(0n)
+    expect(formatKilograms(changed.planningMicro)).toBe('5')
     expect(changed.status).toBe('PARTIAL')
     const removed = assessOrderWeight([item], [
       catalogItem({ id: 'other', name: item.item_name, pieces_per_unit: 80, weight_per_unit: '6' }),
       catalogItem({ id: 'crate', name: item.item_name, pieces_per_unit: 100, weight_per_unit: '7.9' }),
     ], { spoon: recorded })
-    expect(removed.lines[0].disposition).toBe('ambiguous')
+    expect(removed.lines[0].disposition).toBe('partial_box')
     expect(removed.previewMicro).toBe(0n)
+    expect(formatKilograms(removed.planningMicro)).toBe('6')
     expect(presentOrderWeight(removed).estimateVehicles).toBeNull()
   })
 
@@ -378,12 +382,12 @@ describe('ATA catalog cache', () => {
     ]
     const plate = orderItem({ id: 'plate', item_name: 'Prima Dessert Plate', quantity: 30 })
     const suggested = assessOrderWeight([plate], catalog)
-    expect(suggested.lines[0].disposition).toBe('ambiguous')
+    expect(suggested.lines[0].disposition).toBe('calculated')
     expect(suggested.lines[0].plans[0].origin).toBe('Labels / ATA')
     expect(suggested.lines[0].plans[0].boxes.map((box) => [box.piecesPerUnit, box.count])).toEqual([[30, 1]])
     expect(suggested.lines[0].plans.some((plan) => plan.boxes.some((box) => box.id === 'dinner'))).toBe(false)
     expect(suggested.lines[0].plans.some((plan) => plan.boxes.some((box) => box.piecesPerUnit === 15 && box.count === 2))).toBe(true)
-    expect(suggested.knownMicro).toBe(0n)
+    expect(formatKilograms(suggested.knownMicro)).toBe('16.1')
     const confirmation = {
       confirmed: true,
       quantity: 30,
@@ -402,21 +406,20 @@ describe('ATA catalog cache', () => {
     const changedWeight = catalog.map((row) => (
       row.id === 'large' ? { ...row, weight_per_unit: '10' } : row
     ))
-    expect(assessOrderWeight([plate], changedWeight, { plate: confirmation }).lines[0].disposition).toBe('ambiguous')
-    expect(assessOrderWeight([
+    const changed = assessOrderWeight([plate], changedWeight, { plate: confirmation })
+    expect(changed.lines[0].disposition).toBe('calculated')
+    expect(formatKilograms(changed.knownMicro)).toBe('10')
+    const fewer = assessOrderWeight([
       orderItem({ id: 'plate', item_name: 'Prima Dessert Plate', quantity: 20 }),
-    ], catalog, { plate: confirmation }).lines[0].disposition).toBe('ambiguous')
-    const selectedOnly = {
-      selected: true,
-      weightConfirmed: false,
-      quantity: 30,
-      rules: suggested.lines[0].plans[0].fingerprint.rules,
-    }
-    const selected = assessOrderWeight([plate], catalog, { plate: selectedOnly })
-    expect(selected.lines[0].disposition).toBe('pack_selected')
-    expect(selected.knownMicro).toBe(0n)
-    expect(selected.planningMicro).toBe(0n)
-    expect(formatKilograms(selected.lines[0].verifiedMicro)).toBe('16.1')
+    ], catalog, { plate: confirmation })
+    expect(fewer.lines[0].disposition).toBe('partial_box')
+    expect(fewer.knownMicro).toBe(0n)
+    expect(formatKilograms(fewer.planningMicro)).toBe('16.1')
+    const other = suggested.lines[0].plans.find((plan) => plan.boxes.some((box) => box.piecesPerUnit === 15))
+    const otherPack = assessOrderWeight([plate], catalog, {
+      plate: { selected: true, quantity: 30, rules: other.fingerprint.rules },
+    })
+    expect(formatKilograms(otherPack.knownMicro)).toBe('12.6')
   })
 })
 
@@ -447,15 +450,16 @@ describe('partial packs stay out of the confirmed total', () => {
     ], catalog, {
       knife: { selected: true, quantity: 70, rules: labels.fingerprint.rules },
     })
-    expect(changedQuantity.lines[0].disposition).toBe('ambiguous')
-    expect(changedQuantity.planningMicro).toBe(0n)
+    expect(changedQuantity.lines[0].plan.fingerprint.quantity).toBe(71)
+    expect(changedQuantity.knownMicro).toBe(0n)
+    expect(formatKilograms(changedQuantity.planningMicro)).toBe('7.4')
     const changedRule = assessOrderWeight([item], [
       catalogItem({ id: 'knife-50', name: item.item_name, pieces_per_unit: 50, weight_per_unit: '3.8' }),
       catalogItem({ id: 'knife-90', name: item.item_name, pieces_per_unit: 90, weight_per_unit: '8' }),
     ], {
       knife: { selected: true, quantity: 70, rules: labels.fingerprint.rules },
     })
-    expect(changedRule.planningMicro).toBe(0n)
+    expect(formatKilograms(changedRule.planningMicro)).toBe('8')
     expect(changedRule.knownMicro).toBe(0n)
   })
 
@@ -485,16 +489,18 @@ describe('partial packs stay out of the confirmed total', () => {
       catalogItem({ id: 'thirty', name: item.item_name, pieces_per_unit: 30, weight_per_unit: '21.4' }),
     ]
     const pending = assessOrderWeight([item], catalog)
-    expect(pending.knownMicro).toBe(0n)
+    expect(formatKilograms(pending.knownMicro)).toBe('107')
+    expect(pending.lines[0].disposition).toBe('calculated')
     expect(pending.lines[0].plans).toHaveLength(4)
     expect(pending.lines[0].plans.every((plan) => formatKilograms(plan.calculatedMicro) === '107')).toBe(true)
+    expect(pending.lines[0].plan.reliability).toBe('ATA_FULL_PACK')
     const choice = pending.lines[0].plans[1]
     const selected = assessOrderWeight([item], catalog, {
       plate: { selected: true, weightConfirmed: false, quantity: 150, rules: choice.fingerprint.rules },
     })
-    expect(selected.lines[0].disposition).toBe('pack_selected')
-    expect(selected.knownMicro).toBe(0n)
-    expect(measurementRequest(selected.lines[0])).toBe('The weight is calculated from ATA full-pack records. It is not a scale measurement of this order.')
+    expect(selected.lines[0].disposition).toBe('calculated')
+    expect(formatKilograms(selected.knownMicro)).toBe('107')
+    expect(selected.lines[0].plan.reliability).toBe('ATA_FULL_PACK')
     const confirmed = assessOrderWeight([
       item,
       orderItem({ id: 'gap', item_name: 'Unlisted Bowl', quantity: 1 }),
@@ -544,12 +550,12 @@ describe('partial packs stay out of the confirmed total', () => {
     ]
     const result = assessOrderWeight([dinner, dessert, ...cutlery], catalog)
     const view = presentOrderWeight(result)
-    expect(view.knownKg).toBe('75.5')
-    expect(result.calculated).toBe(1)
-    expect(result.missing).toBe(7)
-    expect(result.planningMicro).toBe(0n)
+    expect(view.knownKg).toBe('182.5')
+    expect(result.calculated).toBe(2)
+    expect(result.missing).toBe(6)
+    expect(view.planningKg).toBe('40.7')
     expect(result.status).toBe('PARTIAL')
     expect(view.estimateVehicles).toBeNull()
-    expect(view.planningKg).toBeNull()
+    expect(view.derivedKg).toBeNull()
   })
 })

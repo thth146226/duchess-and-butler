@@ -47,6 +47,9 @@ function boxDescription(plan) {
 }
 
 function weightKey(plan) {
+  if (plan.reliability === 'ATA_DERIVED_GROSS' && plan.derivedNumerator != null) {
+    return `derived:${plan.derivedNumerator.toString()}/${plan.derivedDenominator.toString()}`
+  }
   if (plan.weightState === 'calculated') return `verified:${plan.calculatedMicro.toString()}`
   if (plan.planningAllowanceMicro != null) return `allowance:${plan.planningAllowanceMicro.toString()}`
   return `unknown:${plan.weightState}`
@@ -64,6 +67,13 @@ function groupPlans(plans) {
 }
 
 function weightCaption(plan, sameAsSuggestion, confirmed) {
+  if (plan.reliability === 'ATA_DERIVED_GROSS' && plan.derivedNumerator != null) {
+    const qualified = plan.qualified ? ' Partial bundle packaging is not recorded, so this remains a qualified estimate.' : ''
+    const separated = plan.qualification === 'additional-material-not-separated'
+      ? ' Extra packaging was not added because it is not known to be outside the full-box gross.'
+      : ''
+    return `Derived gross: ${formatKilograms(plan.derivedNumerator, plan.derivedDenominator)} kg. Calculated from the empty-box tare and the net content. It is not a scale measurement of this order.${qualified}${separated}`
+  }
   if (plan.weightState === 'calculated') {
     const kg = formatKilograms(plan.calculatedMicro)
     if (confirmed) return `ATA full-pack total included: ${kg} kg.`
@@ -82,7 +92,7 @@ function planIsSelected(line, plan) {
   return Boolean((line.planSelected || line.planConfirmed) && line.plan && line.plan.signature === plan.signature)
 }
 
-function PlanOption({ line, plan, onSelect, onConfirmWeight, hideCaption }) {
+function PlanOption({ line, plan, onSelect, hideCaption }) {
   const selected = planIsSelected(line, plan)
   const confirmed = selected && line.planConfirmed && plan.weightState === 'calculated'
   return (
@@ -93,69 +103,51 @@ function PlanOption({ line, plan, onSelect, onConfirmWeight, hideCaption }) {
         </div>
       )}
       <button type="button" onClick={() => onSelect(plan)} style={buttonStyle}>
-        {selected ? 'Selected packing' : (plan.role === 'suggestion' ? 'Select Labels packing' : 'Select this packing')}
-        {' · '}
-        {plan.origin}
-        {' · '}
-        {confirmed ? 'ATA full-pack total included' : (selected ? (plan.weightState === 'calculated' ? 'weight not confirmed' : 'exact weight unknown') : 'not confirmed')}
+        {selected ? 'Selected packing' : 'Use this packing'}
         {' · '}
         {boxDescription(plan)}
       </button>
-      {selected && plan.weightState === 'calculated' && !line.planConfirmed && (
-        <button type="button" onClick={() => onConfirmWeight(plan)} style={buttonStyle}>
-          Include ATA full-pack total
-        </button>
-      )}
     </div>
   )
 }
 
-function PackingChoices({ line, onSelect, onConfirmWeight, onClear }) {
+function PackingChoices({ line, onSelect, onClear }) {
   const plans = line.plans || []
-  if (!plans.length) return null
-  const choosable = plans.length > 1
-    || line.disposition === 'ambiguous'
-    || line.disposition === 'pack_selected'
-    || line.planSelected
-    || line.planConfirmed
+  const current = line.plan
+  if (!current && !plans.length) return null
   const truncation = (line.packingTruncation || []).map((reason) => (
     <div key={reason} style={{ color: '#854F0B', marginTop: '4px', lineHeight: 1.45 }}>{reason}</div>
   ))
-  if (!choosable) {
-    if (!line.plan) return null
-    return (
-      <div style={{ marginTop: '8px', color: '#6B6860', lineHeight: 1.45 }}>
-        <div>{boxDescription(line.plan)}</div>
-        {truncation}
-      </div>
-    )
-  }
-  const suggestion = plans.find((plan) => plan.role === 'suggestion') || plans[0]
-  const others = plans.filter((plan) => plan.signature !== suggestion.signature)
-  const showAllowanceNote = plans.some((plan) => plan.weightState === 'unknown-partial' || plan.planningAllowanceMicro != null)
+  const alternatives = plans.filter((plan) => !current || plan.signature !== current.signature)
+  const needsTare = current && current.reliability === 'GROSS_PACKING_ALLOWANCE'
   return (
     <div style={{ marginTop: '8px' }}>
-      <div style={{ fontSize: '12px', color: '#6B6860', marginBottom: '4px' }}>Labels suggestion</div>
-      <PlanOption
-        line={line}
-        plan={suggestion}
-        onSelect={onSelect}
-        onConfirmWeight={onConfirmWeight}
-      />
-      {showAllowanceNote && (
+      {current && (
+        <div style={{ color: '#6B6860', lineHeight: 1.45 }}>
+          <div>{line.planSelected ? 'Selected packing' : 'Automatic packing'} · {boxDescription(current)}</div>
+          <div style={{ marginTop: '4px' }}>{weightCaption(current, false, line.planConfirmed && current.weightState === 'calculated')}</div>
+          {needsTare && (
+            <div style={{ marginTop: '4px', color: '#854F0B' }}>Needs empty-box tare before a derived weight can be calculated.</div>
+          )}
+          {current.catalogInconsistent && (
+            <div style={{ marginTop: '4px', color: '#854F0B' }}>Catalog net weights disagree after each box tare. Each box keeps its own weight.</div>
+          )}
+        </div>
+      )}
+      {needsTare && (
         <div style={{ color: '#6B6860', marginTop: '4px', lineHeight: 1.45 }}>
           A planning allowance counts every box at the full gross weight recorded for that box size. It does not divide that weight by the number of pieces.
         </div>
       )}
-      {others.length > 0 && (
+      {alternatives.length > 0 && (
         <details style={{ marginTop: '8px' }}>
           <summary style={{ fontSize: '12px', color: '#6B6860', cursor: 'pointer', minHeight: '44px', display: 'flex', alignItems: 'center' }}>
-            Other packing options
+            Change packing
           </summary>
-          {groupPlans(others).map((group) => (
+          {groupPlans(alternatives).map((group) => (
             <div key={group.key} style={{ marginTop: '8px' }}>
               <div style={{ color: '#6B6860', lineHeight: 1.45 }}>
-                {weightCaption(group.plans[0], weightKey(group.plans[0]) === weightKey(suggestion))}
+                {weightCaption(group.plans[0], current ? weightKey(group.plans[0]) === weightKey(current) : false)}
               </div>
               {group.plans.map((plan) => (
                 <PlanOption
@@ -163,7 +155,6 @@ function PackingChoices({ line, onSelect, onConfirmWeight, onClear }) {
                   line={line}
                   plan={plan}
                   onSelect={onSelect}
-                  onConfirmWeight={onConfirmWeight}
                   hideCaption
                 />
               ))}
@@ -172,9 +163,9 @@ function PackingChoices({ line, onSelect, onConfirmWeight, onClear }) {
         </details>
       )}
       {truncation}
-      {(line.planSelected || line.planConfirmed) && (
+      {line.planSelected && (
         <button type="button" onClick={onClear} style={buttonStyle}>
-          Clear packing
+          Use automatic packing
         </button>
       )}
     </div>
@@ -288,9 +279,14 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
           <div style={{ fontSize: '12px', marginTop: '6px', lineHeight: 1.5 }}>
             <div>ATA full-pack total: {view.knownKg != null ? `${view.knownKg} kg` : 'not included'}</div>
             <div>
+              Derived gross: {view.derivedKg
+                ? `${view.derivedKg} kg. From tare and net content. It is not a scale measurement of this order.`
+                : 'not available'}
+            </div>
+            <div>
               Planning allowance: {view.planningKg
                 ? `${view.planningKg} kg. Provisional full-box gross weight. Not a confirmed weight. It is not a scale measurement of this order.`
-                : 'not selected'}
+                : 'not available'}
             </div>
             <div>Packaging preview: {view.previewKg ? `${view.previewKg} kg. This choice is not saved.` : 'not confirmed'}</div>
             <div>Unknown weight: {view.missing} {view.missing === 1 ? 'line' : 'lines'}</div>
@@ -302,7 +298,7 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
             {view.percent}% of that limit. Remaining capacity: {view.remainingKg} kg.
           </div>
         )}
-        {view.overLimit && (
+        {view.overLimit && view.estimateVehicles != null && (
           <div style={{ fontSize: '12px', marginTop: '8px', color: '#A32D2D' }}>
             One Luton would exceed the informed 1,200 kg limit. Redistribute the load or add vehicles.
             {' '}About {view.estimateVehicles} Lutons is only an estimate. It does not account for the real payload, occupants, extra equipment, axle load, or physical space.
@@ -322,14 +318,16 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
               const note = measurementRequest(line)
               const choices = line.alternatives || []
               return (
-                <li key={line.id || line.name} style={{ padding: '8px 0', borderBottom: '1px solid #EDE8E0', fontSize: '12px' }}>
+                <li key={line.id || line.name} style={{ padding: '8px 0', borderBottom: '1px solid #EDE8E0', fontSize: '12px', background: line.plan && line.plan.reliability === 'GROSS_PACKING_ALLOWANCE' ? '#FAEEDA' : 'transparent' }}>
                   <div style={{ fontWeight: '600', color: '#1C1C1E' }}>{line.name}</div>
                   <div style={{ color: '#6B6860', marginTop: '2px', lineHeight: 1.45 }}>
-                    {line.disposition === 'pack_selected' && line.plan && line.plan.weightState === 'calculated'
-                      ? `Selected packing · ATA full-pack total ${formatKilograms(line.verifiedMicro)} kg · not included yet`
-                      : (line.disposition === 'calculated' || line.disposition === 'preview'
-                        ? `${formatKilograms(line.weightMicro)} kg · ${ruleText(line)}${line.disposition === 'preview' ? ' · preview' : ''}`
-                        : line.label)}
+                    {line.disposition === 'derived' && line.derivedNumerator != null
+                      ? `Derived gross ${formatKilograms(line.derivedNumerator, line.derivedDenominator)} kg · ${line.plan ? boxDescription(line.plan) : line.label}`
+                      : (line.disposition === 'partial_box' && line.planningAllowanceMicro != null
+                        ? `Planning allowance ${formatKilograms(line.planningAllowanceMicro)} kg · ${line.plan ? boxDescription(line.plan) : ''}`
+                        : (line.disposition === 'calculated' || line.disposition === 'preview'
+                          ? `${formatKilograms(line.weightMicro)} kg · ${ruleText(line)}${line.disposition === 'preview' ? ' · preview' : ''}`
+                          : line.label))}
                   </div>
                   {note && <div style={{ color: '#6B6860', marginTop: '4px', lineHeight: 1.45 }}>{note}</div>}
                   {choices.length > 0 && (
@@ -341,8 +339,7 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
                   )}
                   <PackingChoices
                     line={line}
-                    onSelect={(plan) => writePack(line.id, plan, false)}
-                    onConfirmWeight={(plan) => writePack(line.id, plan, true)}
+                    onSelect={(plan) => writePack(line.id, plan, true)}
                     onClear={() => clearPlan(line.id)}
                   />
                 </li>

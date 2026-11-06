@@ -160,10 +160,11 @@ describe('Katrina QDB08128 read-only ATA figures', () => {
     })))
     const pending = assessOrderWeight(items, catalog)
     expect(pending.status).toBe('PARTIAL')
-    expect(pending.calculated).toBe(0)
-    expect(pending.missing).toBe(7)
-    expect(pending.knownMicro).toBe(0n)
-    expect(pending.lines.every((entry) => entry.disposition === 'ambiguous')).toBe(true)
+    expect(pending.calculated).toBe(1)
+    expect(pending.missing).toBe(6)
+    expect(formatKilograms(pending.knownMicro)).toBe('16.1')
+    expect(pending.lines.filter((entry) => entry.disposition === 'partial_box')).toHaveLength(6)
+    expect(pending.lines.find((entry) => entry.name === 'Prima Dessert Plate').disposition).toBe('calculated')
     expect(pending.lines.map((entry) => entry.alternatives.map((alternative) => (
       `${alternative.piecesPerUnit}:${formatKilograms(alternative.weightMicro)}`
     )))).toEqual([
@@ -193,7 +194,8 @@ describe('Katrina QDB08128 read-only ATA figures', () => {
     expect(view.estimateVehicles).toBeNull()
     expect(view.previewKg).toBe('16.1')
     expect(preview.lines.filter((entry) => entry.plan && !entry.plan.exact)).toHaveLength(6)
-    expect(measurementRequest(pending.lines[0])).toContain('preview')
+    expect(measurementRequest(pending.lines[0])).toContain('not a confirmed weight')
+    expect(pending.lines[0].disposition).not.toBe('preview')
   })
 })
 

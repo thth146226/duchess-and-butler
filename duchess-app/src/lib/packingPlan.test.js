@@ -175,4 +175,37 @@ describe('cutlery and Eclipse packing allowances', () => {
     expect(twenty.plans.every((plan) => plan.calculatedMicro === 0n && plan.planningAllowanceMicro === 21400000n)).toBe(true)
     expect(new Set(twenty.plans.map((plan) => plan.physicalSignature)).size).toBe(2)
   })
+
+  test('the automatic plan prefers an exact smaller box, then one larger box, then both full boxes', () => {
+    const rules = [
+      rule({ id: 'fifty', name: 'Synthetic Dinner Fork', piecesPerUnit: 50, weightMicro: 5000000n }),
+      rule({ id: 'hundred', name: 'Synthetic Dinner Fork', piecesPerUnit: 100, weightMicro: 10000000n }),
+    ]
+    const boxesOf = (quantity) => {
+      const plan = planPacking({ quantity, rules }).automatic
+      return plan ? plan.boxes.map((box) => [box.piecesPerUnit, box.piecesEach, box.full]) : null
+    }
+    expect(boxesOf(20)).toEqual([[50, 20, false]])
+    expect(boxesOf(50)).toEqual([[50, 50, true]])
+    expect(boxesOf(70)).toEqual([[100, 70, false]])
+    expect(boxesOf(80)).toEqual([[100, 80, false]])
+    expect(boxesOf(85)).toEqual([[100, 85, false]])
+    expect(boxesOf(95)).toEqual([[100, 95, false]])
+    expect(boxesOf(100)).toEqual([[100, 100, true]])
+    expect(boxesOf(150)).toEqual([[100, 100, true], [50, 50, true]])
+    const thousand = planPacking({ quantity: 1000, rules })
+    expect(thousand.automatic.boxes).toEqual([
+      expect.objectContaining({ piecesPerUnit: 100, count: 10, full: true }),
+    ])
+    expect(thousand.automatic.boxCount).toBe(10)
+    expect(thousand.plans.length).toBeLessThanOrEqual(4)
+    expect(thousand.truncation.join(' ')).toContain('limit')
+    expect(planPacking({ quantity: 900, rules }).automatic.boxes).toEqual([
+      expect.objectContaining({ piecesPerUnit: 100, count: 9, full: true }),
+    ])
+    expect(planPacking({ quantity: 5000, rules }).automatic.boxes).toEqual([
+      expect.objectContaining({ piecesPerUnit: 100, count: 50, full: true }),
+    ])
+    expect(planPacking({ quantity: 50, rules }).plans[0].boxes.map((box) => box.piecesPerUnit)).toEqual([100])
+  })
 })
