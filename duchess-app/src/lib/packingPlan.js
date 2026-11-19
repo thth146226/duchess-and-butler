@@ -9,6 +9,7 @@ import {
   addRational,
   comparePackNets,
   deriveContentWeight,
+  reduceRational,
 } from './netWeight'
 
 const CONTAINER_UNITS = new Set(['box', 'crate', 'bag'])
@@ -158,16 +159,23 @@ function groupContent(group) {
       bundles: derived.bundles,
     }
   }
-  // A recorded tare that cannot support the proportional model does not fall back to a precise figure.
+  // A recorded tare that cannot support the derived model does not become a proportional estimate.
   if (group.tareMicro != null) {
     return { reliability: RELIABILITY.UNKNOWN, micro: null, qualified: false, qualification: null, reason: derived.reason }
   }
-  if (group.grossWeightKnown) {
+  if (group.grossWeightKnown && group.piecesPerUnit > 0 && group.piecesEach > 0) {
+    const reduced = reduceRational(
+      BigInt(group.weightMicro) * BigInt(group.piecesEach) * BigInt(group.count),
+      BigInt(group.piecesPerUnit),
+    )
     return {
-      reliability: RELIABILITY.GROSS_PACKING_ALLOWANCE,
-      micro: BigInt(group.weightMicro) * BigInt(group.count),
-      qualified: false,
-      qualification: null,
+      reliability: RELIABILITY.ATA_PROPORTIONAL_ESTIMATE,
+      numerator: reduced.numerator,
+      denominator: reduced.denominator,
+      micro: reduced.numerator % reduced.denominator === 0n ? reduced.numerator / reduced.denominator : null,
+      qualified: true,
+      qualification: 'proportional-gross-no-tare',
+      conservativeMicro: BigInt(group.weightMicro) * BigInt(group.count),
     }
   }
   return { reliability: RELIABILITY.UNKNOWN, micro: null, qualified: false, qualification: null, reason: derived.reason }
@@ -176,9 +184,10 @@ function groupContent(group) {
 const RELIABILITY_RANK = {
   [RELIABILITY.UNKNOWN]: 0,
   [RELIABILITY.GROSS_PACKING_ALLOWANCE]: 1,
-  [RELIABILITY.ATA_DERIVED_GROSS]: 2,
-  [RELIABILITY.ATA_FULL_PACK]: 3,
-  [RELIABILITY.MEASURED]: 4,
+  [RELIABILITY.ATA_PROPORTIONAL_ESTIMATE]: 2,
+  [RELIABILITY.ATA_DERIVED_GROSS]: 3,
+  [RELIABILITY.ATA_FULL_PACK]: 4,
+  [RELIABILITY.MEASURED]: 5,
 }
 
 function decorate(groups, quantity, role, catalogInconsistent) {
@@ -191,18 +200,44 @@ function decorate(groups, quantity, role, catalogInconsistent) {
     weakest = RELIABILITY.UNKNOWN
   }
   const partial = groups.some((group) => !group.full)
-  const summed = parts.every((part) => part.micro != null)
-    ? parts.reduce((sum, part) => sum + part.micro, 0n)
-    : null
-  const rational = parts.every((part) => part.numerator != null || part.micro != null)
-    ? parts.reduce((total, part) => addRational(total, part.numerator != null
-      ? { numerator: part.numerator, denominator: part.denominator }
-      : { numerator: part.micro, denominator: 1n }), null)
-    : null
+  const blocked = weakest === RELIABILITY.UNKNOWN
+  let fullMicro = 0n
+  let derivedRational = null
+  let proportionalRational = null
+  let measuredMicro = 0n
+  if (!blocked) {
+    parts.forEach((part) => {
+      if (part.reliability === RELIABILITY.ATA_FULL_PACK && part.micro != null) {
+        fullMicro += part.micro
+      } else if (part.reliability === RELIABILITY.ATA_DERIVED_GROSS && part.numerator != null) {
+        derivedRational = addRational(derivedRational, {
+          numerator: part.numerator,
+          denominator: part.denominator,
+        })
+      } else if (part.reliability === RELIABILITY.ATA_PROPORTIONAL_ESTIMATE && part.numerator != null) {
+        proportionalRational = addRational(proportionalRational, {
+          numerator: part.numerator,
+          denominator: part.denominator,
+        })
+      } else if (part.reliability === RELIABILITY.MEASURED && part.micro != null) {
+        measuredMicro += part.micro
+      }
+    })
+  }
   const fullPack = weakest === RELIABILITY.ATA_FULL_PACK
-  const derived = weakest === RELIABILITY.ATA_DERIVED_GROSS
-  const allowance = weakest === RELIABILITY.GROSS_PACKING_ALLOWANCE
-  const measured = weakest === RELIABILITY.MEASURED
+  const derived = derivedRational != null
+  const proportional = proportionalRational != null
+  const measured = weakest === RELIABILITY.MEASURED && measuredMicro > 0n
+  const conservativeMicro = proportional
+    ? groups.reduce((sum, group) => (
+      group.grossWeightKnown ? sum + BigInt(group.weightMicro) * BigInt(group.count) : sum
+    ), 0n)
+    : 0n
+  let operational = null
+  if (fullMicro > 0n) operational = addRational(operational, { numerator: fullMicro, denominator: 1n })
+  if (derivedRational) operational = addRational(operational, derivedRational)
+  if (proportionalRational) operational = addRational(operational, proportionalRational)
+  if (measured) operational = addRational(operational, { numerator: measuredMicro, denominator: 1n })
   const weightState = fullPack ? 'calculated' : (partial ? 'unknown-partial' : 'unknown-weight')
   const fingerprintRules = groups.map((group) => ({
     id: group.id,
@@ -213,10 +248,12 @@ function decorate(groups, quantity, role, catalogInconsistent) {
     count: group.count,
   }))
   let missingInformation = null
-  if (derived) {
+  if (proportional) {
+    missingInformation = 'A partly filled pack has no empty-box tare. The operational estimate uses the ATA gross weight in proportion to the pieces. The full-box gross is a separate limit, not the operational estimate.'
+  } else if (derived) {
     missingInformation = 'Derived from the empty-box tare and the net content. It is not a scale measurement.'
   } else if (partial) {
-    missingInformation = 'ATA records the full pack weight, not the weight of a partly filled pack. The planning allowance uses that full gross weight and is not a confirmed weight.'
+    missingInformation = 'ATA records the full pack weight, not the weight of a partly filled pack.'
   } else if (!fullPack) {
     missingInformation = 'ATA does not have a confirmed weight for every pack in this plan.'
   }
@@ -229,14 +266,18 @@ function decorate(groups, quantity, role, catalogInconsistent) {
     boxCount: groups.reduce((sum, group) => sum + group.count, 0),
     coveredPieces: quantity,
     unfilledPieces: groups.reduce((sum, group) => sum + group.unfilled, 0),
-    calculatedMicro: fullPack && summed != null ? summed : 0n,
-    derivedMicro: derived && rational && rational.numerator % rational.denominator === 0n
-      ? rational.numerator / rational.denominator
+    calculatedMicro: fullMicro,
+    derivedMicro: derivedRational && derivedRational.numerator % derivedRational.denominator === 0n
+      ? derivedRational.numerator / derivedRational.denominator
       : null,
-    derivedNumerator: derived && rational ? rational.numerator : null,
-    derivedDenominator: derived && rational ? rational.denominator : null,
-    measuredMicro: measured && summed != null ? summed : null,
-    planningAllowanceMicro: allowance && summed != null && summed > 0n ? summed : null,
+    derivedNumerator: derivedRational ? derivedRational.numerator : null,
+    derivedDenominator: derivedRational ? derivedRational.denominator : null,
+    proportionalNumerator: proportionalRational ? proportionalRational.numerator : null,
+    proportionalDenominator: proportionalRational ? proportionalRational.denominator : null,
+    operationalNumerator: operational ? operational.numerator : null,
+    operationalDenominator: operational ? operational.denominator : null,
+    measuredMicro: measured ? measuredMicro : null,
+    planningAllowanceMicro: conservativeMicro > 0n ? conservativeMicro : null,
     reliability: weakest,
     qualified: Boolean(qualification),
     qualification,

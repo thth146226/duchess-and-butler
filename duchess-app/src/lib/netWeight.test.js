@@ -152,9 +152,10 @@ describe('synthetic net weight', () => {
       fork(),
       fork({ id: 'fork-50', pieces_per_unit: 50, weight_per_unit: '5.5', tare_kg: null }),
     ])
-    expect(copied.lines[0].disposition).toBe('partial_box')
+    expect(copied.lines[0].disposition).toBe('proportional')
     expect(copied.lines[0].derivedMicro).toBeUndefined()
     expect(formatKilograms(copied.planningMicro)).toBe('5.5')
+    expect(formatKilograms(copied.proportionalNumerator, copied.proportionalDenominator)).toBe('2.2')
   })
 
   test('automatic quantities stay out of the Luton recommendation', () => {

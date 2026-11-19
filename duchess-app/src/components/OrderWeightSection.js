@@ -47,6 +47,9 @@ function boxDescription(plan) {
 }
 
 function weightKey(plan) {
+  if (plan.reliability === 'ATA_PROPORTIONAL_ESTIMATE' && plan.operationalNumerator != null) {
+    return `proportional:${plan.operationalNumerator.toString()}/${plan.operationalDenominator.toString()}`
+  }
   if (plan.reliability === 'ATA_DERIVED_GROSS' && plan.derivedNumerator != null) {
     return `derived:${plan.derivedNumerator.toString()}/${plan.derivedDenominator.toString()}`
   }
@@ -67,6 +70,13 @@ function groupPlans(plans) {
 }
 
 function weightCaption(plan, sameAsSuggestion, confirmed) {
+  if (plan.reliability === 'ATA_PROPORTIONAL_ESTIMATE' && plan.operationalNumerator != null) {
+    const estimate = formatKilograms(plan.operationalNumerator, plan.operationalDenominator)
+    const limit = plan.planningAllowanceMicro != null
+      ? ` Full-box limit: ${formatKilograms(plan.planningAllowanceMicro)} kg.`
+      : ''
+    return `Proportional estimate: ${estimate} kg.${limit}`
+  }
   if (plan.reliability === 'ATA_DERIVED_GROSS' && plan.derivedNumerator != null) {
     const qualified = plan.qualified ? ' Partial bundle packaging is not recorded, so this remains a qualified estimate.' : ''
     const separated = plan.qualification === 'additional-material-not-separated'
@@ -119,24 +129,15 @@ function PackingChoices({ line, onSelect, onClear }) {
     <div key={reason} style={{ color: '#854F0B', marginTop: '4px', lineHeight: 1.45 }}>{reason}</div>
   ))
   const alternatives = plans.filter((plan) => !current || plan.signature !== current.signature)
-  const needsTare = current && current.reliability === 'GROSS_PACKING_ALLOWANCE'
   return (
     <div style={{ marginTop: '8px' }}>
       {current && (
         <div style={{ color: '#6B6860', lineHeight: 1.45 }}>
           <div>{line.planSelected ? 'Selected packing' : 'Automatic packing'} · {boxDescription(current)}</div>
           <div style={{ marginTop: '4px' }}>{weightCaption(current, false, line.planConfirmed && current.weightState === 'calculated')}</div>
-          {needsTare && (
-            <div style={{ marginTop: '4px', color: '#854F0B' }}>Needs empty-box tare before a derived weight can be calculated.</div>
-          )}
           {current.catalogInconsistent && (
-            <div style={{ marginTop: '4px', color: '#854F0B' }}>Catalog net weights disagree after each box tare. Each box keeps its own weight.</div>
+            <div style={{ marginTop: '4px', color: '#A32D2D' }}>Catalog net weights disagree after each box tare. Each box keeps its own weight.</div>
           )}
-        </div>
-      )}
-      {needsTare && (
-        <div style={{ color: '#6B6860', marginTop: '4px', lineHeight: 1.45 }}>
-          A planning allowance counts every box at the full gross weight recorded for that box size. It does not divide that weight by the number of pieces.
         </div>
       )}
       {alternatives.length > 0 && (
@@ -239,12 +240,14 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
     return null
   }
 
-  const tone = view.status === 'PARTIAL'
-    ? { background: '#FAEEDA', color: '#854F0B' }
-    : view.overLimit
-      ? { background: '#FCEBEB', color: '#A32D2D' }
-      : { background: '#F7F3EE', color: '#6B6860' }
+  const alert = view.reason != null || (view.overLimit && view.estimateVehicles != null)
+  const tone = alert
+    ? { background: '#FCEBEB', color: '#A32D2D' }
+    : { background: '#F7F3EE', color: '#6B6860' }
   const details = view.lines.filter((line) => line.disposition !== 'not_physical')
+  const headline = view.headlineKg
+    ? `${view.approximate ? '≈ ' : ''}${view.headlineKg} kg`
+    : null
 
   return (
     <section style={{ marginTop: '16px', borderTop: '1px solid #EDE8E0', paddingTop: '14px' }}>
@@ -253,59 +256,16 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
       </div>
       <div style={{ background: tone.background, color: tone.color, borderRadius: '8px', padding: '12px 14px' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minWidth: '0px' }}>
-          <div>
-            {view.showEstimatedHeadline ? (
-              <>
-                <div style={{ fontSize: '20px', fontWeight: '600', color: '#1C1C1E' }}>{view.estimatedTotalKg} kg</div>
-                <div style={{ fontSize: '12px', marginTop: '2px' }}>
-                  {view.estimatedCoverage === 'partial' ? 'Estimated planning subtotal' : 'Estimated planning total'}
-                </div>
-              </>
-            ) : view.knownKg != null ? (
-              <>
-                <div style={{ fontSize: '20px', fontWeight: '600', color: '#1C1C1E' }}>{view.knownKg} kg</div>
-                <div style={{ fontSize: '12px', marginTop: '2px' }}>
-                  {view.status === 'PARTIAL' ? 'ATA total so far' : 'Calculated weight'}
-                </div>
-              </>
-            ) : (
-              <div style={{ fontSize: '16px', fontWeight: '600', color: '#1C1C1E' }}>
-                {view.status === 'PARTIAL' ? 'Weight not confirmed' : 'Weight unavailable'}
-              </div>
-            )}
-          </div>
-          {view.reason == null && (
-            <div style={{ fontSize: '12px' }}>
-              <div>{view.calculated} with an ATA full-pack total</div>
-              {view.planningCount > 0 && <div>{view.planningCount} with a planning allowance</div>}
-              {view.derivedCount > 0 && <div>{view.derivedCount} with a derived gross</div>}
-              {view.unestimatedCount > 0 && <div>{view.unestimatedCount} without a usable weight</div>}
-            </div>
+          {headline ? (
+            <div style={{ fontSize: '20px', fontWeight: '600', color: '#1C1C1E' }}>{headline}</div>
+          ) : (
+            <div style={{ fontSize: '16px', fontWeight: '600', color: '#1C1C1E' }}>No usable weight</div>
           )}
         </div>
         <div style={{ fontSize: '12px', marginTop: '8px', lineHeight: 1.5 }}>{orderWeightMessage(view)}</div>
-        {view.reason == null && (
-          <div style={{ fontSize: '12px', marginTop: '6px', lineHeight: 1.5 }}>
-            <div>ATA full-pack total: {view.knownKg != null ? `${view.knownKg} kg` : 'not included'}</div>
-            {view.derivedKg && (
-              <div>ATA-derived gross: {view.derivedKg} kg. From tare and net content. It is not a scale measurement of this order.</div>
-            )}
-            {view.planningKg && (
-              <div>Planning allowance: {view.planningKg} kg. Provisional full-box gross weight. Not a confirmed weight. It is not a scale measurement of this order.</div>
-            )}
-            {view.measuredKg && (
-              <div>Measured weight: {view.measuredKg} kg. Recorded on a scale for this order.</div>
-            )}
-            {view.previewKg && <div>Packaging preview: {view.previewKg} kg. This choice is not saved.</div>}
-            {view.unestimatedCount > 0 && (
-              <div>Unestimated lines: {view.unestimatedCount}. The figure above does not cover them.</div>
-            )}
-          </div>
-        )}
-        <div style={{ fontSize: '12px', marginTop: '6px' }}>Informed Luton limit: 1,200 kg.</div>
-        {view.percent != null && (
-          <div style={{ fontSize: '12px', marginTop: '4px' }}>
-            {view.percent}% of that limit. Remaining capacity: {view.remainingKg} kg.
+        {view.unestimatedCount > 0 && headline && (
+          <div style={{ fontSize: '12px', marginTop: '4px', lineHeight: 1.5 }}>
+            {view.unestimatedCount === 1 ? '1 line has no usable weight.' : `${view.unestimatedCount} lines have no usable weight.`}
           </div>
         )}
         {view.overLimit && view.estimateVehicles != null && (
@@ -314,27 +274,43 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
             {' '}About {view.estimateVehicles} Lutons is only an estimate. It does not account for the real payload, occupants, extra equipment, axle load, or physical space.
           </div>
         )}
-        {view.status === 'COMPLETE' && !view.overLimit && (
-          <div style={{ fontSize: '12px', marginTop: '8px' }}>
-            This figure is the informed weight limit only. It does not confirm that one vehicle has enough space or a safe axle load.
-          </div>
-        )}
       </div>
-      {details.length > 0 && (
-        <details style={{ marginTop: '10px' }} open>
-          <summary style={{ fontSize: '12px', color: '#6B6860', cursor: 'pointer', minHeight: '44px', display: 'flex', alignItems: 'center' }}>Line weights and packing rules</summary>
+      {view.reason == null && (
+        <details style={{ marginTop: '10px' }}>
+          <summary style={{ fontSize: '12px', color: '#6B6860', cursor: 'pointer', minHeight: '44px', display: 'flex', alignItems: 'center' }}>Calculation details</summary>
+          <div style={{ fontSize: '12px', marginTop: '8px', lineHeight: 1.5, color: '#6B6860' }}>
+            {view.approximate && view.estimatedTotalKg && (
+              <div>Operational total: {view.estimatedTotalKg} kg.</div>
+            )}
+            <div>ATA full-pack total: {view.knownKg != null ? `${view.knownKg} kg` : 'not included'}</div>
+            {view.derivedKg && <div>ATA-derived gross: {view.derivedKg} kg.</div>}
+            {view.proportionalKg && <div>Proportional estimate: {view.proportionalKg} kg.</div>}
+            {view.planningKg && <div>Full-box limit: {view.planningKg} kg.</div>}
+            {view.measuredKg && <div>Measured weight: {view.measuredKg} kg.</div>}
+            {view.previewKg && <div>Packaging preview: {view.previewKg} kg. This choice is not saved.</div>}
+            {view.unestimatedCount > 0 && <div>Unestimated lines: {view.unestimatedCount}.</div>}
+            {view.approximate && (
+              <div style={{ marginTop: '6px' }}>
+                A partial pack without an empty-box tare uses the recorded gross weight in proportion to the pieces. The full-box gross is a separate limit and is not added again.
+              </div>
+            )}
+            <div style={{ marginTop: '6px' }}>Informed Luton limit: 1,200 kg. This figure is not a loading approval.</div>
+            {view.percent != null && (
+              <div>{view.percent}% of that limit. Remaining capacity: {view.remainingKg} kg.</div>
+            )}
+          </div>
           <ul style={{ margin: '8px 0 0', padding: 0, listStyle: 'none' }}>
             {details.map((line) => {
               const note = measurementRequest(line)
               const choices = line.alternatives || []
               return (
-                <li key={line.id || line.name} style={{ padding: '8px 0', borderBottom: '1px solid #EDE8E0', fontSize: '12px', background: line.plan && line.plan.reliability === 'GROSS_PACKING_ALLOWANCE' ? '#FAEEDA' : 'transparent' }}>
+                <li key={line.id || line.name} style={{ padding: '8px 0', borderBottom: '1px solid #EDE8E0', fontSize: '12px' }}>
                   <div style={{ fontWeight: '600', color: '#1C1C1E' }}>{line.name}</div>
                   <div style={{ color: '#6B6860', marginTop: '2px', lineHeight: 1.45 }}>
-                    {line.disposition === 'derived' && line.derivedNumerator != null
-                      ? `Derived gross ${formatKilograms(line.derivedNumerator, line.derivedDenominator)} kg · ${line.plan ? boxDescription(line.plan) : line.label}`
-                      : (line.disposition === 'partial_box' && line.planningAllowanceMicro != null
-                        ? `Planning allowance ${formatKilograms(line.planningAllowanceMicro)} kg · ${line.plan ? boxDescription(line.plan) : ''}`
+                    {line.disposition === 'proportional' && line.operationalNumerator != null
+                      ? `≈ ${formatKilograms(line.operationalNumerator, line.operationalDenominator)} kg · ${line.plan ? boxDescription(line.plan) : line.label}`
+                      : (line.disposition === 'derived' && line.derivedNumerator != null
+                        ? `Derived gross ${formatKilograms(line.derivedNumerator, line.derivedDenominator)} kg · ${line.plan ? boxDescription(line.plan) : line.label}`
                         : (line.disposition === 'calculated' || line.disposition === 'preview'
                           ? `${formatKilograms(line.weightMicro)} kg · ${ruleText(line)}${line.disposition === 'preview' ? ' · preview' : ''}`
                           : line.label))}

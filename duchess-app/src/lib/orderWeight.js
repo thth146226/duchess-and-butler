@@ -341,12 +341,33 @@ export function assessOrderWeight(items, catalogRows, selections) {
   let planningMicro = 0n
   let derivedMicro = 0n
   let derivedRational = null
+  let proportionalRational = null
   let measuredTotal = 0n
   let calculated = 0
   let previewCount = 0
   let planningCount = 0
   let derivedCount = 0
+  let proportionalCount = 0
   let missing = 0
+  function takeProportional(plan, intoKnown) {
+    if (!plan || plan.reliability !== RELIABILITY.ATA_PROPORTIONAL_ESTIMATE || plan.proportionalNumerator == null) {
+      return false
+    }
+    if (plan.calculatedMicro > 0n) {
+      if (intoKnown) knownMicro += plan.calculatedMicro
+      else previewMicro += plan.calculatedMicro
+    }
+    proportionalRational = addRational(proportionalRational, {
+      numerator: plan.proportionalNumerator,
+      denominator: plan.proportionalDenominator,
+    })
+    proportionalCount += 1
+    if (plan.planningAllowanceMicro != null && plan.planningAllowanceMicro > 0n) {
+      planningMicro += plan.planningAllowanceMicro
+      planningCount += 1
+    }
+    return true
+  }
   for (const item of Array.isArray(items) ? items : []) {
     const name = item && item.item_name ? item.item_name : ''
     if (item && isNonPhysical(item)) {
@@ -431,6 +452,26 @@ export function assessOrderWeight(items, catalogRows, selections) {
           })
           return
         }
+        if (takeProportional(plan, true)) {
+          missing += 1
+          lines.push({
+            ...base,
+            disposition: 'proportional',
+            label: 'Proportional estimate',
+            weightMicro: plan.calculatedMicro,
+            containers: (plan.boxes || []).filter((box) => box.full).reduce((sum, box) => sum + box.count, 0),
+            proportionalNumerator: plan.proportionalNumerator,
+            proportionalDenominator: plan.proportionalDenominator,
+            operationalNumerator: plan.operationalNumerator,
+            operationalDenominator: plan.operationalDenominator,
+            planningAllowanceMicro: plan.planningAllowanceMicro,
+            piecesPerUnit: partialBox ? partialBox.piecesPerUnit : null,
+            unitName: partialBox ? partialBox.unitName : '',
+            partialPieces: partialBox ? partialBox.piecesEach : null,
+            unfilled: partialBox ? partialBox.unfilled : null,
+          })
+          return
+        }
         if (plan.reliability === RELIABILITY.GROSS_PACKING_ALLOWANCE && plan.planningAllowanceMicro != null && plan.planningAllowanceMicro > 0n) {
           planningMicro += plan.planningAllowanceMicro
           planningCount += 1
@@ -491,6 +532,8 @@ export function assessOrderWeight(items, catalogRows, selections) {
       if (single.exact && single.weightState === 'calculated') {
         previewMicro += single.calculatedMicro
         previewCount += 1
+      } else if (takeProportional(single, false)) {
+        // The proportional part is the operational estimate. Full boxes on the same plan stay in the preview.
       } else if (single.planningAllowanceMicro != null && single.planningAllowanceMicro > 0n) {
         planningMicro += single.planningAllowanceMicro
         planningCount += 1
@@ -575,6 +618,33 @@ export function assessOrderWeight(items, catalogRows, selections) {
         })
         continue
       }
+      if (takeProportional(plan, true)) {
+        missing += 1
+        const partialBox = plan.boxes.find((box) => !box.full)
+        lines.push({
+          id: item.id,
+          name,
+          disposition: 'proportional',
+          label: 'Proportional estimate',
+          containers: (plan.boxes || []).filter((box) => box.full).reduce((sum, box) => sum + box.count, 0),
+          plan,
+          plans: planned.plans,
+          packingTruncation: planned.truncation,
+          weightMicro: plan.calculatedMicro,
+          proportionalNumerator: plan.proportionalNumerator,
+          proportionalDenominator: plan.proportionalDenominator,
+          operationalNumerator: plan.operationalNumerator,
+          operationalDenominator: plan.operationalDenominator,
+          planningAllowanceMicro: plan.planningAllowanceMicro,
+          qualified: Boolean(plan.qualified),
+          qualification: plan.qualification || null,
+          piecesPerUnit: partialBox ? partialBox.piecesPerUnit : entry.piecesPerUnit,
+          unitName: partialBox ? partialBox.unitName : entry.unitName,
+          partialPieces: partialBox ? partialBox.piecesEach : quantity,
+          unfilled: plan.unfilledPieces,
+        })
+        continue
+      }
       missing += 1
       const allowance = plan && plan.planningAllowanceMicro != null && plan.planningAllowanceMicro > 0n
         ? plan.planningAllowanceMicro
@@ -632,12 +702,15 @@ export function assessOrderWeight(items, catalogRows, selections) {
     derivedMicro,
     derivedNumerator: derivedRational ? derivedRational.numerator : 0n,
     derivedDenominator: derivedRational ? derivedRational.denominator : 1n,
+    proportionalNumerator: proportionalRational ? proportionalRational.numerator : 0n,
+    proportionalDenominator: proportionalRational ? proportionalRational.denominator : 1n,
     configurationOpen: lines.some((line) => line.configurationOpen),
     measuredMicro: measuredTotal,
     calculated,
     previewCount,
     planningCount,
     derivedCount,
+    proportionalCount,
     missing,
     lines,
     limitMicro: LIMIT_MICRO,
@@ -684,6 +757,15 @@ export function measurementRequest(line) {
   if (line.disposition === 'pack_selected') {
     return 'The weight is calculated from ATA full-pack records. It is not a scale measurement of this order.'
   }
+  if (line.disposition === 'proportional') {
+    const estimate = line.operationalNumerator != null
+      ? ` Operational estimate ${formatKilograms(line.operationalNumerator, line.operationalDenominator)} kg.`
+      : ''
+    const limit = line.planningAllowanceMicro != null
+      ? ` Full-box limit ${formatKilograms(line.planningAllowanceMicro)} kg.`
+      : ''
+    return `Proportional estimate from the ATA gross weight.${estimate}${limit}`
+  }
   if (line.disposition === 'partial_box') {
     const unit = String(line.unitName || line.plan?.boxes?.find((box) => !box.full)?.unitName || 'pack').toLowerCase()
     const filled = line.partialPieces || line.plan?.boxes?.find((box) => !box.full)?.piecesEach
@@ -703,16 +785,24 @@ export const DISPLAY_ROUNDING = 'Round half away from zero to the nearest 0.001 
 
 const DISPLAY_STEP = 1000n
 
-export function formatKilograms(micro, denominator = 1n) {
+function formatRoundedKilograms(micro, denominator, step) {
   const numerator = typeof micro === 'bigint' ? micro : 0n
   const denom = typeof denominator === 'bigint' && denominator > 0n ? denominator : 1n
   const negative = numerator < 0n
   const absolute = negative ? -numerator : numerator
-  const rounded = ((absolute + (denom * DISPLAY_STEP) / 2n) / (denom * DISPLAY_STEP)) * DISPLAY_STEP
+  const rounded = ((absolute + (denom * step) / 2n) / (denom * step)) * step
   const whole = rounded / MICRO_PER_KG
   const fraction = (rounded % MICRO_PER_KG).toString().padStart(6, '0').slice(0, 3).replace(/0+$/, '')
   const text = fraction ? `${whole.toString()}.${fraction}` : whole.toString()
   return negative && rounded !== 0n ? `-${text}` : text
+}
+
+export function formatKilograms(micro, denominator = 1n) {
+  return formatRoundedKilograms(micro, denominator, DISPLAY_STEP)
+}
+
+export function formatWholeKilograms(micro, denominator = 1n) {
+  return formatRoundedKilograms(micro, denominator, MICRO_PER_KG)
 }
 
 function allowanceMicro(line) {
@@ -736,6 +826,14 @@ function lineEstimateKind(line) {
   if (line.disposition === 'derived' && typeof line.derivedNumerator === 'bigint' && line.derivedNumerator > 0n) {
     return 'derived'
   }
+  if (line.disposition === 'proportional' || (
+    line.disposition === 'preview'
+    && line.plan
+    && line.plan.reliability === 'ATA_PROPORTIONAL_ESTIMATE'
+    && line.plan.proportionalNumerator != null
+  )) {
+    return 'proportional'
+  }
   if (line.disposition === 'measured' && typeof line.measuredMicro === 'bigint' && line.measuredMicro > 0n) {
     return 'measured'
   }
@@ -756,6 +854,10 @@ export function presentOrderWeight(assessment, options = {}) {
   const derivedDenominator = typeof source.derivedDenominator === 'bigint' && source.derivedDenominator > 0n
     ? source.derivedDenominator
     : 1n
+  const proportionalNumerator = typeof source.proportionalNumerator === 'bigint' ? source.proportionalNumerator : 0n
+  const proportionalDenominator = typeof source.proportionalDenominator === 'bigint' && source.proportionalDenominator > 0n
+    ? source.proportionalDenominator
+    : 1n
   const measuredMicro = source.measuredMicro || 0n
   const hasConfirmedWeight = complete || (source.status === 'PARTIAL' && knownMicro > 0n)
   const overLimit = complete && knownMicro > source.limitMicro
@@ -775,10 +877,10 @@ export function presentOrderWeight(assessment, options = {}) {
   }
   include(knownMicro, 1n)
   include(derivedNumerator, derivedDenominator)
-  include(planningMicro, 1n)
+  include(proportionalNumerator, proportionalDenominator)
   include(measuredMicro, 1n)
   const unestimatedCount = (source.lines || []).filter((line) => lineEstimateKind(line) === 'none').length
-  const estimatedProvisional = planningMicro > 0n || derivedNumerator > 0n
+  const approximate = proportionalNumerator > 0n || derivedNumerator > 0n
   const estimatedCoverage = estimated == null ? null : (unestimatedCount > 0 ? 'partial' : 'complete')
   return {
     status: source.status,
@@ -787,15 +889,22 @@ export function presentOrderWeight(assessment, options = {}) {
     previewKg: previewMicro > 0n ? formatKilograms(previewMicro) : null,
     planningKg: planningMicro > 0n ? formatKilograms(planningMicro) : null,
     derivedKg: derivedNumerator > 0n ? formatKilograms(derivedNumerator, derivedDenominator) : null,
+    proportionalKg: proportionalNumerator > 0n ? formatKilograms(proportionalNumerator, proportionalDenominator) : null,
     measuredKg: measuredMicro > 0n ? formatKilograms(measuredMicro) : null,
     estimatedTotalKg: estimated ? formatKilograms(estimated.numerator, estimated.denominator) : null,
+    headlineKg: !estimated
+      ? null
+      : (approximate
+        ? formatWholeKilograms(estimated.numerator, estimated.denominator)
+        : formatKilograms(estimated.numerator, estimated.denominator)),
     estimatedCoverage,
-    estimatedProvisional,
-    showEstimatedHeadline: Boolean(estimated) && (estimatedProvisional || unestimatedCount > 0),
+    approximate,
+    showEstimatedHeadline: Boolean(estimated),
     unestimatedCount,
     previewCount: source.previewCount || 0,
     planningCount: source.planningCount || 0,
     derivedCount: source.derivedCount || 0,
+    proportionalCount: source.proportionalCount || 0,
     calculated: source.calculated || 0,
     missing: source.missing || 0,
     percent: percentTenths == null ? null : (percentTenths / 10).toFixed(1),
@@ -814,13 +923,12 @@ export function orderWeightMessage(view) {
     return 'The weight catalog could not be loaded. The order weight is not shown.'
   }
   if (view.showEstimatedHeadline) {
-    const gap = view.estimatedCoverage === 'partial'
-      ? ` ${view.unestimatedCount} ${view.unestimatedCount === 1 ? 'line has' : 'lines have'} no usable weight.`
-      : ''
-    return `Planning estimate based on ATA packing records. Not a scale measurement or a vehicle loading approval.${gap}`
+    return view.approximate
+      ? 'Automatically estimated from ATA Carnet'
+      : 'Calculated from ATA full-pack records'
   }
-  if (view.status === 'PARTIAL' && view.knownKg == null && !view.previewKg && !view.planningKg && !view.derivedKg && !view.measuredKg) {
-    return 'No confirmed weight yet. The order total is not available.'
+  if (view.status === 'PARTIAL' && view.knownKg == null && !view.previewKg && !view.planningKg && !view.derivedKg && !view.proportionalKg && !view.measuredKg) {
+    return 'No usable weight is available for this order.'
   }
   if (view.status === 'PARTIAL' && (view.planningKg || view.derivedKg || view.measuredKg)) {
     return 'Some physical lines still need a weight. A derived gross uses tare and net content. A planning allowance is the full-box gross. Neither is a scale measurement or a vehicle recommendation.'

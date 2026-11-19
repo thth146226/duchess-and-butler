@@ -82,13 +82,15 @@ describe('order weight', () => {
     const catalog = [catalogItem({ pieces_per_unit: 15, weight_per_unit: '2' })]
     const partial = assessOrderWeight([orderItem({ quantity: 16 })], catalog)
     const exact = assessOrderWeight([orderItem({ quantity: 15 })], catalog)
-    expect(partial.lines[0].disposition).toBe('partial_box')
+    expect(partial.lines[0].disposition).toBe('proportional')
     expect(partial.lines[0].containers).toBe(1)
     expect(partial.lines[0].unfilled).toBe(14)
-    expect(partial.knownMicro).toBe(0n)
+    expect(partial.knownMicro).toBe(2000000n)
     expect(formatKilograms(partial.planningMicro)).toBe('4')
-    expect(presentOrderWeight(partial).knownKg).toBeNull()
+    expect(presentOrderWeight(partial).knownKg).toBe('2')
+    expect(presentOrderWeight(partial).estimatedTotalKg).toBe('2.133')
     expect(presentOrderWeight(partial).planningKg).toBe('4')
+    expect(presentOrderWeight(partial).approximate).toBe(true)
     expect(partial.status).toBe('PARTIAL')
     expect(presentOrderWeight(partial).estimateVehicles).toBeNull()
     expect(exact.lines[0].containers).toBe(1)
@@ -140,7 +142,7 @@ describe('order weight', () => {
     expect(missing.knownKg).toBeNull()
     expect(zero.knownKg).toBeNull()
     expect(itemsFailed.knownKg).toBeNull()
-    expect(orderWeightMessage(missing)).toBe('No confirmed weight yet. The order total is not available.')
+    expect(orderWeightMessage(missing)).toBe('No usable weight is available for this order.')
     expect(orderWeightMessage(itemsFailed)).toBe('The item list could not be loaded. The order weight is not shown.')
     expect(orderWeightMessage(itemsFailed)).not.toBe(orderWeightMessage(presentOrderWeight(null)))
   })
@@ -173,7 +175,7 @@ describe('order weight', () => {
     ], [catalogItem()]))
     expect(under.percent).toBe('50.0')
     expect(under.remainingKg).toBe('600')
-    expect(orderWeightMessage(under)).toBe('All physical lines have an ATA full-pack total. This is not a scale measurement of this order.')
+    expect(orderWeightMessage(under)).toBe('Calculated from ATA full-pack records')
     expect(under.overLimit).toBe(false)
     expect(under.estimateVehicles).toBeNull()
     expect(equal.remainingKg).toBe('0')
@@ -200,7 +202,7 @@ describe('order weight', () => {
       catalogItem({ id: 'light', weight_per_unit: '4', pieces_per_unit: 50 }),
       catalogItem({ id: 'heavy', weight_per_unit: '9', pieces_per_unit: 100 }),
     ])
-    expect(result.lines[0].label).toBe('Planning allowance')
+    expect(result.lines[0].label).toBe('Proportional estimate')
     expect(result.lines[0].plan.boxes.map((box) => box.piecesPerUnit)).toEqual([50])
     expect(result.lines[0].alternatives.map((alternative) => alternative.id)).toEqual(['light', 'heavy'])
     expect(result.knownMicro).toBe(0n)
@@ -217,7 +219,7 @@ describe('order weight', () => {
     const heavier = assessOrderWeight([orderItem({ id: 'spoon', quantity: 100 })], catalog, { spoon: 'heavy' })
     const partial = assessOrderWeight([orderItem({ id: 'spoon', quantity: 20 })], catalog, { spoon: 'heavy' })
     const view = presentOrderWeight(heavier)
-    expect(missingChoice.lines[0].disposition).toBe('partial_box')
+    expect(missingChoice.lines[0].disposition).toBe('proportional')
     expect(missingChoice.knownMicro).toBe(0n)
     expect(heavier.lines[0].disposition).toBe('preview')
     expect(heavier.lines[0].piecesPerUnit).toBe(100)
@@ -360,7 +362,7 @@ describe('ATA catalog cache', () => {
       catalogItem({ id: 'box', name: item.item_name, pieces_per_unit: 40, weight_per_unit: '5' }),
       catalogItem({ id: 'crate', name: item.item_name, pieces_per_unit: 100, weight_per_unit: '7.9' }),
     ], { spoon: recorded })
-    expect(changed.lines[0].disposition).toBe('partial_box')
+    expect(changed.lines[0].disposition).toBe('proportional')
     expect(changed.previewMicro).toBe(0n)
     expect(formatKilograms(changed.planningMicro)).toBe('5')
     expect(changed.status).toBe('PARTIAL')
@@ -368,7 +370,7 @@ describe('ATA catalog cache', () => {
       catalogItem({ id: 'other', name: item.item_name, pieces_per_unit: 80, weight_per_unit: '6' }),
       catalogItem({ id: 'crate', name: item.item_name, pieces_per_unit: 100, weight_per_unit: '7.9' }),
     ], { spoon: recorded })
-    expect(removed.lines[0].disposition).toBe('partial_box')
+    expect(removed.lines[0].disposition).toBe('proportional')
     expect(removed.previewMicro).toBe(0n)
     expect(formatKilograms(removed.planningMicro)).toBe('6')
     expect(presentOrderWeight(removed).estimateVehicles).toBeNull()
@@ -412,7 +414,7 @@ describe('ATA catalog cache', () => {
     const fewer = assessOrderWeight([
       orderItem({ id: 'plate', item_name: 'Prima Dessert Plate', quantity: 20 }),
     ], catalog, { plate: confirmation })
-    expect(fewer.lines[0].disposition).toBe('partial_box')
+    expect(fewer.lines[0].disposition).toBe('proportional')
     expect(fewer.knownMicro).toBe(0n)
     expect(formatKilograms(fewer.planningMicro)).toBe('16.1')
     const other = suggested.lines[0].plans.find((plan) => plan.boxes.some((box) => box.piecesPerUnit === 15))
@@ -438,13 +440,13 @@ describe('partial packs stay out of the confirmed total', () => {
     })
     const suggested = choose(labels)
     const alternative = choose(other)
-    expect(suggested.lines[0].disposition).toBe('partial_box')
+    expect(suggested.lines[0].disposition).toBe('proportional')
     expect(suggested.knownMicro).toBe(0n)
     expect(formatKilograms(suggested.planningMicro)).toBe('7.4')
-    expect(presentOrderWeight(suggested).estimatedTotalKg).toBe('7.4')
-    expect(alternative.knownMicro).toBe(0n)
+    expect(presentOrderWeight(suggested).estimatedTotalKg).toBe('5.756')
+    expect(alternative.knownMicro).toBe(3800000n)
     expect(formatKilograms(alternative.planningMicro)).toBe('7.6')
-    expect(presentOrderWeight(alternative).estimatedTotalKg).toBe('7.6')
+    expect(presentOrderWeight(alternative).estimatedTotalKg).toBe('5.32')
     expect(presentOrderWeight(suggested).estimateVehicles).toBeNull()
     expect(presentOrderWeight(suggested).knownKg).toBeNull()
     const changedQuantity = assessOrderWeight([
@@ -480,7 +482,8 @@ describe('partial packs stay out of the confirmed total', () => {
     expect(formatKilograms(choose(labels).planningMicro)).toBe('7.4')
     expect(formatKilograms(choose(other).planningMicro)).toBe('7.8')
     expect(choose(labels).knownMicro).toBe(0n)
-    expect(choose(other).knownMicro).toBe(0n)
+    expect(choose(other).knownMicro).toBe(3900000n)
+    expect(presentOrderWeight(choose(other)).estimatedTotalKg).toBe('5.46')
     expect(presentOrderWeight(choose(labels)).estimateVehicles).toBeNull()
   })
 
@@ -521,7 +524,7 @@ describe('partial packs stay out of the confirmed total', () => {
     expect(partial.knownMicro).toBe(0n)
     expect(partial.lines[0].plans.every((plan) => formatKilograms(plan.planningAllowanceMicro) === '21.4')).toBe(true)
     expect(partial.lines[0].plans.some((plan) => formatKilograms(plan.planningAllowanceMicro) === '14.267')).toBe(false)
-    expect(presentOrderWeight(partial).estimatedTotalKg).toBe('21.4')
+    expect(presentOrderWeight(partial).estimatedTotalKg).toBe('14.267')
     expect(presentOrderWeight(partial).estimateVehicles).toBeNull()
   })
 
@@ -558,12 +561,15 @@ describe('partial packs stay out of the confirmed total', () => {
     expect(result.calculated).toBe(2)
     expect(result.missing).toBe(6)
     expect(view.planningKg).toBe('40.7')
-    expect(view.estimatedTotalKg).toBe('223.2')
+    expect(view.estimatedTotalKg).toBe('212.849')
+    expect(view.headlineKg).toBe('213')
+    expect(view.approximate).toBe(true)
     expect(view.measuredKg).toBeNull()
     expect(view.unestimatedCount).toBe(0)
     expect(view.planningCount).toBe(6)
+    expect(view.proportionalCount).toBe(6)
     expect(view.showEstimatedHeadline).toBe(true)
-    expect(orderWeightMessage(view)).toBe('Planning estimate based on ATA packing records. Not a scale measurement or a vehicle loading approval.')
+    expect(orderWeightMessage(view)).toBe('Automatically estimated from ATA Carnet')
     expect(result.status).toBe('PARTIAL')
     expect(view.estimateVehicles).toBeNull()
     expect(view.derivedKg).toBeNull()
@@ -596,7 +602,8 @@ describe('estimated planning total', () => {
     expect(view.status).toBe('COMPLETE')
     expect(view.knownKg).toBe('9')
     expect(view.estimatedTotalKg).toBe('9')
-    expect(view.showEstimatedHeadline).toBe(false)
+    expect(view.approximate).toBe(false)
+    expect(view.showEstimatedHeadline).toBe(true)
     expect(view.estimateVehicles).toBeNull()
   })
 
@@ -604,28 +611,33 @@ describe('estimated planning total', () => {
     const view = presented({
       knownMicro: 182500000n,
       planningMicro: 40700000n,
+      proportionalNumerator: 30349000n,
+      proportionalDenominator: 1n,
       previewMicro: 40700000n,
       lines: [
         { disposition: 'calculated', weightMicro: 182500000n },
-        { disposition: 'partial_box', planningAllowanceMicro: 40700000n },
+        { disposition: 'proportional', planningAllowanceMicro: 40700000n },
       ],
     })
     expect(view.knownKg).toBe('182.5')
     expect(view.planningKg).toBe('40.7')
-    expect(view.estimatedTotalKg).toBe('223.2')
-    expect(view.estimatedTotalKg).not.toBe('264')
+    expect(view.proportionalKg).toBe('30.349')
+    expect(view.estimatedTotalKg).toBe('212.849')
+    expect(view.estimatedTotalKg).not.toBe('253.249')
     expect(view.unestimatedCount).toBe(0)
     expect(view.estimateVehicles).toBeNull()
-    expect(orderWeightMessage(view)).toBe('Planning estimate based on ATA packing records. Not a scale measurement or a vehicle loading approval.')
+    expect(orderWeightMessage(view)).toBe('Automatically estimated from ATA Carnet')
   })
 
   test('a rational derived gross is added before the display rounding', () => {
     const view = presented({
       knownMicro: 500n,
       planningMicro: 500n,
+      proportionalNumerator: 500n,
+      proportionalDenominator: 1n,
       lines: [
         { disposition: 'calculated', weightMicro: 500n },
-        { disposition: 'partial_box', planningAllowanceMicro: 500n },
+        { disposition: 'proportional', planningAllowanceMicro: 500n },
       ],
     })
     expect(formatKilograms(500n)).toBe('0.001')
@@ -648,7 +660,9 @@ describe('estimated planning total', () => {
   test('each distinct source is included once and a line with no weight stays outside the subtotal', () => {
     const view = presented({
       knownMicro: 10000000n,
-      planningMicro: 2000000n,
+      planningMicro: 9000000n,
+      proportionalNumerator: 2000000n,
+      proportionalDenominator: 1n,
       derivedNumerator: 1000000n,
       derivedDenominator: 1n,
       measuredMicro: 500000n,
@@ -656,17 +670,18 @@ describe('estimated planning total', () => {
       lines: [
         { disposition: 'calculated', weightMicro: 10000000n },
         { disposition: 'derived', derivedNumerator: 1000000n, derivedDenominator: 1n },
-        { disposition: 'partial_box', planningAllowanceMicro: 2000000n },
+        { disposition: 'proportional', planningAllowanceMicro: 9000000n },
         { disposition: 'measured', measuredMicro: 500000n },
         { disposition: 'missing' },
       ],
     })
     expect(view.estimatedTotalKg).toBe('13.5')
+    expect(view.planningKg).toBe('9')
     expect(view.measuredKg).toBe('0.5')
     expect(view.unestimatedCount).toBe(1)
     expect(view.estimatedCoverage).toBe('partial')
     expect(view.estimateVehicles).toBeNull()
-    expect(orderWeightMessage(view)).toContain('1 line has no usable weight.')
+    expect(orderWeightMessage(view)).toBe('Automatically estimated from ATA Carnet')
   })
 
   test('ATA full-pack plus a rational derived gross is summed once and follows the quantity', () => {
@@ -707,13 +722,15 @@ describe('estimated planning total', () => {
     expect(view.showEstimatedHeadline).toBe(false)
     expect(view.unestimatedCount).toBe(2)
     expect(view.estimateVehicles).toBeNull()
-    expect(orderWeightMessage(view)).toBe('No confirmed weight yet. The order total is not available.')
+    expect(orderWeightMessage(view)).toBe('No usable weight is available for this order.')
   })
 
   test('an allowance above the Luton limit does not recommend a vehicle', () => {
     const view = presented({
-      planningMicro: 1300000000n,
-      lines: [{ disposition: 'partial_box', planningAllowanceMicro: 1300000000n }],
+      proportionalNumerator: 1300000000n,
+      proportionalDenominator: 1n,
+      planningMicro: 1500000000n,
+      lines: [{ disposition: 'proportional', planningAllowanceMicro: 1500000000n }],
     })
     expect(view.estimatedTotalKg).toBe('1300')
     expect(view.knownKg).toBeNull()

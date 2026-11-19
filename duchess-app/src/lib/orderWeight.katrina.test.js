@@ -103,7 +103,7 @@ describe('Katrina QDB08128 full order: 30 line regression', () => {
       { ...line('Prima Dinner Plate', 3, 3), transaction_type_name: 'Sale' },
     ]
     const assessed = assessOrderWeight(items, testCatalog)
-    expect(assessed.lines.map(l => l.disposition)).toEqual(['not_physical', 'missing', 'partial_box'])
+    expect(assessed.lines.map(l => l.disposition)).toEqual(['not_physical', 'missing', 'proportional'])
   })
 
   test('Iris White exact alias never borrows Magnolia weight or a different size', () => {
@@ -147,7 +147,7 @@ describe('Katrina QDB08128 read-only ATA figures', () => {
     const view = presentOrderWeight(assessed)
     expect(assessed.calculated).toBe(5)
     expect(assessed.status).toBe('PARTIAL')
-    expect(assessed.lines.find((entry) => entry.name === 'Perlette Napkin - Cream').disposition).toBe('partial_box')
+    expect(assessed.lines.find((entry) => entry.name === 'Perlette Napkin - Cream').disposition).toBe('proportional')
     expect(view.knownKg).toBe('59.1')
     expect(view.knownKg).not.toBe('63.8')
     expect(view.estimateVehicles).toBeNull()
@@ -163,7 +163,7 @@ describe('Katrina QDB08128 read-only ATA figures', () => {
     expect(pending.calculated).toBe(1)
     expect(pending.missing).toBe(6)
     expect(formatKilograms(pending.knownMicro)).toBe('16.1')
-    expect(pending.lines.filter((entry) => entry.disposition === 'partial_box')).toHaveLength(6)
+    expect(pending.lines.filter((entry) => entry.disposition === 'proportional')).toHaveLength(6)
     expect(pending.lines.find((entry) => entry.name === 'Prima Dessert Plate').disposition).toBe('calculated')
     expect(pending.lines.map((entry) => entry.alternatives.map((alternative) => (
       `${alternative.piecesPerUnit}:${formatKilograms(alternative.weightMicro)}`
@@ -194,7 +194,7 @@ describe('Katrina QDB08128 read-only ATA figures', () => {
     expect(view.estimateVehicles).toBeNull()
     expect(view.previewKg).toBe('16.1')
     expect(preview.lines.filter((entry) => entry.plan && !entry.plan.exact)).toHaveLength(6)
-    expect(measurementRequest(pending.lines[0])).toContain('not a confirmed weight')
+    expect(measurementRequest(pending.lines[0])).toContain('Proportional estimate')
     expect(pending.lines[0].disposition).not.toBe('preview')
   })
 })

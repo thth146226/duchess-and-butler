@@ -1,4 +1,5 @@
 import { planPacking, PACKING_PRIORITY } from './packingPlan'
+import { formatKilograms } from './orderWeight'
 
 function rule(overrides) {
   return {
@@ -8,7 +9,12 @@ function rule(overrides) {
     piecesPerUnit: overrides.piecesPerUnit,
     weightKind: 'positive',
     weightMicro: overrides.weightMicro,
+    tareMicro: overrides.tareMicro,
   }
+}
+
+function formatPlanKg(plan) {
+  return formatKilograms(plan.operationalNumerator, plan.operationalDenominator)
 }
 
 describe('shared packing plans', () => {
@@ -57,8 +63,11 @@ describe('shared packing plans', () => {
     expect(result.plans).toHaveLength(1)
     expect(result.plans[0].exact).toBe(false)
     expect(result.plans[0].weightState).toBe('unknown-partial')
-    expect(result.plans[0].calculatedMicro).toBe(0n)
+    expect(result.plans[0].reliability).toBe('ATA_PROPORTIONAL_ESTIMATE')
+    expect(result.plans[0].calculatedMicro).toBe(2000000n)
     expect(result.plans[0].planningAllowanceMicro).toBe(4000000n)
+    expect(result.plans[0].proportionalNumerator).toBe(400000n)
+    expect(result.plans[0].proportionalDenominator).toBe(3n)
     expect(result.plans[0].unfilledPieces).toBe(14)
     expect(result.plans[0].missingInformation).toContain('partly filled')
     expect(result.plans[0].boxes.map((box) => [box.full, box.piecesEach, box.unfilled])).toEqual([
@@ -136,14 +145,19 @@ describe('cutlery and Eclipse packing allowances', () => {
     expect(result.plans[0].boxes.map((box) => [box.piecesPerUnit, box.piecesEach, box.full])).toEqual([[90, 70, false]])
     expect(result.plans[0].exact).toBe(false)
     expect(result.plans[0].calculatedMicro).toBe(0n)
+    expect(result.plans[0].reliability).toBe('ATA_PROPORTIONAL_ESTIMATE')
     expect(result.plans[0].planningAllowanceMicro).toBe(7400000n)
+    expect(result.plans[0].proportionalNumerator).toBe(51800000n)
+    expect(result.plans[0].proportionalDenominator).toBe(9n)
     const smaller = result.plans.find((plan) => plan.boxes.some((box) => box.piecesPerUnit === 50))
     expect(smaller.boxes.map((box) => [box.piecesPerUnit, box.piecesEach, box.full])).toEqual([
       [50, 50, true],
       [50, 20, false],
     ])
-    expect(smaller.calculatedMicro).toBe(0n)
+    expect(smaller.calculatedMicro).toBe(3800000n)
     expect(smaller.planningAllowanceMicro).toBe(7600000n)
+    expect(smaller.operationalNumerator).toBe(5320000n)
+    expect(smaller.operationalDenominator).toBe(1n)
     expect(smaller.planningAllowanceMicro).not.toBe(7400000n)
   })
 
@@ -172,7 +186,9 @@ describe('cutlery and Eclipse packing allowances', () => {
       ],
     })
     expect(twenty.plans).toHaveLength(2)
-    expect(twenty.plans.every((plan) => plan.calculatedMicro === 0n && plan.planningAllowanceMicro === 21400000n)).toBe(true)
+    expect(twenty.plans.every((plan) => plan.planningAllowanceMicro === 21400000n)).toBe(true)
+    expect(twenty.plans.every((plan) => plan.reliability === 'ATA_PROPORTIONAL_ESTIMATE')).toBe(true)
+    expect(twenty.plans.map((plan) => formatPlanKg(plan))).toEqual(['14.267', '14.267'])
     expect(new Set(twenty.plans.map((plan) => plan.physicalSignature)).size).toBe(2)
   })
 
@@ -207,5 +223,66 @@ describe('cutlery and Eclipse packing allowances', () => {
       expect.objectContaining({ piecesPerUnit: 100, count: 50, full: true }),
     ])
     expect(planPacking({ quantity: 50, rules }).plans[0].boxes.map((box) => box.piecesPerUnit)).toEqual([100])
+  })
+
+  test('partial quantities without tare use a proportional gross and keep the full-box limit separate', () => {
+    const rules = [
+      rule({ id: 'hundred', name: 'Synthetic Dinner Fork', piecesPerUnit: 100, weightMicro: 10000000n }),
+    ]
+    const estimate = (quantity) => {
+      const plan = planPacking({ quantity, rules }).automatic
+      return {
+        reliability: plan.reliability,
+        kg: plan.operationalNumerator == null
+          ? null
+          : formatPlanKg(plan),
+        limit: plan.planningAllowanceMicro,
+      }
+    }
+    expect(estimate(20)).toEqual({ reliability: 'ATA_PROPORTIONAL_ESTIMATE', kg: '2', limit: 10000000n })
+    expect(estimate(50)).toEqual({ reliability: 'ATA_PROPORTIONAL_ESTIMATE', kg: '5', limit: 10000000n })
+    expect(estimate(70)).toEqual({ reliability: 'ATA_PROPORTIONAL_ESTIMATE', kg: '7', limit: 10000000n })
+    expect(estimate(80)).toEqual({ reliability: 'ATA_PROPORTIONAL_ESTIMATE', kg: '8', limit: 10000000n })
+    expect(estimate(85)).toEqual({ reliability: 'ATA_PROPORTIONAL_ESTIMATE', kg: '8.5', limit: 10000000n })
+    expect(estimate(95)).toEqual({ reliability: 'ATA_PROPORTIONAL_ESTIMATE', kg: '9.5', limit: 10000000n })
+    expect(estimate(100)).toEqual({ reliability: 'ATA_FULL_PACK', kg: '10', limit: null })
+    expect(estimate(150)).toEqual({ reliability: 'ATA_PROPORTIONAL_ESTIMATE', kg: '15', limit: 20000000n })
+    expect(estimate(900)).toEqual({ reliability: 'ATA_FULL_PACK', kg: '90', limit: null })
+    expect(estimate(5000)).toEqual({ reliability: 'ATA_FULL_PACK', kg: '500', limit: null })
+    const withTare = planPacking({
+      quantity: 85,
+      rules: [rule({
+        id: 'hundred',
+        name: 'Synthetic Dinner Fork',
+        piecesPerUnit: 100,
+        weightMicro: 10000000n,
+        tareMicro: 300000n,
+      })],
+    }).automatic
+    expect(withTare.reliability).toBe('ATA_DERIVED_GROSS')
+    expect(withTare.proportionalNumerator).toBeNull()
+    const invalidTare = planPacking({
+      quantity: 85,
+      rules: [rule({
+        id: 'hundred',
+        name: 'Synthetic Dinner Fork',
+        piecesPerUnit: 100,
+        weightMicro: 10000000n,
+        tareMicro: 11000000n,
+      })],
+    }).automatic
+    expect(invalidTare.reliability).toBe('UNKNOWN')
+    expect(invalidTare.proportionalNumerator).toBeNull()
+    expect(invalidTare.planningAllowanceMicro).toBeNull()
+    const bundled = planPacking({
+      quantity: 85,
+      rules: [{
+        ...rule({ id: 'hundred', name: 'Synthetic Dinner Fork', piecesPerUnit: 100, weightMicro: 10000000n }),
+        bundlePieces: 10,
+      }],
+    }).automatic
+    expect(bundled.reliability).toBe('ATA_PROPORTIONAL_ESTIMATE')
+    expect(formatPlanKg(bundled)).toBe('8.5')
+    expect(bundled.derivedNumerator).toBeNull()
   })
 })
