@@ -259,13 +259,22 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
           {headline ? (
             <div style={{ fontSize: '20px', fontWeight: '600', color: '#1C1C1E' }}>{headline}</div>
           ) : (
-            <div style={{ fontSize: '16px', fontWeight: '600', color: '#1C1C1E' }}>No usable weight</div>
+            <div style={{ fontSize: '16px', fontWeight: '600', color: '#1C1C1E' }}>Weight estimate unavailable</div>
           )}
         </div>
         <div style={{ fontSize: '12px', marginTop: '8px', lineHeight: 1.5 }}>{orderWeightMessage(view)}</div>
-        {view.unestimatedCount > 0 && headline && (
-          <div style={{ fontSize: '12px', marginTop: '4px', lineHeight: 1.5 }}>
-            {view.unestimatedCount === 1 ? '1 line has no usable weight.' : `${view.unestimatedCount} lines have no usable weight.`}
+        {view.excludedPreview && view.excludedPreview.length > 0 && (
+          <div style={{ fontSize: '12px', marginTop: '4px', lineHeight: 1.5, wordBreak: 'break-word' }}>
+            {view.excludedPreview.map((item) => (
+              <div key={item.id || item.name}>{item.name} — {item.reason}</div>
+            ))}
+            {view.unestimatedCount > view.excludedPreview.length && (
+              <div>
+                {view.unestimatedCount - view.excludedPreview.length === 1
+                  ? '1 more item is listed in Calculation details.'
+                  : `${view.unestimatedCount - view.excludedPreview.length} more items are listed in Calculation details.`}
+              </div>
+            )}
           </div>
         )}
         {view.overLimit && view.estimateVehicles != null && (
@@ -288,7 +297,9 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
             {view.planningKg && <div>Full-box limit: {view.planningKg} kg.</div>}
             {view.measuredKg && <div>Measured weight: {view.measuredKg} kg.</div>}
             {view.previewKg && <div>Packaging preview: {view.previewKg} kg. This choice is not saved.</div>}
-            {view.unestimatedCount > 0 && <div>Unestimated lines: {view.unestimatedCount}.</div>}
+            {view.excludedLines && view.excludedLines.length > 0 && view.excludedLines.map((item) => (
+              <div key={`detail-${item.id || item.name}`} style={{ wordBreak: 'break-word' }}>{item.name} — {item.reason}</div>
+            ))}
             {view.approximate && (
               <div style={{ marginTop: '6px' }}>
                 A partial pack without an empty-box tare uses the recorded gross weight in proportion to the pieces. The full-box gross is a separate limit and is not added again.
@@ -306,14 +317,16 @@ export default function OrderWeightSection({ jobId, items, itemsError }) {
               return (
                 <li key={line.id || line.name} style={{ padding: '8px 0', borderBottom: '1px solid #EDE8E0', fontSize: '12px' }}>
                   <div style={{ fontWeight: '600', color: '#1C1C1E' }}>{line.name}</div>
-                  <div style={{ color: '#6B6860', marginTop: '2px', lineHeight: 1.45 }}>
-                    {line.disposition === 'proportional' && line.operationalNumerator != null
+                  <div style={{ color: '#6B6860', marginTop: '2px', lineHeight: 1.45, wordBreak: 'break-word' }}>
+                    {(view.excludedLines || []).some((item) => item.id === line.id)
+                      ? (view.excludedLines.find((item) => item.id === line.id) || {}).reason
+                      : (line.disposition === 'proportional' && line.operationalNumerator != null
                       ? `≈ ${formatKilograms(line.operationalNumerator, line.operationalDenominator)} kg · ${line.plan ? boxDescription(line.plan) : line.label}`
                       : (line.disposition === 'derived' && line.derivedNumerator != null
                         ? `Derived gross ${formatKilograms(line.derivedNumerator, line.derivedDenominator)} kg · ${line.plan ? boxDescription(line.plan) : line.label}`
                         : (line.disposition === 'calculated' || line.disposition === 'preview'
                           ? `${formatKilograms(line.weightMicro)} kg · ${ruleText(line)}${line.disposition === 'preview' ? ' · preview' : ''}`
-                          : line.label))}
+                          : line.label)))}
                   </div>
                   {note && <div style={{ color: '#6B6860', marginTop: '4px', lineHeight: 1.45 }}>{note}</div>}
                   {choices.length > 0 && (

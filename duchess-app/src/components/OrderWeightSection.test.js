@@ -105,9 +105,9 @@ describe('OrderWeightSection', () => {
     })
     const view = await render(<OrderWeightSection jobId="job-1" items={[physicalItem]} itemsError={false} />)
     await view.settle()
-    expect(view.text()).toContain('No usable weight')
-    expect(view.text()).toContain('No usable weight is available for this order.')
-    expect(view.text()).toContain('Weight missing')
+    expect(view.text()).toContain('Weight estimate unavailable')
+    expect(view.text()).toContain('No weight recorded in ATA Carnet.')
+    expect(view.text()).not.toContain('Weight missing')
     expect(view.text()).not.toMatch(/(^|\D)0 kg/)
     expect(view.text()).not.toContain('Remaining capacity')
     expect(view.text()).not.toContain('Calculated weight')
@@ -134,9 +134,8 @@ describe('OrderWeightSection', () => {
     )
     await view.settle()
     expect(view.text()).toContain('4.5 kg')
-    expect(view.text()).toContain('Calculated from ATA full-pack records')
-    expect(view.text()).toContain('1 line has no usable weight.')
-    expect(view.text()).toContain('Unestimated lines: 1')
+    expect(view.text()).toContain('Partial weight estimate · 1 item excluded')
+    expect(view.text()).toContain('Unlisted Bowl — Not found in ATA Carnet.')
     expect(view.text()).not.toContain('Remaining capacity')
     expect(view.text()).not.toContain('Calculated weight')
     view.unmount()
@@ -316,8 +315,8 @@ describe('OrderWeightSection', () => {
     expect(view.text()).toContain('4 boxes of 30')
     expect(view.text()).toContain('2 boxes of 15')
     expect(view.text()).toContain('ATA full-pack total: 107 kg')
-    expect(view.text()).toContain('Calculated from ATA full-pack records')
-    expect(view.text()).toContain('1 line has no usable weight.')
+    expect(view.text()).toContain('Partial weight estimate · 1 item excluded')
+    expect(view.text()).toContain('Unlisted Bowl — Not found in ATA Carnet.')
     expect(headlineKg(view)).toBe('107 kg')
     expect(view.text()).not.toContain('Remaining capacity')
     expect(narrowStack(view).style.flexDirection).toBe('column')
@@ -344,9 +343,9 @@ describe('OrderWeightSection', () => {
     await view.settle()
     expect(view.text()).not.toContain('Confirmed weight: 107 kg')
     expect(view.text()).toContain('Full-box limit: 21.4 kg')
-    expect(view.text()).toContain('Automatically estimated from ATA Carnet')
+    expect(view.text()).toContain('Partial weight estimate · 1 item excluded')
     expect(headlineKg(view)).toBe('≈ 14 kg')
-    expect(view.text()).toContain('1 line has no usable weight.')
+    expect(view.text()).toContain('Unlisted Bowl — Not found in ATA Carnet.')
     expect(view.text()).not.toContain('One Luton')
     view.unmount()
   })
@@ -397,6 +396,32 @@ describe('OrderWeightSection', () => {
     expect(view.container.querySelector('section div').style.background).not.toBe('rgb(250, 238, 218)')
     expect(narrowStack(view).style.flexDirection).toBe('column')
     expect(narrowStack(view).style.minWidth).toBe('0px')
+    view.unmount()
+  })
+
+  test('three excluded products show two names and keep the card neutral', async () => {
+    mockCatalog({ data: [], error: null })
+    const longName = 'Duchess Drape Iris White Tablecloth 245cm x 350cm (96 inch by 137 inch) Special Hem'
+    const items = [longName, 'Second Missing Bowl', 'Third Missing Plate'].map((name, index) => ({
+      id: `missing-${index}`,
+      item_name: name,
+      quantity: 1,
+      opportunity_item_type_name: 'Principal',
+      transaction_type_name: 'Rental',
+    }))
+    const view = await render(<OrderWeightSection jobId="job-1" items={items} itemsError={false} />)
+    await view.settle()
+    expect(view.text()).toContain('Weight estimate unavailable')
+    expect(view.text()).not.toContain('Partial weight estimate')
+    expect(view.text()).toContain(`${longName} — Not found in ATA Carnet.`)
+    expect(view.text()).toContain('Second Missing Bowl — Not found in ATA Carnet.')
+    expect(view.text()).toContain('1 more item is listed in Calculation details.')
+    const summary = view.container.querySelector('section').children[1].textContent
+    expect(summary).not.toContain('Third Missing Plate')
+    expect(view.text()).toContain('Third Missing Plate — Not found in ATA Carnet.')
+    const card = view.container.querySelector('section').children[1]
+    expect(card.style.background).toBe('rgb(247, 243, 238)')
+    expect(calculationDetails(view).open).toBe(false)
     view.unmount()
   })
 })

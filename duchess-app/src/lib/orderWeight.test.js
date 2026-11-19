@@ -142,7 +142,10 @@ describe('order weight', () => {
     expect(missing.knownKg).toBeNull()
     expect(zero.knownKg).toBeNull()
     expect(itemsFailed.knownKg).toBeNull()
-    expect(orderWeightMessage(missing)).toBe('No usable weight is available for this order.')
+    expect(orderWeightMessage(missing)).toBe('Weight estimate unavailable')
+    expect(missing.excludedLines[0].reason).toBe('Not found in ATA Carnet.')
+    expect(zero.excludedLines[0].reason).toBe('No weight recorded in ATA Carnet.')
+    expect(zero.headlineKg).toBeNull()
     expect(orderWeightMessage(itemsFailed)).toBe('The item list could not be loaded. The order weight is not shown.')
     expect(orderWeightMessage(itemsFailed)).not.toBe(orderWeightMessage(presentOrderWeight(null)))
   })
@@ -681,7 +684,7 @@ describe('estimated planning total', () => {
     expect(view.unestimatedCount).toBe(1)
     expect(view.estimatedCoverage).toBe('partial')
     expect(view.estimateVehicles).toBeNull()
-    expect(orderWeightMessage(view)).toBe('Automatically estimated from ATA Carnet')
+    expect(orderWeightMessage(view)).toBe('Partial weight estimate · 1 item excluded')
   })
 
   test('ATA full-pack plus a rational derived gross is summed once and follows the quantity', () => {
@@ -722,7 +725,11 @@ describe('estimated planning total', () => {
     expect(view.showEstimatedHeadline).toBe(false)
     expect(view.unestimatedCount).toBe(2)
     expect(view.estimateVehicles).toBeNull()
-    expect(orderWeightMessage(view)).toBe('No usable weight is available for this order.')
+    expect(orderWeightMessage(view)).toBe('Weight estimate unavailable')
+    expect(view.excludedLines.map((item) => item.reason)).toEqual([
+      'Not found in ATA Carnet.',
+      'Not found in ATA Carnet.',
+    ])
   })
 
   test('an allowance above the Luton limit does not recommend a vehicle', () => {
@@ -736,5 +743,89 @@ describe('estimated planning total', () => {
     expect(view.knownKg).toBeNull()
     expect(view.estimateVehicles).toBeNull()
     expect(view.overLimit).toBe(false)
+  })
+})
+
+describe('incomplete weight coverage messages', () => {
+  test('a valid ATA weight stays complete and an order of only proportional estimates covers every item', () => {
+    const complete = presentOrderWeight(assessOrderWeight([orderItem({ quantity: 30 })], [catalogItem()]))
+    expect(complete.headlineKg).toBe('9')
+    expect(complete.unestimatedCount).toBe(0)
+    expect(orderWeightMessage(complete)).toBe('Calculated from ATA full-pack records')
+    const proportional = presentOrderWeight(assessOrderWeight([
+      orderItem({ id: 'knife', item_name: 'Piccadilly Polished Dinner Knife', quantity: 70 }),
+    ], [
+      catalogItem({ id: 'knife-90', name: 'Piccadilly Polished Dinner Knife', pieces_per_unit: 90, weight_per_unit: '7.4' }),
+    ]))
+    expect(proportional.status).toBe('PARTIAL')
+    expect(proportional.unestimatedCount).toBe(0)
+    expect(proportional.excludedLines).toEqual([])
+    expect(orderWeightMessage(proportional)).toBe('Automatically estimated from ATA Carnet')
+    expect(proportional.estimateVehicles).toBeNull()
+  })
+
+  test('zero, missing, and ambiguous lines use separate reasons and never become 0 kg', () => {
+    const zero = presentOrderWeight(assessOrderWeight(
+      [orderItem({ id: 'platter', item_name: 'Pearl Oval Platter 40cm' })],
+      [catalogItem({ weight_per_unit: '0' })],
+    ))
+    const missing = presentOrderWeight(assessOrderWeight(
+      [orderItem({ id: 'bowl', item_name: 'Unlisted Bowl' })],
+      [],
+    ))
+    const ambiguous = presentOrderWeight(assessOrderWeight(
+      [orderItem({ id: 'pallet', item_name: 'Stacked Crate' })],
+      [catalogItem({ name: 'Stacked Crate', unit_name: 'pallet', weight_per_unit: '4' })],
+    ))
+    expect(zero.excludedLines[0].reason).toBe('No weight recorded in ATA Carnet.')
+    expect(missing.excludedLines[0].reason).toBe('Not found in ATA Carnet.')
+    expect(ambiguous.excludedLines[0].reason).toBe('Weight unavailable — packing details require review.')
+    expect(zero.headlineKg).toBeNull()
+    expect(missing.estimatedTotalKg).toBeNull()
+    expect(orderWeightMessage(zero)).toBe('Weight estimate unavailable')
+    expect(formatKilograms(zero.knownMicro || 0n)).toBe('0')
+    expect(zero.knownKg).toBeNull()
+  })
+
+  test('a full-pack subtotal names the excluded item even though the included weight is exact', () => {
+    const view = presentOrderWeight(assessOrderWeight([
+      orderItem({ id: 'plate', quantity: 30 }),
+      orderItem({ id: 'bowl', item_name: 'Unlisted Bowl', quantity: 2 }),
+    ], [catalogItem()]))
+    expect(view.headlineKg).toBe('9')
+    expect(view.approximate).toBe(false)
+    expect(view.unestimatedCount).toBe(1)
+    expect(orderWeightMessage(view)).toBe('Partial weight estimate · 1 item excluded')
+    expect(view.excludedLines[0]).toEqual({
+      id: 'bowl',
+      name: 'Unlisted Bowl',
+      reason: 'Not found in ATA Carnet.',
+    })
+    expect(view.estimateVehicles).toBeNull()
+  })
+
+  test('three excluded names show two in the summary and keep the long names intact', () => {
+    const longName = 'Duchess Drape Iris White Tablecloth 245cm x 350cm (96 inch by 137 inch) Special Hem'
+    const view = presentOrderWeight(assessOrderWeight([
+      orderItem({ id: 'a', item_name: longName, quantity: 1 }),
+      orderItem({ id: 'b', item_name: 'Second Missing Bowl', quantity: 1 }),
+      orderItem({ id: 'c', item_name: 'Third Missing Plate', quantity: 1 }),
+      orderItem({ id: 'plate', quantity: 15 }),
+    ], [catalogItem({ pieces_per_unit: 15, weight_per_unit: '4.5' })]))
+    expect(orderWeightMessage(view)).toBe('Partial weight estimate · 3 items excluded')
+    expect(view.excludedPreview.map((item) => item.name)).toEqual([longName, 'Second Missing Bowl'])
+    expect(view.excludedLines).toHaveLength(3)
+    expect(view.excludedLines[2].name).toBe('Third Missing Plate')
+    expect(view.headlineKg).toBe('4.5')
+  })
+
+  test('an ATA weight change updates the presented total', () => {
+    const item = orderItem({ quantity: 15 })
+    const before = presentOrderWeight(assessOrderWeight([item], [catalogItem({ weight_per_unit: '4.5' })]))
+    const after = presentOrderWeight(assessOrderWeight([item], [catalogItem({ weight_per_unit: '8' })]))
+    expect(before.estimatedTotalKg).toBe('4.5')
+    expect(after.estimatedTotalKg).toBe('8')
+    expect(after.headlineKg).toBe('8')
+    expect(after.unestimatedCount).toBe(0)
   })
 })

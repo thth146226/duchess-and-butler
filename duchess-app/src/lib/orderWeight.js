@@ -816,6 +816,29 @@ function allowanceMicro(line) {
   return null
 }
 
+export const WEIGHT_EXCLUSION = Object.freeze({
+  recorded: 'No weight recorded in ATA Carnet.',
+  missing: 'Not found in ATA Carnet.',
+  review: 'Weight unavailable — packing details require review.',
+})
+
+export function exclusionReason(line) {
+  if (!line || line.disposition === 'not_physical') {
+    return null
+  }
+  const kind = lineEstimateKind(line)
+  if (kind === 'ata' || kind === 'derived' || kind === 'proportional' || kind === 'measured') {
+    return null
+  }
+  if (line.disposition === 'zero_weight') {
+    return WEIGHT_EXCLUSION.recorded
+  }
+  if (line.disposition === 'missing') {
+    return WEIGHT_EXCLUSION.missing
+  }
+  return WEIGHT_EXCLUSION.review
+}
+
 function lineEstimateKind(line) {
   if (!line || line.disposition === 'not_physical') {
     return 'ignored'
@@ -879,7 +902,18 @@ export function presentOrderWeight(assessment, options = {}) {
   include(derivedNumerator, derivedDenominator)
   include(proportionalNumerator, proportionalDenominator)
   include(measuredMicro, 1n)
-  const unestimatedCount = (source.lines || []).filter((line) => lineEstimateKind(line) === 'none').length
+  const excludedLines = (source.lines || []).flatMap((line) => {
+    const reason = exclusionReason(line)
+    if (!reason) {
+      return []
+    }
+    return [{
+      id: line.id,
+      name: line.name || 'Unnamed item',
+      reason,
+    }]
+  })
+  const unestimatedCount = excludedLines.length
   const approximate = proportionalNumerator > 0n || derivedNumerator > 0n
   const estimatedCoverage = estimated == null ? null : (unestimatedCount > 0 ? 'partial' : 'complete')
   return {
@@ -901,6 +935,8 @@ export function presentOrderWeight(assessment, options = {}) {
     approximate,
     showEstimatedHeadline: Boolean(estimated),
     unestimatedCount,
+    excludedLines,
+    excludedPreview: excludedLines.slice(0, 2),
     previewCount: source.previewCount || 0,
     planningCount: source.planningCount || 0,
     derivedCount: source.derivedCount || 0,
@@ -922,13 +958,18 @@ export function orderWeightMessage(view) {
   if (view.reason === 'catalog' || view.status === 'UNAVAILABLE') {
     return 'The weight catalog could not be loaded. The order weight is not shown.'
   }
-  if (view.showEstimatedHeadline) {
+  const excludedCount = view.unestimatedCount || 0
+  if (excludedCount > 0 && view.estimatedTotalKg) {
+    const noun = excludedCount === 1 ? 'item' : 'items'
+    return `Partial weight estimate · ${excludedCount} ${noun} excluded`
+  }
+  if (view.showEstimatedHeadline && excludedCount === 0) {
     return view.approximate
       ? 'Automatically estimated from ATA Carnet'
       : 'Calculated from ATA full-pack records'
   }
-  if (view.status === 'PARTIAL' && view.knownKg == null && !view.previewKg && !view.planningKg && !view.derivedKg && !view.proportionalKg && !view.measuredKg) {
-    return 'No usable weight is available for this order.'
+  if (!view.estimatedTotalKg) {
+    return 'Weight estimate unavailable'
   }
   if (view.status === 'PARTIAL' && (view.planningKg || view.derivedKg || view.measuredKg)) {
     return 'Some physical lines still need a weight. A derived gross uses tare and net content. A planning allowance is the full-box gross. Neither is a scale measurement or a vehicle recommendation.'
